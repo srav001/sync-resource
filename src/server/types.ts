@@ -157,7 +157,7 @@ export interface ManagerOutboxRead {
 
 export interface ManagerRealtimeBus {
 	publish(envelope: SyncEnvelope): Awaitable<void>;
-	subscribe(scope: string, onEnvelope: (envelope: SyncEnvelope) => void): Awaitable<() => void>;
+	subscribe(scope: string, onEnvelope: (envelope: SyncEnvelope) => void): Awaitable<() => Awaitable<void>>;
 }
 
 export type ManagerMutationStatus = 'acknowledged' | 'finalized';

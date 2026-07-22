@@ -20,8 +20,9 @@ interface SharedStreamConfig {
 
 interface RegisteredManager {
 	readonly key: string;
-	onScopeIdle?(scope: string): void;
+	onScopeIdle?(this: void, scope: string): void;
 	handleError?(
+		this: void,
 		error: SyncError,
 		context: {
 			readonly manager: string;
@@ -55,7 +56,7 @@ interface SubscriptionDetail {
 	readonly afterCursor?: string;
 	readonly replayLimit: number;
 	readonly persistence: ManagerSyncPersistence;
-	nextCursor(): string;
+	nextCursor(this: void): string;
 }
 
 export interface RegisterSharedStreamManagerOptions {
@@ -64,8 +65,9 @@ export interface RegisterSharedStreamManagerOptions {
 	readonly idleTtlMs?: number;
 	readonly maxConnectionsPerIp?: number;
 	readonly maxEventBytes?: number;
-	onScopeIdle?(scope: string): void;
+	onScopeIdle?(this: void, scope: string): void;
 	handleError?(
+		this: void,
 		error: SyncError,
 		context: {
 			readonly manager: string;
@@ -720,7 +722,7 @@ function clearTransportSweepTimerIfIdle(): void {
 	transportSweepTimer = undefined;
 }
 
-function unrefTimer(timer: ReturnType<typeof setTimeout> | ReturnType<typeof setInterval> | undefined): void {
+function unrefTimer(timer: ReturnType<typeof setTimeout> | undefined): void {
 	const maybeTimer = timer as { unref?(): void } | undefined;
 	maybeTimer?.unref?.();
 }

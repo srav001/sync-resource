@@ -5,7 +5,7 @@ import type { Awaitable, ManagerRealtimeBus, SyncEnvelope } from './types.js';
 
 export interface ManagerRealtimePubSubTransport {
 	publish(channel: string, payload: string): Awaitable<void>;
-	subscribe(channel: string, onPayload: (payload: string) => Awaitable<void>): Awaitable<() => void>;
+	subscribe(channel: string, onPayload: (payload: string) => Awaitable<void>): Awaitable<() => Awaitable<void>>;
 }
 
 export interface ManagerRealtimeBusErrorContext {
@@ -17,8 +17,8 @@ export interface ManagerRealtimeBusErrorContext {
 export interface PubSubManagerRealtimeBusOptions {
 	readonly transport: ManagerRealtimePubSubTransport;
 	readonly channelPrefix?: string;
-	serialize?(envelope: SyncEnvelope): string;
-	deserialize?(payload: string): SyncEnvelope;
+	serialize?(this: void, envelope: SyncEnvelope): string;
+	deserialize?(this: void, payload: string): SyncEnvelope;
 	handleError?(error: SyncError, context: ManagerRealtimeBusErrorContext): Awaitable<void>;
 }
 

@@ -92,7 +92,7 @@ export function createRepairScheduler(delayMs = 0): RepairScheduler {
 interface QueuedRepair {
 	readonly run: () => Promise<SyncResult<void, SyncError>>;
 	readonly promise: Promise<SyncResult<void, SyncError>>;
-	resolve(result: SyncResult<void, SyncError>): void;
+	resolve(this: void, result: SyncResult<void, SyncError>): void;
 }
 
 export function planRepair(pages: readonly PageState[], reset?: ResetManifest): RepairPlan {

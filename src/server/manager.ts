@@ -10,6 +10,7 @@ import {
 } from './streamMultiplexer.js';
 import type {
 	AuthorizeHook,
+	Awaitable,
 	CostMetric,
 	ManagerHttpHandlers,
 	ManagerMutationRecord,
@@ -210,7 +211,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	};
 	let cursorIndex = 0;
 	const subscribers = new Map<string, Set<(envelope: SyncEnvelope) => void>>();
-	const busUnsubscribers = new Map<string, () => void>();
+	const busUnsubscribers = new Map<string, () => Awaitable<void>>();
 
 	registerSharedStreamManager({
 		key: options.key,

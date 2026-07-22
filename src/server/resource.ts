@@ -51,86 +51,104 @@ export interface GetMethodInput<TParams extends object, TQuery, TOutput, TSelf> 
 	readonly output: AnySchema<TOutput>;
 	readonly query?: AnySchema<TQuery>;
 	readonly input?: never;
-	handler(args: GetHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: GetHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
 }
 
 export interface ListMethodInput<TParams extends object, TQuery, TOutput, TSelf> {
 	readonly query?: AnySchema<TQuery>;
 	readonly output: AnySchema<TOutput>;
 	readonly input?: never;
-	handler(args: ListHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: ListHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
 }
 
 export interface AddMethodInput<TParams extends object, TInput, TOutput, TSelf> {
 	readonly input: AnySchema<TInput>;
 	readonly output?: AnySchema<TOutput>;
 	readonly query?: never;
-	handler(args: {
-		readonly params: TParams;
-		readonly input: TInput;
-		readonly ctx: ResourceHandlerContext;
-		readonly self: TSelf;
-	}): ResourceHandlerResult<TOutput>;
-	batchHandler?(args: {
-		readonly params: TParams;
-		readonly items: readonly { readonly input: TInput }[];
-		readonly ctx: ResourceHandlerContext;
-	}): BatchResourceHandlerResult<TOutput>;
+	handler(
+		this: void,
+		args: {
+			readonly params: TParams;
+			readonly input: TInput;
+			readonly ctx: ResourceHandlerContext;
+			readonly self: TSelf;
+		}
+	): ResourceHandlerResult<TOutput>;
+	batchHandler?(
+		this: void,
+		args: {
+			readonly params: TParams;
+			readonly items: readonly { readonly input: TInput }[];
+			readonly ctx: ResourceHandlerContext;
+		}
+	): BatchResourceHandlerResult<TOutput>;
 }
 
 export interface MutateMethodInput<TParams extends object, TQuery, TInput, TOutput, TSelf> {
 	readonly query?: AnySchema<TQuery>;
 	readonly input: AnySchema<TInput>;
 	readonly output?: AnySchema<TOutput>;
-	handler(args: MutateHandlerArgs<TParams, TQuery, TInput, TSelf>): ResourceHandlerResult<TOutput>;
-	batchHandler?(args: {
-		readonly params: TParams;
-		readonly items: readonly MutateBatchItem<TQuery, TInput>[];
-		readonly ctx: ResourceHandlerContext;
-	}): BatchResourceHandlerResult<TOutput>;
+	handler(this: void, args: MutateHandlerArgs<TParams, TQuery, TInput, TSelf>): ResourceHandlerResult<TOutput>;
+	batchHandler?(
+		this: void,
+		args: {
+			readonly params: TParams;
+			readonly items: readonly MutateBatchItem<TQuery, TInput>[];
+			readonly ctx: ResourceHandlerContext;
+		}
+	): BatchResourceHandlerResult<TOutput>;
 }
 
 export interface DeleteMethodInput<TParams extends object, TQuery, TOutput, TSelf> {
 	readonly query?: AnySchema<TQuery>;
 	readonly output?: AnySchema<TOutput>;
 	readonly input?: never;
-	handler(args: DeleteHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
-	batchHandler?(args: {
-		readonly params: TParams;
-		readonly items: readonly DeleteBatchItem<TQuery>[];
-		readonly ctx: ResourceHandlerContext;
-	}): BatchResourceHandlerResult<TOutput>;
+	handler(this: void, args: DeleteHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
+	batchHandler?(
+		this: void,
+		args: {
+			readonly params: TParams;
+			readonly items: readonly DeleteBatchItem<TQuery>[];
+			readonly ctx: ResourceHandlerContext;
+		}
+	): BatchResourceHandlerResult<TOutput>;
 }
 
 export interface GetMethodDefinition<TParams extends object, TQuery, TOutput> {
 	readonly kind: 'get';
 	readonly query?: AnySchema<TQuery>;
 	readonly output: AnySchema<TOutput>;
-	handler(args: GetHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: GetHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
 }
 
 export interface ListMethodDefinition<TParams extends object, TQuery, TOutput> {
 	readonly kind: 'list';
 	readonly query?: AnySchema<TQuery>;
 	readonly output: AnySchema<TOutput>;
-	handler(args: ListHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: ListHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
 }
 
 export interface AddMethodDefinition<TParams extends object, TInput, TOutput> {
 	readonly kind: 'add';
 	readonly input: AnySchema<TInput>;
 	readonly output?: AnySchema<TOutput>;
-	handler(args: {
-		readonly params: TParams;
-		readonly input: TInput;
-		readonly ctx: ResourceHandlerContext;
-		readonly self: unknown;
-	}): ResourceHandlerResult<TOutput>;
-	batchHandler?(args: {
-		readonly params: TParams;
-		readonly items: readonly { readonly input: TInput }[];
-		readonly ctx: ResourceHandlerContext;
-	}): BatchResourceHandlerResult<TOutput>;
+	handler(
+		this: void,
+		args: {
+			readonly params: TParams;
+			readonly input: TInput;
+			readonly ctx: ResourceHandlerContext;
+			readonly self: unknown;
+		}
+	): ResourceHandlerResult<TOutput>;
+	batchHandler?(
+		this: void,
+		args: {
+			readonly params: TParams;
+			readonly items: readonly { readonly input: TInput }[];
+			readonly ctx: ResourceHandlerContext;
+		}
+	): BatchResourceHandlerResult<TOutput>;
 }
 
 export interface MutateMethodDefinition<TParams extends object, TQuery, TInput, TOutput> {
@@ -138,24 +156,30 @@ export interface MutateMethodDefinition<TParams extends object, TQuery, TInput, 
 	readonly query?: AnySchema<TQuery>;
 	readonly input: AnySchema<TInput>;
 	readonly output?: AnySchema<TOutput>;
-	handler(args: MutateHandlerArgs<TParams, TQuery, TInput, unknown>): ResourceHandlerResult<TOutput>;
-	batchHandler?(args: {
-		readonly params: TParams;
-		readonly items: readonly MutateBatchItem<TQuery, TInput>[];
-		readonly ctx: ResourceHandlerContext;
-	}): BatchResourceHandlerResult<TOutput>;
+	handler(this: void, args: MutateHandlerArgs<TParams, TQuery, TInput, unknown>): ResourceHandlerResult<TOutput>;
+	batchHandler?(
+		this: void,
+		args: {
+			readonly params: TParams;
+			readonly items: readonly MutateBatchItem<TQuery, TInput>[];
+			readonly ctx: ResourceHandlerContext;
+		}
+	): BatchResourceHandlerResult<TOutput>;
 }
 
 export interface DeleteMethodDefinition<TParams extends object, TQuery, TOutput> {
 	readonly kind: 'delete';
 	readonly query?: AnySchema<TQuery>;
 	readonly output?: AnySchema<TOutput>;
-	handler(args: DeleteHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
-	batchHandler?(args: {
-		readonly params: TParams;
-		readonly items: readonly DeleteBatchItem<TQuery>[];
-		readonly ctx: ResourceHandlerContext;
-	}): BatchResourceHandlerResult<TOutput>;
+	handler(this: void, args: DeleteHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
+	batchHandler?(
+		this: void,
+		args: {
+			readonly params: TParams;
+			readonly items: readonly DeleteBatchItem<TQuery>[];
+			readonly ctx: ResourceHandlerContext;
+		}
+	): BatchResourceHandlerResult<TOutput>;
 }
 
 export type AnyResourceMethodDefinition<TParams extends object = object> =
@@ -318,25 +342,34 @@ interface InternalOperationOptions extends OperationOptions {
 
 type RuntimeDefinitionWithBatchHandler =
 	| (AddMethodDefinition<object, unknown, unknown> & {
-			batchHandler(args: {
-				readonly params: object;
-				readonly items: readonly { readonly input: unknown }[];
-				readonly ctx: ResourceHandlerContext;
-			}): BatchResourceHandlerResult<unknown>;
+			batchHandler(
+				this: void,
+				args: {
+					readonly params: object;
+					readonly items: readonly { readonly input: unknown }[];
+					readonly ctx: ResourceHandlerContext;
+				}
+			): BatchResourceHandlerResult<unknown>;
 	  })
 	| (MutateMethodDefinition<object, unknown, unknown, unknown> & {
-			batchHandler(args: {
-				readonly params: object;
-				readonly items: readonly { readonly query?: unknown; readonly input: unknown }[];
-				readonly ctx: ResourceHandlerContext;
-			}): BatchResourceHandlerResult<unknown>;
+			batchHandler(
+				this: void,
+				args: {
+					readonly params: object;
+					readonly items: readonly { readonly query?: unknown; readonly input: unknown }[];
+					readonly ctx: ResourceHandlerContext;
+				}
+			): BatchResourceHandlerResult<unknown>;
 	  })
 	| (DeleteMethodDefinition<object, unknown, unknown> & {
-			batchHandler(args: {
-				readonly params: object;
-				readonly items: readonly { readonly query?: unknown }[];
-				readonly ctx: ResourceHandlerContext;
-			}): BatchResourceHandlerResult<unknown>;
+			batchHandler(
+				this: void,
+				args: {
+					readonly params: object;
+					readonly items: readonly { readonly query?: unknown }[];
+					readonly ctx: ResourceHandlerContext;
+				}
+			): BatchResourceHandlerResult<unknown>;
 	  });
 
 interface ParsedBatchArgs {
@@ -888,7 +921,7 @@ function mergeMetrics(
 
 function normalizeHandlerOutput(
 	outputSchema: AnySchema<unknown> | undefined,
-	value: ResourceHandlerOk<unknown> | unknown
+	value: unknown
 ): SyncResult<ResourceHandlerOk<unknown>, SyncError> {
 	if (isRecord(value)) {
 		if ('signals' in value) {
@@ -995,7 +1028,7 @@ async function callHandler(
 	args: Record<string, unknown>,
 	exec: ResourceExecution,
 	resourceOptions: ResourceOptions | undefined
-): Promise<SyncResult<ResourceHandlerOk<unknown> | unknown, SyncError>> {
+): Promise<SyncResult<unknown, SyncError>> {
 	const context = createHandlerContext(exec);
 	const self = createResourceSelf(paramsSchema, methods, definition.kind, params, exec, resourceOptions);
 	switch (definition.kind) {

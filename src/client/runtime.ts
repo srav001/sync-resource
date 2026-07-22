@@ -15,8 +15,8 @@ export interface CreateRuntimeOptions {
 	readonly fetch?: typeof fetch;
 	readonly cache: SyncRuntime['cache'];
 	readonly streamUrl?: string;
-	now?(): number;
-	createId?(prefix: string): string;
+	now?(this: void): number;
+	createId?(this: void, prefix: string): string;
 	readonly transport?: RuntimeTransport;
 }
 
@@ -37,7 +37,7 @@ interface LogicalSubscription {
 	scope: string;
 	scopeConfirmed: boolean;
 	registrationRevision: number;
-	getCursor?(): string | undefined;
+	getCursor?(this: void): string | undefined;
 	promise?: Promise<SyncResult<void, SyncError>>;
 	connectAbort?: AbortController;
 }
@@ -116,9 +116,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		readonly managerKey?: string;
 		readonly scope?: string;
 		readonly signal: AbortSignal;
-		getCursor?(): string | undefined;
-		onEnvelope(envelope: SyncEnvelope): void;
-		onReconnect?(): void;
+		getCursor?(this: void): string | undefined;
+		onEnvelope(this: void, envelope: SyncEnvelope): void;
+		onReconnect?(this: void): void;
 	}): Promise<SyncResult<() => void, SyncError>> {
 		if (!options.connectUrl || !options.managerKey || !options.scope) {
 			return this.subscribeDirect(options);
@@ -204,7 +204,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			readonly connectUrl: string;
 			readonly managerKey: string;
 			readonly scope: string;
-			getCursor?(): string | undefined;
+			getCursor?(this: void): string | undefined;
 		}
 	): LogicalSubscription {
 		const existing = this.subscriptions.get(key);
@@ -582,8 +582,8 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	private async subscribeDirect(options: {
 		readonly url: string;
 		readonly signal: AbortSignal;
-		getCursor?(): string | undefined;
-		onEnvelope(envelope: SyncEnvelope): void;
+		getCursor?(this: void): string | undefined;
+		onEnvelope(this: void, envelope: SyncEnvelope): void;
 	}): Promise<SyncResult<() => void, SyncError>> {
 		const controller = new AbortController();
 		const abort = () => controller.abort();

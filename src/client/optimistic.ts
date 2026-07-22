@@ -57,7 +57,7 @@ export interface OptimisticReconcile {
 	itemId(item: unknown): string | undefined;
 	targetId(query: unknown, input: unknown): string | undefined;
 	matchesQuery?(item: unknown, query: unknown): boolean;
-	compare?(left: unknown, right: unknown): number;
+	compare?(this: void, left: unknown, right: unknown): number;
 }
 
 export function createOptimisticState(): OptimisticState {

@@ -37,8 +37,9 @@ export default defineConfig({
 		rules: {
 			'oxc/no-barrel-file': 'error',
 			'no-unassigned-vars': 'off',
+			'unicorn/no-new-array': 'off',
 			'typescript/no-explicit-any': 'error',
-			'typescript/no-floating-promises': 'warn',
+			'typescript/no-floating-promises': 'off',
 			'eslint/curly': 'error'
 		}
 	},

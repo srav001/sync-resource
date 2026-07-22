@@ -78,9 +78,9 @@ export interface RuntimeTransport {
 		readonly managerKey?: string;
 		readonly scope?: string;
 		readonly signal: AbortSignal;
-		getCursor?(): string | undefined;
-		onEnvelope(envelope: SyncEnvelope): void;
-		onReconnect?(): void;
+		getCursor?(this: void): string | undefined;
+		onEnvelope(this: void, envelope: SyncEnvelope): void;
+		onReconnect?(this: void): void;
 	}): Promise<SyncResult<() => void, SyncError>>;
 }
 
@@ -89,8 +89,8 @@ export interface SyncRuntime {
 	readonly cache: CacheAdapter;
 	readonly transport: RuntimeTransport;
 	readonly clientId: string;
-	now(): number;
-	createId(prefix: string): string;
+	now(this: void): number;
+	createId(this: void, prefix: string): string;
 	dispose(): void;
 }
 
@@ -144,7 +144,7 @@ export interface ReconcileConfig<
 	itemId?(item: TItem, context: ReconcileItemContext<TParams>): string;
 	targetId?(context: ReconcileTargetContext<TParams, TTargetQuery, TTargetInput>): string;
 	matchesQuery?(item: TItem, context: ReconcileQueryContext<TParams, TPageQuery>): boolean;
-	compare?(left: TItem, right: TItem): number;
+	compare?(this: void, left: TItem, right: TItem): number;
 }
 
 export interface ReconcileBuilder<TManager extends ManagerTypeShape> {
