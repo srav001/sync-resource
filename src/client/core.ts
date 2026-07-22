@@ -1,0 +1,72 @@
+export {
+	configureSync,
+	createRuntime,
+	getSyncRuntime,
+	resetSyncConfiguration,
+	type ConfigureSyncOptions,
+	type CreateRuntimeOptions
+} from './runtime.ts';
+export { createRepairScheduler, noRepairNeeded, planRepair, type RepairPlan, type RepairScheduler } from './repair.ts';
+export {
+	createStore,
+	type ClientStore,
+	type StoreEventHandlers,
+	type StoreListHandle,
+	type StoreSnapshot,
+	type StoreWriteOptions
+} from './store.ts';
+export {
+	andThen,
+	err,
+	isError,
+	isOk,
+	map,
+	mapError,
+	ok,
+	Result,
+	SyncErr,
+	SyncOk,
+	tryPromise,
+	trySync,
+	type InferErr,
+	type InferOk,
+	type SyncResult
+} from '../shared/result.ts';
+export { isSyncError, normalizeSyncError, SyncError, syncError, syncErrorToHttpStatus } from '../shared/index.ts';
+export type {
+	CacheAdapter,
+	CacheItem,
+	CollectionMeta,
+	CollectionItem,
+	CostMetric,
+	InputOf,
+	ManagerTypeShape,
+	MethodType,
+	NeedsReconcile,
+	OutputOf,
+	PageState,
+	PageOutputMeta,
+	ParamsOf,
+	QueryOf,
+	ReconcileBuilder,
+	ReconcileConfig,
+	ReconcileItemContext,
+	ReconcileQueryContext,
+	ReconcileTargetContext,
+	ResetManifest,
+	RuntimeTransport,
+	SyncCacheConfiguration,
+	StoreCacheOptions,
+	StoreConfig,
+	SyncEnvelope,
+	SyncErrorCode,
+	SyncErrorOptions,
+	SyncErrorRecovery,
+	SyncRecoveryMetadata,
+	SyncRecoverySource,
+	SyncHttpError,
+	SyncHttpOk,
+	SyncHttpResult,
+	SyncRuntime,
+	SyncSignal
+} from './types.ts';

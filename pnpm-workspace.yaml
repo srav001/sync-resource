@@ -1,0 +1,11 @@
+packages:
+    - .
+
+managePackageManagerVersions: false
+
+peerDependencyRules:
+    allowedVersions:
+        vite: '*'
+
+allowBuilds:
+    esbuild: true
