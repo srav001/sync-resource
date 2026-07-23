@@ -111,7 +111,6 @@ change or is proven infeasible, and document the deferred root cause.
 ## Commands
 
 ```bash
-pnpm install
 pnpm run typecheck
 pnpm run lint
 pnpm run format
@@ -127,11 +126,10 @@ It checks, tests, and builds the publishable ESM and declaration output into `di
 
 The npm package is public and unscoped as `sync-resource`. Before publishing:
 
-1. Run `pnpm install --frozen-lockfile`.
-2. Run `pnpm run validate`.
-3. Run `npm pack --dry-run` and inspect every included path.
-4. Verify the intended version and npm account/scope access.
-5. Run `npm publish` only after the package contents and registry state are confirmed.
+1. Run `pnpm run validate`.
+2. Run `npm pack --dry-run` and inspect every included path.
+3. Verify the intended version and npm account/scope access.
+4. Run `npm publish` only after the package contents and registry state are confirmed.
 
 Published files are limited by the `files` field in `package.json`. Public exports must point to compiled JavaScript
 and matching declarations under `dist`. The npm package also includes `README.md`, `AGENTS.md`, and `docs/`.

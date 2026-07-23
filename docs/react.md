@@ -4,11 +4,7 @@ Read [Complete usage and API](./usage.md) first. The React adapter creates the s
 configuration, actions, `SyncResult` values, cache behavior, optimistic updates, replay, repair, and finality. It only
 translates reactive reads into `useSyncExternalStore` hooks.
 
-## Install And Create
-
-```bash
-npm install sync-resource react
-```
+## Create
 
 Create the store at a stable application or provider boundary, not during component rendering:
 

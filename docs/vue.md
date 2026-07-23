@@ -4,11 +4,7 @@ Read [Complete usage and API](./usage.md) first. The Vue adapter creates the sam
 configuration, actions, `SyncResult` values, cache behavior, optimistic updates, replay, repair, and finality. It only
 translates reactive reads into Vue refs and attaches disposal to an active Vue effect scope.
 
-## Install And Create
-
-```bash
-npm install sync-resource vue
-```
+## Create
 
 Create the store synchronously inside `setup()` or a composable called by `setup()`:
 

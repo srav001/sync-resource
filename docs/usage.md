@@ -12,59 +12,6 @@ Examples in this guide use the framework-neutral JavaScript client. The same con
 the [Solid](./solid.md), [Vue](./vue.md), and [React](./react.md) adapters; their guides show only the reactive-read and
 lifecycle translation.
 
-## Status
-
-The package builds ESM JavaScript, TypeScript declarations, and source maps for its public subpaths. The protocol and
-public API are implemented, and the framework adapters have focused lifecycle and typing tests. Comprehensive protocol,
-replay, finality, and repair characterization remains the next major reliability milestone.
-
-## Installation
-
-```bash
-npm install sync-resource
-```
-
-No frontend framework is required. The client core works directly with browser JavaScript, DOM APIs, and application
-code. Install the framework you use when importing an optional adapter:
-
-```bash
-npm install sync-resource solid-js
-npm install sync-resource react
-npm install sync-resource vue
-```
-
-## Public Entry Points
-
-| Import                       | Purpose                                       |
-| ---------------------------- | --------------------------------------------- |
-| `sync-resource/server`       | Resources, managers, streams, and persistence |
-| `sync-resource/client/core`  | Framework-neutral runtime and stores          |
-| `sync-resource/client/react` | React hooks and explicit store lifecycle      |
-| `sync-resource/client/solid` | Solid accessors and owner cleanup             |
-| `sync-resource/client/vue`   | Vue refs and effect-scope cleanup             |
-| `sync-resource/shared`       | Protocol, schemas, errors, and shared types   |
-
-## Development
-
-Requirements: Node 24 and pnpm 11.1.2.
-
-```bash
-pnpm install
-pnpm run validate
-```
-
-Focused commands:
-
-```bash
-pnpm run typecheck
-pnpm run lint
-pnpm run format
-pnpm run build
-pnpm run check
-```
-
-Formatting, linting, and type-aware checks are provided by Vite+, Oxfmt, and Oxlint.
-
 ## Core Model
 
 The public model has three layers:
@@ -1463,7 +1410,6 @@ When adding a synced domain:
 11. Create frontend stores with only manager type, params, URL, query, cache policy, and optional reconcile.
 12. Branch on `SyncResult` for frontend actions.
 13. Run targeted conformance tests when touching synchronization behavior.
-14. Run `pnpm run validate`.
 
 ## Common Mistakes
 
@@ -1484,15 +1430,3 @@ When adding a synced domain:
 - Using full-list hydration for large collections.
 - Adding defensive normalization when schemas already cover the boundary.
 - Duplicating state that can be derived from data, pending, hydrating, refreshing, and error.
-
-## Repository Map
-
-Use this guide first for the model and public API. Read the owning source when changing internals:
-
-- Resource definition and execution: `src/server/resource.ts`
-- Manager, finality, idempotency, and outbox behavior: `src/server/manager.ts`
-- Shared stream multiplexing and SSE fanout: `src/server/streamMultiplexer.ts`
-- Client store orchestration: `src/client/store.ts`
-- Optimistic and pagination reconciliation: `src/client/optimistic.ts`
-- Browser runtime, transport, and cache scheduling: `src/client/runtime.ts`
-- Protocol guards and shared types: `src/shared/protocol.ts`

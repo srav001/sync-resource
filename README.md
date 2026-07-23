@@ -12,12 +12,25 @@ and cursor replay plus repair preserve correctness when realtime delivery is int
 npm install sync-resource
 ```
 
-The core client is framework-neutral. Install only the optional framework peer you use:
+The examples use npm by default, but Sync Resource works with npm, pnpm, Bun, or any compatible package manager.
+
+The core client is framework-neutral. When using an adapter, add only its optional framework peer:
 
 ```bash
+# npm
 npm install sync-resource solid-js
 npm install sync-resource vue
 npm install sync-resource react
+
+# pnpm
+pnpm add sync-resource solid-js
+pnpm add sync-resource vue
+pnpm add sync-resource react
+
+# Bun
+bun add sync-resource solid-js
+bun add sync-resource vue
+bun add sync-resource react
 ```
 
 ## Quick Start

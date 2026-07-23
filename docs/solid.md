@@ -4,11 +4,7 @@ Read [Complete usage and API](./usage.md) first. The Solid adapter creates the s
 configuration, actions, `SyncResult` values, cache behavior, optimistic updates, replay, repair, and finality. It only
 translates reactive reads into Solid accessors and attaches disposal to the Solid owner.
 
-## Install And Create
-
-```bash
-npm install sync-resource solid-js
-```
+## Create
 
 ```ts
 import { createSolidStore } from 'sync-resource/client/solid';
