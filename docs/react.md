@@ -125,6 +125,16 @@ For a single application lifetime, a module-owned store can be disposed by the a
 shorter lifetimes, own the store in an application-specific provider whose construction and Strict Mode lifecycle are
 explicitly controlled.
 
+### Workspace Route Store Ownership
+
+A `WorkspaceSyncProvider` can distribute one stable store registry for an `$accountId/$workspaceId` route. The
+route/application lifecycle controller—not subscribing children—must create and dispose that registry.
+
+- Repeated child-route mounts may call `hydrate()`; one store shares an active attempt and reuses its completed success.
+- Keep hydration flags and retry policy in Sync Resource rather than duplicating them in React state.
+- Dispose the registry when the workspace route ends, using a lifecycle boundary that accounts for React Strict Mode.
+- Clearing in-memory references does not delete persisted cache; keep other lifetimes outside this registry.
+
 ## Server Rendering
 
 The hooks provide stable server snapshots through `useSyncExternalStore`, so initial rendering can read the current

@@ -115,6 +115,16 @@ scope, its owner must call `store.dispose()` explicitly. Manual disposal is safe
 Put a store in `provide`/`inject` when descendants should share one sync lifetime. Do not create duplicate stores in
 every consumer.
 
+### Workspace Route Store Ownership
+
+A `WorkspaceSyncProvider` can own one Vue effect scope and store registry for an `$accountId/$workspaceId` route.
+Create stores synchronously inside that scope and expose their stable values through `provide`/`inject`.
+
+- Repeated child-route mounts may call `hydrate()`; one store shares an active attempt and reuses its completed success.
+- Keep hydration flags and retry policy in Sync Resource rather than duplicating them in the provider.
+- Stopping the workspace scope disposes its stores and clears in-memory references without deleting persisted cache.
+- Keep entity, temporary session, account-wide, and global stores outside this workspace-owned registry.
+
 ## Signals And Core Access
 
 Live-only signals remain on the framework-neutral core:
