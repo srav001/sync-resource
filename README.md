@@ -18,19 +18,13 @@ The core client is framework-neutral. When using an adapter, add only its option
 
 ```bash
 # npm
-npm install sync-resource solid-js
-npm install sync-resource vue
 npm install sync-resource react
 
 # pnpm
-pnpm add sync-resource solid-js
 pnpm add sync-resource vue
-pnpm add sync-resource react
 
 # Bun
 bun add sync-resource solid-js
-bun add sync-resource vue
-bun add sync-resource react
 ```
 
 ## Quick Start
@@ -116,3 +110,7 @@ pnpm run validate
 
 The required validation runs formatting checks, Oxlint, type-aware checks, Vitest, and the package build. Run
 `vp test --coverage` when manually auditing coverage.
+
+---
+
+Designed by humans ❤️. Built and documented using agents 🤖.
