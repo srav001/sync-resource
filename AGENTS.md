@@ -1,7 +1,7 @@
 # Repository Instructions
 
-Read `README.md` before planning, reviewing, or changing this repository. It is the authoritative documentation for
-the public model, protocol, APIs, lifecycle, examples, and runtime behavior.
+Read `README.md` before planning, reviewing, or changing this repository, then read `docs/usage.md` for the complete
+public model, protocol, APIs, lifecycle, examples, and runtime behavior.
 
 ## What This Repository Is
 
@@ -17,11 +17,12 @@ and repair provide convergence.
 
 ## Start Here
 
-1. Read `README.md` for the complete public contract.
-2. Identify the owning layer using the repository map below.
-3. Read the public entrypoint and implementation files for that layer.
-4. Preserve existing public exports and behavior unless the task explicitly changes them.
-5. Run `pnpm run validate` before finishing.
+1. Read `README.md` for package orientation and documentation links.
+2. Read `docs/usage.md` for the complete public contract.
+3. Identify the owning layer using the repository map below.
+4. Read the public entrypoint and implementation files for that layer.
+5. Preserve existing public exports and behavior unless the task explicitly changes them.
+6. Run `pnpm run validate` before finishing.
 
 ## Repository Map
 
@@ -57,9 +58,10 @@ and repair provide convergence.
 
 ### Framework guides
 
-- `docs/react.md` — React hooks, stable ownership, and explicit disposal
-- `docs/solid.md` — Solid accessors and owner cleanup
-- `docs/vue.md` — Vue shallow refs and effect-scope cleanup
+- `docs/usage.md` — complete behavior, API, and framework-neutral JavaScript examples
+- `docs/react.md` — thin React hook and ownership translation
+- `docs/solid.md` — thin Solid accessor and ownership translation
+- `docs/vue.md` — thin Vue ref and ownership translation
 
 ## Public Package Boundaries
 
@@ -162,7 +164,8 @@ same reason; they do not track package branding automatically.
 
 ## Documentation
 
-`README.md` is the authoritative public behavior and usage reference. Update it whenever public behavior, APIs,
-examples, runtime assumptions, or repository navigation changes. The focused framework guides under `docs/` may
-expand adapter usage without duplicating the core protocol documentation. Keep `AGENTS.md` focused on contributor
-workflow and rules; reference the README and framework guides instead of duplicating their complete contracts.
+`README.md` is the concise package landing page and documentation index. `docs/usage.md` is the authoritative behavior
+and API reference with framework-neutral examples. Update it whenever public behavior, APIs, runtime assumptions, or
+the core examples change. Framework guides translate that shared API into reactive reads and lifecycle ownership; do
+not duplicate the core protocol or action documentation in them. Keep `AGENTS.md` focused on contributor workflow and
+navigation.
