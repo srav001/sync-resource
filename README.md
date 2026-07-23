@@ -101,9 +101,9 @@ lifetime is owned; cache, transport, writes, replay, repair, and finality work t
 
 ## Status
 
-The package builds ESM JavaScript, TypeScript declarations, and source maps for every public entry point. Framework
-adapters have focused lifecycle and typing tests. Comprehensive protocol, replay, finality, and repair characterization
-remains the next reliability milestone.
+The package builds ESM JavaScript, TypeScript declarations, and source maps for every public entry point. Maintained
+characterization tests cover the shared protocol, resources, managers, persistence, direct and shared SSE, client
+hydration and cache behavior, optimistic writes, replay, repair, finality, and framework adapters.
 
 ## Development
 
@@ -114,4 +114,5 @@ pnpm install
 pnpm run validate
 ```
 
-Vite+ runs Oxfmt, Oxlint, type-aware checks, Vitest, and the package build.
+The required validation runs formatting checks, Oxlint, type-aware checks, Vitest, and the package build. Run
+`vp test --coverage` when manually auditing coverage.

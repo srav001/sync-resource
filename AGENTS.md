@@ -139,10 +139,19 @@ and matching declarations under `dist`. The npm package also includes `README.md
 
 ## Tests And Behavioral Changes
 
-The repository has focused framework-adapter lifecycle and typing tests, but it does not yet have a maintained core
-protocol characterization suite. Do not infer behavioral safety from typechecking alone. When changing protocol,
-resource, manager, store, replay, repair, cache, finality, or adapter behavior, add or update black-box tests that
-exercise public exports.
+The repository has maintained black-box characterization suites for the shared protocol, resources, managers,
+persistence, direct and shared SSE, the framework-neutral client, framework adapters, and end-to-end synchronization.
+Do not infer behavioral safety from typechecking or coverage percentages alone. When changing protocol, resource,
+manager, store, replay, repair, cache, finality, or adapter behavior, add or update the smallest public-API test that
+proves the affected contract.
+
+- `tests/shared/` — result, schema, protocol guard, serialization, and SSE framing contracts
+- `tests/server/` — resource, manager, persistence, idempotency, realtime, HTTP, and stream contracts
+- `tests/client/` — hydration, cache, reads, writes, finality, pagination, repair, events, and runtime contracts
+- `tests/integration/` — deterministic database-to-client synchronization flows
+
+Run `vp test --coverage` when manually auditing coverage. Coverage identifies unexercised paths; it does not justify
+duplicate tests or assertions against implementation details.
 
 Priority characterization path:
 

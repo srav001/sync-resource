@@ -46,6 +46,18 @@ export default defineConfig({
 			'eslint/curly': 'error'
 		}
 	},
+	test: {
+		coverage: {
+			include: ['src/**/*.ts'],
+			reporter: ['text', 'json'],
+			thresholds: {
+				branches: 70,
+				functions: 85,
+				lines: 80,
+				statements: 80
+			}
+		}
+	},
 	run: {
 		cache: true
 	}
