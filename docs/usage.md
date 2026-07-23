@@ -677,11 +677,11 @@ frames on the wire and reassembled by the client runtime before normal `SyncEnve
 Default route shape:
 
 ```txt
-POST /api/live-resource/stream
+POST /api/sync-resource/stream
 POST <manager-sync-route>/connect
 ```
 
-The `live-resource` route and internal coordination namespace are retained as compatibility-sensitive protocol state.
+The `sync-resource` route and internal coordination namespace are compatibility-sensitive protocol state.
 Changing the default stream path, cache-key prefix, browser storage keys, broadcast channel, lock name, or server
 realtime channel prefix would disconnect existing clients and rolling server deployments. New applications can choose
 a different stream URL explicitly through `configureSync(...)`.
@@ -760,9 +760,9 @@ const DAY = 24 * 60 * 60 * 1000;
 
 configureSync({
 	fetch: globalFetch,
-	streamUrl: '/api/live-resource/stream',
+	streamUrl: '/api/sync-resource/stream',
 	cache: {
-		adapter: new IndexedDbCacheAdapter('sync-resource-cache', 'store'),
+		adapter: new IndexedDbCacheAdapter('Sync Resource V1', 'store'),
 		ttlMs: 14 * DAY
 	}
 });
@@ -931,7 +931,7 @@ import { cacheAdapter } from './cache.js';
 
 configureSync({
 	fetch: (...args) => fetch(...args),
-	streamUrl: '/api/live-resource/stream',
+	streamUrl: '/api/sync-resource/stream',
 	cache: {
 		adapter: cacheAdapter,
 		ttlMs: 14 * 24 * 60 * 60 * 1000

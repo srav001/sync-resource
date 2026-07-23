@@ -41,7 +41,7 @@ import { cacheAdapter } from './cache.js';
 import type { NotesManager } from './notesManager.js';
 
 configureSync({
-	streamUrl: '/api/live-resource/stream',
+	streamUrl: '/api/sync-resource/stream',
 	cache: { adapter: cacheAdapter }
 });
 
@@ -107,7 +107,7 @@ remains the next reliability milestone.
 
 ## Development
 
-Requirements: Node 24 and pnpm 11.1.2.
+Requirements: Node 22.18 or newer and pnpm 11.1.2.
 
 ```bash
 pnpm install

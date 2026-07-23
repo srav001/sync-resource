@@ -1095,7 +1095,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			return this.cachedScopeCacheKey;
 		}
 		this.cachedScopeParamsText = paramsText;
-		this.cachedScopeCacheKey = `live-resource:${this.config.key}:${paramsText}`;
+		this.cachedScopeCacheKey = `sync-resource:${this.config.key}:${paramsText}`;
 		return this.cachedScopeCacheKey;
 	}
 

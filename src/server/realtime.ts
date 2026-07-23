@@ -23,7 +23,7 @@ export interface PubSubManagerRealtimeBusOptions {
 }
 
 export function createPubSubManagerRealtimeBus(options: PubSubManagerRealtimeBusOptions): ManagerRealtimeBus {
-	const channelPrefix = options.channelPrefix ?? 'live-resource';
+	const channelPrefix = options.channelPrefix ?? 'sync-resource';
 	const serialize = options.serialize ?? defaultSerializeEnvelope;
 	const deserialize = options.deserialize ?? defaultDeserializeEnvelope;
 

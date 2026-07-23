@@ -153,7 +153,7 @@ hydrate -> optimistic write -> authoritative finality -> disconnect -> cursor re
 ## Runtime Assumptions
 
 - TypeScript target: ES2022
-- Development runtime: Node 24
+- Development runtime: Node 22.18 or newer
 - Package manager: pnpm 11.1.2
 - Server runtime: global Web Request/Response, streams, encoders, abort APIs, timers, and Web Crypto
 - Browser runtime: fetch streams, Web Crypto, local storage, and optional Web Locks/BroadcastChannel support

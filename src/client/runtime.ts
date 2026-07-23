@@ -63,13 +63,13 @@ interface PendingSyncEnvelopeChunks {
 	received: number;
 }
 
-const TRANSPORT_ID_STORAGE_KEY = 'live-resource:transport-id';
-const OWNER_STORAGE_KEY = 'live-resource:owner';
+const TRANSPORT_ID_STORAGE_KEY = 'sync-resource:transport-id';
+const OWNER_STORAGE_KEY = 'sync-resource:owner';
 const OWNER_HEARTBEAT_MS = 3000;
 const OWNER_EXPIRES_MS = 10_000;
 const LOGICAL_CONNECT_TIMEOUT_MS = 30_000;
-const BROADCAST_CHANNEL = 'live-resource:v1:transport';
-const LOCK_NAME = 'live-resource:transport';
+const BROADCAST_CHANNEL = 'sync-resource:v1:transport';
+const LOCK_NAME = 'sync-resource:transport';
 const MAX_SSE_BUFFER_BYTES = MAX_SSE_FRAME_BYTES;
 const MAX_PENDING_SYNC_CHUNKS = 32;
 const SSE_PING_PREFIX = 'event: ping\n';
@@ -628,7 +628,7 @@ export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
 		options.transport ??
 		new BrowserSessionRuntimeTransport(
 			fetchImpl,
-			options.streamUrl ?? '/api/live-resource/stream',
+			options.streamUrl ?? '/api/sync-resource/stream',
 			transportId,
 			clientId,
 			createId
