@@ -67,11 +67,15 @@ connects realtime delivery. The application owns its concrete cache adapter.
 
 ## Documentation
 
+- **Coding agents:** start with [AGENTS.md](./AGENTS.md). It routes agents to the correct usage guide and source layer.
 - [Complete usage and API](./docs/usage.md) — resources, managers, client stores, pure JavaScript examples, protocol,
   replay, repair, pagination, reconciliation, and finality
 - [Solid](./docs/solid.md) — accessor mapping and automatic owner cleanup
 - [Vue](./docs/vue.md) — shallow-ref mapping and effect-scope cleanup
 - [React](./docs/react.md) — hook mapping and explicit store ownership
+
+`README.md`, `AGENTS.md`, and the complete `docs/` directory are published with the npm package. Agents working from
+an installed dependency can find them under `node_modules/sync-resource/`.
 
 The framework adapters create the same core store. They change only how state becomes reactive and how the store
 lifetime is owned; cache, transport, writes, replay, repair, and finality work the same way.

@@ -1,7 +1,10 @@
 # Repository Instructions
 
-Read `README.md` before planning, reviewing, or changing this repository, then read `docs/usage.md` for the complete
-public model, protocol, APIs, lifecycle, examples, and runtime behavior.
+Read `docs/usage.md` before planning, reviewing, or changing library usage. It is the complete public model, protocol,
+API, lifecycle, examples, and runtime behavior reference.
+
+This file and the entire `docs/` directory ship with the npm package. When Sync Resource is an installed dependency,
+the same agent instructions and usage guides are available under `node_modules/sync-resource/`.
 
 ## What This Repository Is
 
@@ -17,8 +20,8 @@ and repair provide convergence.
 
 ## Start Here
 
-1. Read `README.md` for package orientation and documentation links.
-2. Read `docs/usage.md` for the complete public contract.
+1. Read `docs/usage.md` for the complete public contract.
+2. Read `docs/solid.md`, `docs/vue.md`, or `docs/react.md` when using a framework adapter.
 3. Identify the owning layer using the repository map below.
 4. Read the public entrypoint and implementation files for that layer.
 5. Preserve existing public exports and behavior unless the task explicitly changes them.
@@ -162,8 +165,8 @@ same reason; they do not track package branding automatically.
 
 ## Documentation
 
-`README.md` is the concise package landing page and documentation index. `docs/usage.md` is the authoritative behavior
-and API reference with framework-neutral examples. Update it whenever public behavior, APIs, runtime assumptions, or
-the core examples change. Framework guides translate that shared API into reactive reads and lifecycle ownership; do
-not duplicate the core protocol or action documentation in them. Keep `AGENTS.md` focused on contributor workflow and
-navigation.
+`README.md` is the concise package landing page and directs coding agents here. `docs/usage.md` is the authoritative
+behavior and API reference with framework-neutral examples. Update it whenever public behavior, APIs, runtime
+assumptions, or core examples change. Framework guides translate that shared API into reactive reads and lifecycle
+ownership; do not duplicate the core protocol or action documentation in them. Keep `AGENTS.md` focused on contributor
+workflow and navigation.
