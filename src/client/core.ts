@@ -7,12 +7,21 @@ export {
 	type CreateRuntimeOptions
 } from './runtime.ts';
 export { createRepairScheduler, noRepairNeeded, planRepair, type RepairPlan, type RepairScheduler } from './repair.ts';
+export { bindStoreEvents, type StoreAdapterEventSinks, type StoreAdapterEventSource } from './adapter.ts';
 export {
 	createStore,
 	type ClientStore,
+	type StoreActionMethodName,
+	type StoreActionMethods,
+	type StoreBase,
 	type StoreEventHandlers,
 	type StoreListHandle,
 	type StoreSnapshot,
+	type StoreWithAdd,
+	type StoreWithDelete,
+	type StoreWithGet,
+	type StoreWithList,
+	type StoreWithMutate,
 	type StoreWriteOptions
 } from './store.ts';
 export {

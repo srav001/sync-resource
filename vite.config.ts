@@ -4,6 +4,9 @@ export default defineConfig({
 	pack: {
 		entry: {
 			'client/core': './src/client/core.ts',
+			'client/react': './src/client/react.ts',
+			'client/solid': './src/client/solid.ts',
+			'client/vue': './src/client/vue.ts',
 			server: './src/server/index.ts',
 			shared: './src/shared/index.ts'
 		},

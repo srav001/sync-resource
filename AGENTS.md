@@ -5,7 +5,7 @@ the public model, protocol, APIs, lifecycle, examples, and runtime behavior.
 
 ## What This Repository Is
 
-Live Resource is a TypeScript synchronization library. It provides:
+Sync Resource is a TypeScript synchronization library. It provides:
 
 - typed backend resources and managers
 - HTTP and shared SSE transport primitives
@@ -49,16 +49,29 @@ and repair provide convergence.
 - `src/client/store.ts` — hydration, reads, writes, pending commands, events, and lifecycle
 - `src/client/optimistic.ts` — entity/page state, optimistic patches, rebase, and query-family reconciliation
 - `src/client/repair.ts` — repair planning and scheduling
+- `src/client/adapter.ts` — framework-neutral adapter event and type helpers
 - `src/client/core.ts` — intentional framework-neutral public entrypoint
+- `src/client/react.ts` — optional React external-store hooks
+- `src/client/solid.ts` — optional Solid accessors and owner cleanup
+- `src/client/vue.ts` — optional Vue shallow refs and effect-scope cleanup
+
+### Framework guides
+
+- `docs/react.md` — React hooks, stable ownership, and explicit disposal
+- `docs/solid.md` — Solid accessors and owner cleanup
+- `docs/vue.md` — Vue shallow refs and effect-scope cleanup
 
 ## Public Package Boundaries
 
-The package name is `live-resource`. Preserve these subpaths unless an explicit public-API migration is
+The package name is `sync-resource`. Preserve these subpaths unless an explicit public-API migration is
 approved:
 
-- `live-resource/server`
-- `live-resource/client/core`
-- `live-resource/shared`
+- `sync-resource/server`
+- `sync-resource/client/core`
+- `sync-resource/client/react`
+- `sync-resource/client/solid`
+- `sync-resource/client/vue`
+- `sync-resource/shared`
 
 The core client must remain framework-neutral. Database drivers, web frameworks, application stores, domain models,
 and concrete IndexedDB implementations do not belong in this package.
@@ -100,16 +113,17 @@ pnpm install
 pnpm run typecheck
 pnpm run lint
 pnpm run format
+pnpm run test
 pnpm run build
 pnpm run validate
 ```
 
-Vite+ runs Oxfmt, Oxlint, and type-aware checks. `pnpm run validate` is the required final static validation command.
-It also builds the publishable ESM and declaration output into `dist`. Never edit `dist` by hand.
+Vite+ runs Oxfmt, Oxlint, type-aware checks, and Vitest. `pnpm run validate` is the required final validation command.
+It checks, tests, and builds the publishable ESM and declaration output into `dist`. Never edit `dist` by hand.
 
 ## Publishing
 
-The npm package is public and unscoped as `live-resource`. Before publishing:
+The npm package is public and unscoped as `sync-resource`. Before publishing:
 
 1. Run `pnpm install --frozen-lockfile`.
 2. Run `pnpm run validate`.
@@ -118,13 +132,14 @@ The npm package is public and unscoped as `live-resource`. Before publishing:
 5. Run `npm publish` only after the package contents and registry state are confirmed.
 
 Published files are limited by the `files` field in `package.json`. Public exports must point to compiled JavaScript
-and matching declarations under `dist`.
+and matching declarations under `dist`. The npm package also includes `README.md`, `AGENTS.md`, and `docs/`.
 
 ## Tests And Behavioral Changes
 
-The repository does not yet have a maintained characterization suite. Do not infer behavioral safety from typechecking
-alone. When changing protocol, resource, manager, store, replay, repair, cache, finality, or adapter behavior, add or
-update black-box tests that exercise public exports.
+The repository has focused framework-adapter lifecycle and typing tests, but it does not yet have a maintained core
+protocol characterization suite. Do not infer behavioral safety from typechecking alone. When changing protocol,
+resource, manager, store, replay, repair, cache, finality, or adapter behavior, add or update black-box tests that
+exercise public exports.
 
 Priority characterization path:
 
@@ -142,9 +157,12 @@ hydrate -> optimistic write -> authoritative finality -> disconnect -> cursor re
 
 Renaming browser storage, lock, or broadcast-channel keys breaks coordination with already-open tabs. Treat these keys
 as compatibility-sensitive protocol state.
+The default stream route, cache-key prefix, and server realtime channel prefix are compatibility-sensitive for the
+same reason; they do not track package branding automatically.
 
 ## Documentation
 
-`README.md` is the only public behavior and usage reference. Update it whenever public behavior, APIs, examples,
-runtime assumptions, or repository navigation changes. Keep `AGENTS.md` focused on contributor workflow and rules;
-reference the README instead of creating another standalone architecture document.
+`README.md` is the authoritative public behavior and usage reference. Update it whenever public behavior, APIs,
+examples, runtime assumptions, or repository navigation changes. The focused framework guides under `docs/` may
+expand adapter usage without duplicating the core protocol documentation. Keep `AGENTS.md` focused on contributor
+workflow and rules; reference the README and framework guides instead of duplicating their complete contracts.

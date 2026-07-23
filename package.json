@@ -1,7 +1,7 @@
 {
-	"name": "live-resource",
+	"name": "sync-resource",
 	"version": "0.0.1",
-	"description": "Framework-neutral live resource synchronization primitives.",
+	"description": "Framework-neutral server-authoritative resource synchronization primitives.",
 	"keywords": [
 		"cache",
 		"optimistic-ui",
@@ -14,12 +14,12 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/srav001/live-resource.git"
+		"url": "git+https://github.com/srav001/sync-resource.git"
 	},
 	"bugs": {
-		"url": "https://github.com/srav001/live-resource/issues"
+		"url": "https://github.com/srav001/sync-resource/issues"
 	},
-	"homepage": "https://github.com/srav001/live-resource#readme",
+	"homepage": "https://github.com/srav001/sync-resource#readme",
 	"type": "module",
 	"sideEffects": false,
 	"scripts": {
@@ -27,11 +27,14 @@
 		"check": "vp check",
 		"lint": "vp lint --fix",
 		"format": "vp fmt",
-		"validate": "vp check && vp pack",
+		"test": "vp test",
+		"validate": "vp check && vp test && vp pack",
 		"prepack": "pnpm run validate"
 	},
 	"files": [
 		"dist",
+		"docs",
+		"AGENTS.md",
 		"LICENSE",
 		"README.md"
 	],
@@ -40,6 +43,21 @@
 			"types": "./dist/client/core.d.ts",
 			"import": "./dist/client/core.js",
 			"default": "./dist/client/core.js"
+		},
+		"./client/react": {
+			"types": "./dist/client/react.d.ts",
+			"import": "./dist/client/react.js",
+			"default": "./dist/client/react.js"
+		},
+		"./client/solid": {
+			"types": "./dist/client/solid.d.ts",
+			"import": "./dist/client/solid.js",
+			"default": "./dist/client/solid.js"
+		},
+		"./client/vue": {
+			"types": "./dist/client/vue.d.ts",
+			"import": "./dist/client/vue.js",
+			"default": "./dist/client/vue.js"
 		},
 		"./server": {
 			"types": "./dist/server.d.ts",
@@ -52,11 +70,33 @@
 			"default": "./dist/shared.js"
 		}
 	},
+	"peerDependencies": {
+		"react": ">=18.0.0 <20.0.0",
+		"solid-js": ">=1.9.0 <2.0.0",
+		"vue": ">=3.3.0 <4.0.0"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
+		},
+		"solid-js": {
+			"optional": true
+		},
+		"vue": {
+			"optional": true
+		}
+	},
 	"devDependencies": {
 		"@types/node": "26.1.1",
+		"@types/react": "19.2.17",
+		"@types/react-dom": "19.2.3",
+		"react": "19.2.8",
+		"react-dom": "19.2.8",
+		"solid-js": "1.9.14",
 		"typescript": "6.0.3",
 		"vite": "npm:@voidzero-dev/vite-plus-core@0.2.4",
-		"vite-plus": "0.2.4"
+		"vite-plus": "0.2.4",
+		"vue": "3.5.40"
 	},
 	"engines": {
 		"node": ">=24.15.0 <25"

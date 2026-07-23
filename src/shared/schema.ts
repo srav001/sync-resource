@@ -52,7 +52,7 @@ export function normalizeValidator<TValue>(schema: AnySchema<TValue>): Validator
 			parse(value: unknown): TValue {
 				const result = schema['~standard'].validate(value);
 				if (result instanceof Promise) {
-					throw new Error('Async validation is not supported by Live Resource core validators.');
+					throw new Error('Async validation is not supported by Sync Resource core validators.');
 				}
 				if ('issues' in result && result.issues) {
 					throw new Error(`Validation failed: ${JSON.stringify(result.issues)}`);

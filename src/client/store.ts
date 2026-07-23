@@ -217,6 +217,23 @@ export type ClientStore<TManager extends ManagerTypeShape> = StoreBase<TManager>
 	StoreWithMutate<TManager> &
 	StoreWithDelete<TManager>;
 
+export type StoreActionMethodName =
+	| 'restore'
+	| 'hydrate'
+	| 'connect'
+	| 'repair'
+	| 'get'
+	| 'refresh'
+	| 'loadMore'
+	| 'add'
+	| 'mutate'
+	| 'delete';
+
+export type StoreActionMethods<TManager extends ManagerTypeShape> = Pick<
+	ClientStore<TManager>,
+	Extract<StoreActionMethodName, keyof ClientStore<TManager>>
+>;
+
 export function createStore<TManager extends ManagerTypeShape>(
 	config: StoreConfig<TManager>,
 	...reconcile: NeedsReconcile<TManager> extends true

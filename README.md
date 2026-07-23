@@ -1,6 +1,6 @@
-# Live Resource
+# Sync Resource
 
-Live Resource is a typed, server-authoritative synchronization library for applications that need cached reads,
+Sync Resource is a typed, server-authoritative synchronization library for applications that need cached reads,
 optimistic writes, realtime updates, replay, repair, and mutation finality without coupling the client core to a UI
 framework or database.
 
@@ -10,25 +10,35 @@ interrupted.
 
 ## Status
 
-The package builds ESM JavaScript, TypeScript declarations, and source maps for its three public subpaths. The protocol
-and public API are implemented; comprehensive characterization tests are the next major reliability milestone.
+The package builds ESM JavaScript, TypeScript declarations, and source maps for its public subpaths. The protocol and
+public API are implemented, and the framework adapters have focused lifecycle and typing tests. Comprehensive protocol,
+replay, finality, and repair characterization remains the next major reliability milestone.
 
 ## Installation
 
 ```bash
-npm install live-resource
+npm install sync-resource
 ```
 
 No frontend framework is required. The client core works directly with browser JavaScript, DOM APIs, and application
-code.
+code. Install the framework you use when importing an optional adapter:
+
+```bash
+npm install sync-resource solid-js
+npm install sync-resource react
+npm install sync-resource vue
+```
 
 ## Public Entry Points
 
-| Import                      | Purpose                                       |
-| --------------------------- | --------------------------------------------- |
-| `live-resource/server`      | Resources, managers, streams, and persistence |
-| `live-resource/client/core` | Framework-neutral runtime and stores          |
-| `live-resource/shared`      | Protocol, schemas, errors, and shared types   |
+| Import                       | Purpose                                       |
+| ---------------------------- | --------------------------------------------- |
+| `sync-resource/server`       | Resources, managers, streams, and persistence |
+| `sync-resource/client/core`  | Framework-neutral runtime and stores          |
+| `sync-resource/client/react` | React hooks and explicit store lifecycle      |
+| `sync-resource/client/solid` | Solid accessors and owner cleanup             |
+| `sync-resource/client/vue`   | Vue refs and effect-scope cleanup             |
+| `sync-resource/shared`       | Protocol, schemas, errors, and shared types   |
 
 ## Development
 
@@ -77,7 +87,7 @@ repair, and framework-agnostic state events.
 - Resource methods may update the backing datastore because they are the manager-owned database boundary.
 - Worker-only code must never import managers or anything connected to managers. Managers and manager-connected code
   are host-side only.
-- Worker-only code should avoid direct Live Resource access where possible. If a worker truly needs persisted data
+- Worker-only code should avoid direct Sync Resource access where possible. If a worker truly needs persisted data
   access, the maximum allowed boundary is a resource, never a manager.
 - Use `createStore<ManagerType>(...)` for framework-agnostic frontend state.
 - Frontend imports only exported manager types, never backend runtime objects.
@@ -86,7 +96,7 @@ repair, and framework-agnostic state events.
 - All public resource, manager, and store methods are dot-callable and strongly typed.
 - All non-trivial sync operations return strict `SyncResult` unions.
 - Resource schemas may be `.parse(...)` validators or Standard Schema-compatible objects with `~standard.validate(...)`.
-- Browser cache must use an IndexedDB-backed `CacheAdapter`; the concrete adapter belongs in the app, not the Live Resource package.
+- Browser cache must use an IndexedDB-backed `CacheAdapter`; the concrete adapter belongs in the app, not the Sync Resource package.
 - Realtime, optimistic updates, rollback, rebase, and reconciliation are required for every synced store.
 - Choose the sync method from the UI's synced unit, not from the database storage shape.
 - UIs that render independently updated rows should expose those rows through `list` / `items()`, even when the resource reads and writes one aggregate DB document internally.
@@ -190,7 +200,7 @@ shared through prototypes rather than allocated per result.
 `SyncError` is an `Error` subclass on both server and client, so a narrowed `result.error` passes both
 `instanceof SyncError` and `instanceof Error`. HTTP/SSE keeps its separate plain wire DTO, and client transport code
 recreates `SyncError` while constructing the public result. Direct calls do not serialize or deserialize results.
-Live Resource internals construct failed results with `err(code, message, options)` or preserve an existing
+Sync Resource internals construct failed results with `err(code, message, options)` or preserve an existing
 `SyncError` with `err(syncErrorValue)`. Resource handlers continue to use `ctx.error(...)`.
 
 ## Backend Resource API
@@ -202,7 +212,7 @@ the public shape; the source is the
 authoritative guide for exact validation, self-call, batch, envelope, and error behavior.
 
 ```ts
-import { resource } from 'live-resource/server';
+import { resource } from 'sync-resource/server';
 
 const notesRepository = getNotesRepository();
 
@@ -421,7 +431,7 @@ Direct resource calls still validate schemas and return strict results. They do 
 Managers wrap resources:
 
 ```ts
-import { manager } from 'live-resource/server';
+import { manager } from 'sync-resource/server';
 
 export const notesManager = manager({
 	key: 'notes',
@@ -658,9 +668,9 @@ handlers inside the web framework or server used by the host application.
 Mount the shared physical stream once:
 
 ```ts
-import { httpSharedSyncStream } from 'live-resource/server';
+import { httpSharedSyncStream } from 'sync-resource/server';
 
-export function handleLiveResourceStream(request: Request): Promise<Response> {
+export function handleSyncResourceStream(request: Request): Promise<Response> {
 	return httpSharedSyncStream(request);
 }
 ```
@@ -720,6 +730,11 @@ POST /api/live-resource/stream
 POST <manager-sync-route>/connect
 ```
 
+The `live-resource` route and internal coordination namespace are retained as compatibility-sensitive protocol state.
+Changing the default stream path, cache-key prefix, browser storage keys, broadcast channel, lock name, or server
+realtime channel prefix would disconnect existing clients and rolling server deployments. New applications can choose
+a different stream URL explicitly through `configureSync(...)`.
+
 The physical stream carries envelopes:
 
 ```ts
@@ -758,7 +773,7 @@ Realtime is required, but correctness comes from cursor replay and repair. A mis
 Use a manager realtime bus when multiple API processes can serve sync streams:
 
 ```ts
-import { createPubSubManagerRealtimeBus } from 'live-resource/server';
+import { createPubSubManagerRealtimeBus } from 'sync-resource/server';
 
 const realtimeBus = createPubSubManagerRealtimeBus({
 	transport: {
@@ -787,8 +802,8 @@ The transport wrapper can be Redis, NATS, Azure Service Bus, or another pub/sub 
 Configure sync once near app startup:
 
 ```ts
-import { configureSync } from 'live-resource/client/core';
-import { IndexedDbCacheAdapter } from './liveResourceIndexedDbCache.js';
+import { configureSync } from 'sync-resource/client/core';
+import { IndexedDbCacheAdapter } from './syncResourceIndexedDbCache.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -796,7 +811,7 @@ configureSync({
 	fetch: globalFetch,
 	streamUrl: '/api/live-resource/stream',
 	cache: {
-		adapter: new IndexedDbCacheAdapter('live-resource-sync', 'store'),
+		adapter: new IndexedDbCacheAdapter('sync-resource-cache', 'store'),
 		ttlMs: 14 * DAY
 	}
 });
@@ -831,7 +846,7 @@ backend `list` handler can flatten rows from an aggregate document; the resource
 This collection shape also works when the collection contains exactly one item.
 
 ```ts
-import { createStore } from 'live-resource/client/core';
+import { createStore } from 'sync-resource/client/core';
 
 const notes = createStore<NotesManager>(
 	{
@@ -960,7 +975,7 @@ through `configureSync(...)`.
 ### Create and hydrate a store
 
 ```js
-import { configureSync, createStore } from 'live-resource/client/core';
+import { configureSync, createStore } from 'sync-resource/client/core';
 import { cacheAdapter } from './cache.js';
 
 configureSync({
@@ -1080,6 +1095,69 @@ if (archived.isErr()) {
 Writes update visible state optimistically when identity and patch information are available. The returned HTTP result
 is an acknowledgement; authoritative envelope or reset coverage determines finality.
 
+## Framework Adapters
+
+Framework adapters create the same core store and translate its typed events into framework-native reactive values.
+They do not own cache, transport, optimistic updates, replay, repair, or finality logic. Each adapter exposes its core
+store through `store.core` for typed signals and advanced subscriptions.
+
+Framework dependencies are optional peers. Importing `sync-resource/client/core` never imports React, Solid, or Vue.
+
+### Solid
+
+```tsx
+import { createSolidStore } from 'sync-resource/client/solid';
+
+const notes = createSolidStore<NotesManager>(config);
+await notes.hydrate();
+notes.items();
+```
+
+State is exposed as Solid accessors, and the store disposes with its Solid owner. Read the
+[Solid adapter guide](./docs/solid.md).
+
+### Vue
+
+```ts
+import { createVueStore } from 'sync-resource/client/vue';
+
+const notes = createVueStore<NotesManager>(config);
+await notes.hydrate();
+notes.items.value;
+```
+
+State is exposed as shallow refs and computed refs. Stores created in `setup()` or a composable dispose with the active
+Vue effect scope. Read the [Vue adapter guide](./docs/vue.md).
+
+### React
+
+```tsx
+import { createReactStore } from 'sync-resource/client/react';
+
+const notes = createReactStore<NotesManager>(config);
+
+export function NotesList() {
+	const items = notes.useItems();
+	return (
+		<>
+			{items.map((note) => (
+				<p key={note.id}>{note.title}</p>
+			))}
+		</>
+	);
+}
+```
+
+Create the store at a stable application boundary and dispose it explicitly when that boundary ends. Read the
+[React adapter guide](./docs/react.md).
+
+### Custom Adapter Authoring
+
+`sync-resource/client/core` exports `bindStoreEvents`, `StoreAdapterEventSinks`, `StoreAdapterEventSource`,
+`StoreActionMethods`, and the conditional `StoreWith*` types. These keep custom adapters tied to the public store
+contract without importing client internals. Live-only signals remain dynamically keyed and are subscribed through
+`store.on.signal(type, callback)`.
+
 ## Store State And Events
 
 Core store exposes:
@@ -1088,6 +1166,7 @@ Core store exposes:
 interface StoreSnapshot<TManager> {
 	readonly data: OutputOf<TManager, 'get'> | undefined;
 	readonly items: readonly CollectionItem<TManager>[];
+	readonly listMeta: CollectionMeta<TManager> | undefined;
 	readonly pages: readonly PageState[];
 	readonly pending: readonly PendingCommand[];
 	readonly hydrating: boolean;
@@ -1102,6 +1181,7 @@ It also exposes typed event slots:
 ```ts
 store.on.data((data) => {});
 store.on.items((items) => {});
+store.on.listMeta((meta) => {});
 store.on.pages((pages) => {});
 store.on.signal('user-event', (payload) => {});
 store.on.pending((pending) => {});
