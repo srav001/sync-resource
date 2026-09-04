@@ -5,11 +5,11 @@ import {
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
 	registerSharedStreamSubscription,
-	resetSharedStreamForTests,
 	type ManagerOutboxRead,
 	type ManagerSyncPersistence,
 	type SyncEnvelope
 } from '../../src/server/index.ts';
+import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { MAX_CHUNKED_SYNC_BYTES, parseSseEvent, parseSyncEnvelopeChunkJson } from '../../src/shared/sse.ts';
 
 afterEach(() => {

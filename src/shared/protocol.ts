@@ -1,3 +1,5 @@
+import { isFiniteNumber, isRecord, isString } from './guards.ts';
+
 export const syncErrorCodes = [
 	'validation',
 	'bad_request',
@@ -153,6 +155,8 @@ export interface SyncHttpError {
 
 export type SyncHttpResult<TValue> = SyncHttpOk<TValue> | SyncHttpError;
 
+const syncErrorCodeSet: ReadonlySet<string> = new Set(syncErrorCodes);
+
 export function syncError(code: SyncErrorCode, message: string, options?: SyncErrorOptions): SyncError {
 	return new SyncError(code, message, options);
 }
@@ -214,7 +218,7 @@ export function syncErrorToHttpStatus(error: Pick<SyncProtocolError, 'code'>): n
 }
 
 export function isSyncErrorCode(value: unknown): value is SyncErrorCode {
-	return typeof value === 'string' && (syncErrorCodes as readonly string[]).includes(value);
+	return isString(value) && syncErrorCodeSet.has(value);
 }
 
 export function isSyncErrorRecovery(value: unknown): value is SyncErrorRecovery {
@@ -234,7 +238,7 @@ export function isSyncProtocolError(value: unknown): value is SyncProtocolError 
 	if (!isRecord(value)) {
 		return false;
 	}
-	if (!isSyncErrorCode(value.code) || typeof value.message !== 'string') {
+	if (!isSyncErrorCode(value.code) || !isString(value.message)) {
 		return false;
 	}
 	return value.recovery === undefined || isSyncErrorRecovery(value.recovery);
@@ -249,7 +253,7 @@ export function isResetManifest(value: unknown): value is ResetManifest {
 		return false;
 	}
 	if (
-		typeof value.scope !== 'string' ||
+		!isString(value.scope) ||
 		!isSyncResetReason(value.reason) ||
 		!isOptionalString(value.previousCursor) ||
 		!isOptionalString(value.nextCursor) ||
@@ -262,11 +266,11 @@ export function isResetManifest(value: unknown): value is ResetManifest {
 	if (value.affectedFamilies === undefined) {
 		return true;
 	}
-	return Array.isArray(value.affectedFamilies) && value.affectedFamilies.every((item) => typeof item === 'string');
+	return Array.isArray(value.affectedFamilies) && value.affectedFamilies.every(isString);
 }
 
 export function isSyncChange(value: unknown): value is SyncChange {
-	if (!isRecord(value) || typeof value.type !== 'string') {
+	if (!isRecord(value) || !isString(value.type)) {
 		return false;
 	}
 	switch (value.type) {
@@ -275,11 +279,11 @@ export function isSyncChange(value: unknown): value is SyncChange {
 				Array.isArray(value.items) && isOptionalString(value.pageCursor) && isOptionalString(value.syncCursor)
 			);
 		case 'itemAdded':
-			return typeof value.id === 'string' && 'value' in value;
+			return isString(value.id) && 'value' in value;
 		case 'itemUpdated':
-			return typeof value.id === 'string';
+			return isString(value.id);
 		case 'itemDeleted':
-			return typeof value.id === 'string';
+			return isString(value.id);
 		case 'reset':
 			return isResetManifest(value.manifest);
 		default:
@@ -288,7 +292,7 @@ export function isSyncChange(value: unknown): value is SyncChange {
 }
 
 export function isSyncSignal(value: unknown): value is SyncSignal {
-	return isRecord(value) && typeof value.type === 'string' && 'payload' in value;
+	return isRecord(value) && isString(value.type) && 'payload' in value;
 }
 
 export function isSyncEnvelope(value: unknown): value is SyncEnvelope {
@@ -296,9 +300,9 @@ export function isSyncEnvelope(value: unknown): value is SyncEnvelope {
 		return false;
 	}
 	if (
-		typeof value.managerKey !== 'string' ||
-		typeof value.scope !== 'string' ||
-		typeof value.cursor !== 'string' ||
+		!isString(value.managerKey) ||
+		!isString(value.scope) ||
+		!isString(value.cursor) ||
 		!isOptionalString(value.sourceMutationId) ||
 		!isOptionalString(value.sourceClientId) ||
 		!Array.isArray(value.changes) ||
@@ -348,19 +352,9 @@ function isSyncResetReason(value: unknown): value is SyncResetReason {
 }
 
 function isCostMetric(value: unknown): value is CostMetric {
-	return (
-		isRecord(value) &&
-		typeof value.name === 'string' &&
-		typeof value.value === 'number' &&
-		Number.isFinite(value.value) &&
-		typeof value.unit === 'string'
-	);
+	return isRecord(value) && isString(value.name) && isFiniteNumber(value.value) && isString(value.unit);
 }
 
-function isOptionalString(value: unknown): boolean {
-	return value === undefined || typeof value === 'string';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
+function isOptionalString(value: unknown): value is string | undefined {
+	return value === undefined || isString(value);
 }

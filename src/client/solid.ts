@@ -1,6 +1,5 @@
 import { createSignal, onCleanup, type Accessor } from 'solid-js';
 
-import { createStore } from './core.ts';
 import type {
 	ClientStore,
 	CollectionMeta,
@@ -18,6 +17,7 @@ import type {
 	SyncError,
 	SyncResult
 } from './core.ts';
+import { createStoreRuntime } from './store.ts';
 
 type WriteOptions = {
 	readonly signal?: AbortSignal;
@@ -63,6 +63,10 @@ export interface SolidStoreListHandle<TManager extends ManagerTypeShape> {
 	pages(): StoreSnapshot<TManager>['pages'];
 	refresh(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
 	loadMore(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
+}
+
+interface SolidAdapterMethods<TValue = unknown> {
+	readonly [key: string]: TValue;
 }
 
 type SolidStoreWithAdd<TManager extends ManagerTypeShape> = 'add' extends keyof TManager['methods']
@@ -141,8 +145,7 @@ export function createSolidStore<TManager extends ManagerTypeShape>(
 		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
 		: [(builder: ReconcileBuilder<TManager>) => ReconcileConfig] | []
 ): SolidClientStore<TManager> {
-	const core = createStore(config, ...reconcile);
-	const coreMethods = core as unknown as Record<string, (...args: readonly unknown[]) => unknown>;
+	const core = createStoreRuntime(config, ...reconcile);
 	const initialSnapshot = core.snapshot();
 	const [snapshotValue, setSnapshotValue] = createSignal(initialSnapshot, { equals: false });
 	const [data, setData] = createSignal(initialSnapshot.data);
@@ -201,7 +204,7 @@ export function createSolidStore<TManager extends ManagerTypeShape>(
 
 	onCleanup(dispose);
 
-	const api: Record<string, unknown> = {
+	const api: SolidAdapterMethods = {
 		core,
 		snapshot,
 		pending,
@@ -215,16 +218,16 @@ export function createSolidStore<TManager extends ManagerTypeShape>(
 		repair: () => core.repair(),
 		dispose,
 		data,
-		list: (query: unknown) => solidListHandle(coreMethods.list?.(query) as StoreListHandle<TManager>),
+		list: <TQuery>(query: TQuery) => solidListHandle(core.list(query)),
 		items,
 		listMeta,
 		pages,
-		get: (args?: unknown) => coreMethods.get?.(args),
-		refresh: () => coreMethods.refresh?.(),
-		loadMore: () => coreMethods.loadMore?.(),
-		add: (args: unknown, options?: WriteOptions) => coreMethods.add?.(args, options),
-		mutate: (args: unknown, options?: WriteOptions) => coreMethods.mutate?.(args, options),
-		delete: (args: unknown, options?: WriteOptions) => coreMethods.delete?.(args, options)
+		get: <TQuery>(args?: { readonly query?: TQuery }) => core.get(args),
+		refresh: () => core.refresh(),
+		loadMore: () => core.loadMore(),
+		add: <TArgs>(args: TArgs, options?: WriteOptions) => core.add(args, options),
+		mutate: <TArgs>(args: TArgs, options?: WriteOptions) => core.mutate(args, options),
+		delete: <TArgs>(args: TArgs, options?: WriteOptions) => core.delete(args, options)
 	};
 
 	return api as SolidClientStore<TManager>;

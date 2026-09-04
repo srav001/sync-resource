@@ -1,6 +1,8 @@
+import { isRecord, type ValueRecord } from '../shared/guards.ts';
 import { isSyncSignal } from '../shared/index.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { normalizeSyncError, syncError, type SyncError } from './errors.js';
+import { withCommitExecution } from './executionState.js';
 import type {
 	AnySchema,
 	Awaitable,
@@ -16,11 +18,16 @@ import type {
 	ResourceSignalOk,
 	ResourceStateOk,
 	ResourceOptions,
+	ResourceTelemetryContext,
 	SyncBatchOutput
 } from './types.js';
 import { parseSchema } from './validator.js';
 
 export type MethodKind = 'get' | 'list' | 'add' | 'mutate' | 'delete';
+
+export function methodKinds(methods: ResourceMethodMap): MethodKind[] {
+	return Object.keys(methods) as MethodKind[];
+}
 
 type NoExtraKeys<TValue, TAllowed> = TValue & Record<Exclude<keyof TValue, keyof TAllowed>, never>;
 
@@ -374,8 +381,15 @@ type RuntimeDefinitionWithBatchHandler =
 
 interface ParsedBatchArgs {
 	readonly params: object;
-	readonly items: readonly Record<string, unknown>[];
+	readonly items: readonly ValueRecord[];
 }
+
+type RuntimeDefinitions = Partial<Record<MethodKind, RuntimeDefinition>>;
+type RuntimeResourceCalls = Partial<Record<MethodKind, RuntimeResourceMethod>>;
+type RuntimeResourceMethod = <TArgs>(
+	args: TArgs,
+	options?: OperationOptions
+) => Promise<SyncResult<ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>>;
 
 const methodBuilder = {
 	get<TParams extends object, TQuery, TOutput>(
@@ -440,73 +454,62 @@ const methodBuilder = {
 
 export function resource<TParamsSchema extends AnySchema<object>, const TMethods extends ResourceMethodMap>(
 	params: TParamsSchema,
-	factory: (
-		method: MethodBuilder<InferSchemaOutput<TParamsSchema>>
-	) => NoExtraKeys<TMethods, Partial<Record<MethodKind, unknown>>>,
+	factory: (method: MethodBuilder<InferSchemaOutput<TParamsSchema>>) => NoExtraKeys<TMethods, ResourceMethodMap>,
 	options?: ResourceOptions
 ): Resource<InferSchemaOutput<TParamsSchema>, TMethods> {
 	const methods = factory(methodBuilder as MethodBuilder<InferSchemaOutput<TParamsSchema>>);
-	const runtimeMethods = methods as Partial<Record<MethodKind, RuntimeDefinition>>;
-	const calls: Partial<Record<MethodKind, unknown>> = {};
+	const runtimeMethods = methods as RuntimeDefinitions;
+	const calls: RuntimeResourceCalls = {};
 
-	if (runtimeMethods.get) {
-		calls.get = (args: unknown, callOptions?: OperationOptions) =>
-			executeSingle(params, runtimeMethods, runtimeMethods.get as RuntimeDefinition, args, callOptions, options);
+	const getDefinition = runtimeMethods.get;
+	if (getDefinition) {
+		calls.get = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
+			executeSingle(params, runtimeMethods, getDefinition, args, callOptions, options);
 	}
 
-	if (runtimeMethods.list) {
-		calls.list = (args: unknown, callOptions?: OperationOptions) =>
-			executeSingle(params, runtimeMethods, runtimeMethods.list as RuntimeDefinition, args, callOptions, options);
+	const listDefinition = runtimeMethods.list;
+	if (listDefinition) {
+		calls.list = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
+			executeSingle(params, runtimeMethods, listDefinition, args, callOptions, options);
 	}
 
-	if (runtimeMethods.add) {
-		calls.add = (args: unknown, callOptions?: OperationOptions) =>
-			executeWrite(params, runtimeMethods, runtimeMethods.add as RuntimeDefinition, args, callOptions, options);
+	const addDefinition = runtimeMethods.add;
+	if (addDefinition) {
+		calls.add = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
+			executeWrite(params, runtimeMethods, addDefinition, args, callOptions, options);
 	}
 
-	if (runtimeMethods.mutate) {
-		calls.mutate = (args: unknown, callOptions?: OperationOptions) =>
-			executeWrite(
-				params,
-				runtimeMethods,
-				runtimeMethods.mutate as RuntimeDefinition,
-				args,
-				callOptions,
-				options
-			);
+	const mutateDefinition = runtimeMethods.mutate;
+	if (mutateDefinition) {
+		calls.mutate = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
+			executeWrite(params, runtimeMethods, mutateDefinition, args, callOptions, options);
 	}
 
-	if (runtimeMethods.delete) {
-		calls.delete = (args: unknown, callOptions?: OperationOptions) =>
-			executeWrite(
-				params,
-				runtimeMethods,
-				runtimeMethods.delete as RuntimeDefinition,
-				args,
-				callOptions,
-				options
-			);
+	const deleteDefinition = runtimeMethods.delete;
+	if (deleteDefinition) {
+		calls.delete = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
+			executeWrite(params, runtimeMethods, deleteDefinition, args, callOptions, options);
 	}
 
 	return {
 		...calls,
 		definition: {
-			params: params as AnySchema<InferSchemaOutput<TParamsSchema>>,
-			methods: methods as TMethods,
+			params,
+			methods,
 			options
 		},
 		type: {
-			params: undefined as unknown as InferSchemaOutput<TParamsSchema>,
-			methods: undefined as unknown as ResourceMethodTypes<TMethods>
+			params: undefined as never,
+			methods: undefined as never
 		}
-	} as unknown as Resource<InferSchemaOutput<TParamsSchema>, TMethods>;
+	} as never;
 }
 
-async function executeWrite(
+async function executeWrite<TArgs>(
 	paramsSchema: AnySchema<object>,
-	methods: Partial<Record<MethodKind, RuntimeDefinition>>,
+	methods: RuntimeDefinitions,
 	definition: RuntimeDefinition,
-	args: unknown,
+	args: TArgs,
 	options: OperationOptions | undefined,
 	resourceOptions: ResourceOptions | undefined
 ): Promise<SyncResult<ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>> {
@@ -571,22 +574,23 @@ async function executeBatch(
 	options: OperationOptions | undefined,
 	resourceOptions: ResourceOptions | undefined
 ): Promise<SyncResult<SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>> {
+	const execution = createExecution(options);
 	const context = {
 		resource: resourceOptions?.name ?? 'resource',
 		method: definition.kind,
-		mutationId: options?.mutationId
+		mutationId: options?.mutationId,
+		signal: execution.exec.signal,
+		environment: execution.exec.environment
 	};
-
-	await callHook(() => resourceOptions?.telemetry?.start?.(context));
-
-	const parsed = parseBatchArgs(paramsSchema, definition, args);
-	if (parsed.isErr()) {
-		await reportResourceError(resourceOptions, context, parsed.error);
-		return parsed;
-	}
-
-	const execution = createExecution(options);
 	try {
+		await callHook(() => resourceOptions?.telemetry?.start?.(context));
+
+		const parsed = parseBatchArgs(paramsSchema, definition, args);
+		if (parsed.isErr()) {
+			await reportResourceError(resourceOptions, context, parsed.error);
+			return parsed;
+		}
+
 		if (execution.exec.signal.aborted) {
 			const abortError = execution.getAbortError();
 			await reportResourceError(resourceOptions, context, abortError);
@@ -610,7 +614,7 @@ async function executeBatch(
 			return outputResult;
 		}
 
-		const committedBatch = await commitBatchSourceIfNeeded(outputResult.value, options);
+		const committedBatch = await commitBatchSourceIfNeeded(outputResult.value, options, execution.exec);
 		if (committedBatch.isErr()) {
 			await reportResourceError(resourceOptions, context, committedBatch.error);
 			return committedBatch;
@@ -628,7 +632,7 @@ async function executeBatch(
 }
 
 function hasBatchHandler(definition: RuntimeDefinition): definition is RuntimeDefinitionWithBatchHandler {
-	return 'batchHandler' in definition && typeof definition.batchHandler === 'function';
+	return 'batchHandler' in definition && definition.batchHandler !== undefined;
 }
 
 function parseBatchArgs(
@@ -636,7 +640,7 @@ function parseBatchArgs(
 	definition: RuntimeDefinitionWithBatchHandler,
 	args: readonly unknown[]
 ): SyncResult<ParsedBatchArgs, SyncError> {
-	const items: Record<string, unknown>[] = [];
+	const items: ValueRecord[] = [];
 	let params: object | undefined;
 	let paramsFingerprint: string | undefined;
 
@@ -678,8 +682,8 @@ function parseBatchArgs(
 
 function parseBatchItem(
 	definition: RuntimeDefinitionWithBatchHandler,
-	args: Record<string, unknown>
-): SyncResult<Record<string, unknown>, SyncError> {
+	args: ValueRecord
+): SyncResult<ValueRecord, SyncError> {
 	switch (definition.kind) {
 		case 'add': {
 			const inputResult = parseSchema(definition.input, args.input, 'input');
@@ -724,10 +728,10 @@ function parseBatchItem(
 	}
 }
 
-function callBatchHandler(
+function callBatchHandler<TParams extends object>(
 	definition: RuntimeDefinitionWithBatchHandler,
-	params: object,
-	items: readonly Record<string, unknown>[],
+	params: TParams,
+	items: readonly ValueRecord[],
 	exec: ResourceExecution
 ): BatchResourceHandlerResult<unknown> {
 	const context = createHandlerContext(exec);
@@ -790,13 +794,14 @@ function validateBatchOutput(
 
 async function commitBatchSourceIfNeeded(
 	value: SyncBatchOutput<ResourceHandlerOk<unknown>>,
-	options: OperationOptions | undefined
+	options: OperationOptions | undefined,
+	execution: ResourceExecution
 ): Promise<SyncResult<SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>> {
 	if (!value.sourceCommit || shouldDeferSourceCommit(options)) {
 		return ok(value);
 	}
 
-	const result = await value.sourceCommit.commit({});
+	const result = await value.sourceCommit.commit(withCommitExecution({}, execution));
 	if (result.isErr()) {
 		return result;
 	}
@@ -808,36 +813,37 @@ async function commitBatchSourceIfNeeded(
 	});
 }
 
-async function executeSingle(
+async function executeSingle<TArgs>(
 	paramsSchema: AnySchema<object>,
 	methods: Partial<Record<MethodKind, RuntimeDefinition>>,
 	definition: RuntimeDefinition,
-	args: unknown,
+	args: TArgs,
 	options: OperationOptions | undefined,
 	resourceOptions: ResourceOptions | undefined
 ): Promise<SyncResult<ResourceHandlerOk<unknown>, SyncError>> {
+	const execution = createExecution(options);
 	const context = {
 		resource: resourceOptions?.name ?? 'resource',
 		method: definition.kind,
-		mutationId: options?.mutationId
+		mutationId: options?.mutationId,
+		signal: execution.exec.signal,
+		environment: execution.exec.environment
 	};
-
-	await callHook(() => resourceOptions?.telemetry?.start?.(context));
-
-	const parsedArgs = parseArgs(args);
-	if (parsedArgs.isErr()) {
-		await reportResourceError(resourceOptions, context, parsedArgs.error);
-		return parsedArgs;
-	}
-
-	const paramsResult = parseSchema(paramsSchema, parsedArgs.value.params, 'params');
-	if (paramsResult.isErr()) {
-		await reportResourceError(resourceOptions, context, paramsResult.error);
-		return paramsResult;
-	}
-
-	const execution = createExecution(options);
 	try {
+		await callHook(() => resourceOptions?.telemetry?.start?.(context));
+
+		const parsedArgs = parseArgs(args);
+		if (parsedArgs.isErr()) {
+			await reportResourceError(resourceOptions, context, parsedArgs.error);
+			return parsedArgs;
+		}
+
+		const paramsResult = parseSchema(paramsSchema, parsedArgs.value.params, 'params');
+		if (paramsResult.isErr()) {
+			await reportResourceError(resourceOptions, context, paramsResult.error);
+			return paramsResult;
+		}
+
 		if (execution.exec.signal.aborted) {
 			const abortError = execution.getAbortError();
 			await reportResourceError(resourceOptions, context, abortError);
@@ -864,7 +870,7 @@ async function executeSingle(
 			return envelopeResult;
 		}
 
-		const committedEnvelope = await commitSourceIfNeeded(envelopeResult.value, options);
+		const committedEnvelope = await commitSourceIfNeeded(envelopeResult.value, options, execution.exec);
 		if (committedEnvelope.isErr()) {
 			await reportResourceError(resourceOptions, context, committedEnvelope.error);
 			return committedEnvelope;
@@ -883,13 +889,14 @@ async function executeSingle(
 
 async function commitSourceIfNeeded(
 	value: ResourceHandlerOk<unknown>,
-	options: OperationOptions | undefined
+	options: OperationOptions | undefined,
+	execution: ResourceExecution
 ): Promise<SyncResult<ResourceHandlerOk<unknown>, SyncError>> {
 	if (!value.sourceCommit || shouldDeferSourceCommit(options)) {
 		return ok(value);
 	}
 
-	const result = await value.sourceCommit.commit({});
+	const result = await value.sourceCommit.commit(withCommitExecution({}, execution));
 	if (result.isErr()) {
 		return result;
 	}
@@ -901,9 +908,8 @@ async function commitSourceIfNeeded(
 	});
 }
 
-function shouldDeferSourceCommit(options: OperationOptions | undefined): boolean {
-	const internalOptions = options as InternalOperationOptions | undefined;
-	return internalOptions?.deferSourceCommit === true;
+function shouldDeferSourceCommit(options: InternalOperationOptions | undefined): boolean {
+	return options?.deferSourceCommit === true;
 }
 
 function mergeMetrics(
@@ -919,16 +925,17 @@ function mergeMetrics(
 	return [...first, ...second];
 }
 
-function normalizeHandlerOutput(
+function normalizeHandlerOutput<TValue>(
 	outputSchema: AnySchema<unknown> | undefined,
-	value: unknown
+	value: TValue
 ): SyncResult<ResourceHandlerOk<unknown>, SyncError> {
 	if (isRecord(value)) {
-		if ('signals' in value) {
-			return normalizeSignalOutput(value);
+		const record = value;
+		if ('signals' in record) {
+			return normalizeSignalOutput(record);
 		}
-		if ('output' in value && hasStateResourceMetadata(value)) {
-			return normalizeStructuredHandlerOutput(outputSchema, value);
+		if ('output' in record && hasStateResourceMetadata(record)) {
+			return normalizeStructuredHandlerOutput(outputSchema, record);
 		}
 	}
 
@@ -952,7 +959,7 @@ function normalizeHandlerOutput(
 
 function normalizeStructuredHandlerOutput(
 	outputSchema: AnySchema<unknown> | undefined,
-	value: ResourceHandlerOk<unknown> | Record<string, unknown>
+	value: ResourceHandlerOk<unknown> | ValueRecord
 ): SyncResult<ResourceHandlerOk<unknown>, SyncError> {
 	if ('signals' in value) {
 		return normalizeSignalOutput(value);
@@ -970,14 +977,15 @@ function normalizeStructuredHandlerOutput(
 		return outputResult;
 	}
 
-	return ok({
+	const normalized: ResourceStateOk<unknown> = {
 		...value,
 		output: outputResult.value
-	} as ResourceStateOk<unknown>);
+	};
+	return ok(normalized);
 }
 
 function normalizeSignalOutput(
-	value: ResourceHandlerOk<unknown> | Record<string, unknown>
+	value: ResourceHandlerOk<unknown> | ValueRecord
 ): SyncResult<ResourceSignalOk, SyncError> {
 	if (
 		'output' in value ||
@@ -998,7 +1006,7 @@ function normalizeSignalOutput(
 	});
 }
 
-function hasStateResourceMetadata(value: Record<string, unknown>): boolean {
+function hasStateResourceMetadata(value: ValueRecord): boolean {
 	return (
 		'changes' in value ||
 		'pageCursor' in value ||
@@ -1008,24 +1016,20 @@ function hasStateResourceMetadata(value: Record<string, unknown>): boolean {
 	);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function parseArgs(args: unknown): SyncResult<Record<string, unknown>, SyncError> {
-	if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+function parseArgs<TArgs>(args: TArgs): SyncResult<ValueRecord, SyncError> {
+	if (!isRecord(args)) {
 		return err('bad_request', 'Sync method args must be an object.');
 	}
 
-	return ok(args as Record<string, unknown>);
+	return ok(args);
 }
 
-async function callHandler(
-	paramsSchema: AnySchema<object>,
-	methods: Partial<Record<MethodKind, RuntimeDefinition>>,
+async function callHandler<TParams extends object>(
+	paramsSchema: AnySchema<TParams>,
+	methods: RuntimeDefinitions,
 	definition: RuntimeDefinition,
-	params: object,
-	args: Record<string, unknown>,
+	params: TParams,
+	args: ValueRecord,
 	exec: ResourceExecution,
 	resourceOptions: ResourceOptions | undefined
 ): Promise<SyncResult<unknown, SyncError>> {
@@ -1109,16 +1113,16 @@ async function callHandler(
 	}
 }
 
-function createResourceSelf(
-	paramsSchema: AnySchema<object>,
-	methods: Partial<Record<MethodKind, RuntimeDefinition>>,
+function createResourceSelf<TParams extends object>(
+	paramsSchema: AnySchema<TParams>,
+	methods: RuntimeDefinitions,
 	currentKind: MethodKind,
-	params: object,
+	params: TParams,
 	exec: ResourceExecution,
 	resourceOptions: ResourceOptions | undefined
-): Partial<Record<MethodKind, unknown>> {
-	const self: Partial<Record<MethodKind, unknown>> = {};
-	for (const kind of Object.keys(methods) as MethodKind[]) {
+): RuntimeResourceCalls {
+	const self: RuntimeResourceCalls = {};
+	for (const kind of methodKinds(methods)) {
 		if (kind === currentKind) {
 			continue;
 		}
@@ -1128,7 +1132,7 @@ function createResourceSelf(
 		}
 		if (isWriteMethodKind(kind)) {
 			if (kind === 'delete' && !methodHasQuery(definition)) {
-				self[kind] = (argsOrOptions?: unknown) =>
+				self[kind] = <TArgs>(argsOrOptions?: TArgs) =>
 					executeWrite(
 						paramsSchema,
 						methods,
@@ -1139,7 +1143,7 @@ function createResourceSelf(
 					);
 				continue;
 			}
-			self[kind] = (args: unknown, options?: OperationOptions) =>
+			self[kind] = <TArgs>(args: TArgs, options?: OperationOptions) =>
 				executeWrite(
 					paramsSchema,
 					methods,
@@ -1150,7 +1154,7 @@ function createResourceSelf(
 				);
 			continue;
 		}
-		self[kind] = (argsOrOptions?: unknown, options?: OperationOptions) => {
+		self[kind] = <TArgs>(argsOrOptions?: TArgs, options?: OperationOptions) => {
 			const hasQuery = methodHasQuery(definition);
 			const args = hasQuery ? argsOrOptions : undefined;
 			const callOptions = hasQuery ? options : (argsOrOptions as OperationOptions | undefined);
@@ -1167,7 +1171,7 @@ function createResourceSelf(
 	return self;
 }
 
-function mergeSelfArgs(params: object, args: unknown): unknown {
+function mergeSelfArgs<TParams extends object, TArgs>(params: TParams, args: TArgs) {
 	if (args === undefined) {
 		return { params };
 	}
@@ -1194,7 +1198,7 @@ function mergeSelfArgs(params: object, args: unknown): unknown {
 function mergeSelfOptions(exec: ResourceExecution, options: OperationOptions | undefined): OperationOptions {
 	return {
 		...options,
-		signal: options?.signal ?? exec.signal,
+		signal: combineAbortSignals(exec.signal, options?.signal),
 		mutationId: options?.mutationId ?? exec.mutationId,
 		meta:
 			exec.meta || options?.meta
@@ -1203,8 +1207,16 @@ function mergeSelfOptions(exec: ResourceExecution, options: OperationOptions | u
 						...options?.meta
 					}
 				: undefined,
-		actor: options?.actor ?? exec.actor
+		actor: options?.actor ?? exec.actor,
+		environment: options?.environment ?? exec.environment
 	};
+}
+
+export function combineAbortSignals(parent: AbortSignal, child: AbortSignal | undefined): AbortSignal {
+	if (!child || child === parent) {
+		return parent;
+	}
+	return AbortSignal.any([parent, child]);
 }
 
 function methodHasQuery(definition: RuntimeDefinition): boolean {
@@ -1252,7 +1264,8 @@ function createExecution(options: OperationOptions | undefined): ExecutionState 
 			deadline: options?.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs,
 			mutationId: options?.mutationId,
 			meta: options?.meta,
-			actor: options?.actor
+			actor: options?.actor,
+			environment: options?.environment
 		},
 		cleanup() {
 			if (timeout) {
@@ -1271,14 +1284,14 @@ function createExecution(options: OperationOptions | undefined): ExecutionState 
 
 async function reportResourceError(
 	options: ResourceOptions | undefined,
-	context: { readonly resource: string; readonly method: string; readonly mutationId?: string },
+	context: ResourceTelemetryContext,
 	errorValue: SyncError
 ): Promise<void> {
 	await callHook(() => options?.telemetry?.error?.(context, errorValue));
 	await callHook(() => options?.handleError?.(errorValue, context));
 }
 
-async function callHook(run: () => unknown): Promise<SyncResult<void, SyncError>> {
+async function callHook<TValue>(run: () => TValue): Promise<SyncResult<void, SyncError>> {
 	try {
 		await run();
 		return ok();

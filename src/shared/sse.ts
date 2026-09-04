@@ -1,3 +1,4 @@
+import { isFiniteNumber, isRecord, isString } from './guards.ts';
 import { isSyncEnvelope, type SyncEnvelope } from './protocol.ts';
 
 const textEncoder = new TextEncoder();
@@ -24,13 +25,29 @@ export interface SyncEnvelopeChunk {
 
 export function parseSyncEnvelopeChunkJson(value: string): SyncEnvelopeChunk | undefined {
 	try {
-		return JSON.parse(value) as SyncEnvelopeChunk;
+		const chunk = JSON.parse(value);
+		return isSyncEnvelopeChunk(chunk) ? chunk : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
-export function encodeSseFrame(eventName: string, payload: unknown): Uint8Array {
+function isSyncEnvelopeChunk<TValue>(value: TValue): value is TValue & SyncEnvelopeChunk {
+	return (
+		isRecord(value) &&
+		value.type === 'sync-chunk' &&
+		isString(value.id) &&
+		isFiniteNumber(value.index) &&
+		Number.isInteger(value.index) &&
+		isFiniteNumber(value.total) &&
+		Number.isInteger(value.total) &&
+		isFiniteNumber(value.totalBytes) &&
+		Number.isInteger(value.totalBytes) &&
+		isString(value.data)
+	);
+}
+
+export function encodeSseFrame<TPayload>(eventName: string, payload: TPayload): Uint8Array {
 	return encodeSseFrameJson(eventName, JSON.stringify(payload));
 }
 
@@ -72,7 +89,7 @@ export function parseSseEvent(eventText: string): ParsedSseEvent {
 
 export function parseSyncEnvelopeJson(value: string): SyncEnvelope | undefined {
 	try {
-		const parsed = JSON.parse(value) as unknown;
+		const parsed = JSON.parse(value);
 		return isSyncEnvelope(parsed) ? parsed : undefined;
 	} catch {
 		return undefined;

@@ -1,3 +1,4 @@
+import { isRecord } from '../shared/guards.ts';
 import { isSyncError, isSyncHttpResult, normalizeSyncError, syncError } from '../shared/index.ts';
 import { err, ok, type SyncResult } from '../shared/result.ts';
 import { stableStringify } from '../shared/stableJson.ts';
@@ -47,6 +48,9 @@ import type {
 type StoreSubscriber<TManager extends ManagerTypeShape> = (snapshot: StoreSnapshot<TManager>) => void;
 type StoreEventCallback<TValue> = (value: TValue) => void;
 type StoreSignalCallback<TPayload = unknown> = (payload: TPayload) => void;
+interface StoreRuntimeMethods<TValue = unknown> {
+	[key: string]: TValue;
+}
 interface ForcedHydrationState {
 	requestedGeneration: number;
 	runningGeneration: number;
@@ -217,6 +221,26 @@ export type ClientStore<TManager extends ManagerTypeShape> = StoreBase<TManager>
 	StoreWithMutate<TManager> &
 	StoreWithDelete<TManager>;
 
+export interface StoreRuntimeApi<TManager extends ManagerTypeShape> extends StoreBase<TManager> {
+	data(): OutputOf<TManager, 'get'> | undefined;
+	list<TQuery>(query: TQuery): StoreListHandle<TManager>;
+	items(): readonly CollectionItem<TManager>[];
+	listMeta(): CollectionMeta<TManager> | undefined;
+	pages(): readonly PageState[];
+	get<TQuery>(args?: { readonly query?: TQuery }): Promise<SyncResult<OutputOf<TManager, 'get'>, SyncError>>;
+	refresh(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
+	loadMore(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
+	add<TArgs>(args: TArgs, options?: StoreWriteOptions): Promise<SyncResult<OutputOf<TManager, 'add'>, SyncError>>;
+	mutate<TArgs>(
+		args: TArgs,
+		options?: StoreWriteOptions
+	): Promise<SyncResult<OutputOf<TManager, 'mutate'>, SyncError>>;
+	delete<TArgs>(
+		argsOrOptions?: TArgs,
+		options?: StoreWriteOptions
+	): Promise<SyncResult<OutputOf<TManager, 'delete'>, SyncError>>;
+}
+
 export type StoreActionMethodName =
 	| 'restore'
 	| 'hydrate'
@@ -248,12 +272,31 @@ export function createStore<TManager extends ManagerTypeShape>(
 	return new ClientStoreCore(config, reconcileConfig).api();
 }
 
+export function createStoreRuntime<TManager extends ManagerTypeShape>(
+	config: StoreConfig<TManager>,
+	...reconcile: NeedsReconcile<TManager> extends true
+		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
+		: [(builder: ReconcileBuilder<TManager>) => ReconcileConfig] | []
+): StoreRuntimeApi<TManager> {
+	const reconcileConfig = reconcile[0]?.({
+		defaults(configValue) {
+			return configValue ?? {};
+		}
+	});
+	return new ClientStoreCore(config, reconcileConfig).api();
+}
+
 class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly config: StoreConfig<TManager>;
 	private readonly runtime: SyncRuntime;
 	private readonly globalCache = getSyncCacheOptions();
 	private readonly reconcile?: ReconcileConfig;
-	private readonly state = createOptimisticState();
+	private readonly state = createOptimisticState<
+		CollectionItem<TManager>,
+		OutputOf<TManager, 'get'>,
+		unknown,
+		CollectionMeta<TManager>
+	>();
 	private readonly pendingCommands = new Map<string, InternalPendingCommand>();
 	private readonly repairScheduler: RepairScheduler = createRepairScheduler();
 	private readonly subscribers = new Set<StoreSubscriber<TManager>>();
@@ -296,13 +339,14 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		this.config = config;
 		this.runtime = getSyncRuntime();
 		this.reconcile = reconcile;
-		this.hasDefaultListQuery = typeof config.query === 'function';
-		this.activeQuery = config.query?.();
+		const defaultQuery = config.query;
+		this.hasDefaultListQuery = defaultQuery !== undefined;
+		this.activeQuery = defaultQuery?.();
 		this.bootstrapCacheRead();
 	}
 
-	api(): ClientStore<TManager> {
-		const api: Record<string, unknown> = {
+	api(): StoreRuntimeApi<TManager> & ClientStore<TManager> {
+		const api: StoreRuntimeMethods = {
 			on: {
 				data: (callback: StoreEventCallback<StoreSnapshot<TManager>['data']>) =>
 					this.subscribeEvent(this.dataSubscribers, callback),
@@ -337,34 +381,35 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			repair: () => this.repair(),
 			subscribe: (callback: StoreSubscriber<TManager>) => this.subscribe(callback),
 			unsubscribe: (callback: StoreSubscriber<TManager>) => this.unsubscribe(callback),
-			dispose: () => this.dispose()
-		};
-
-		api.data = () => this.state.data;
-		api.list = (query: unknown) => this.list(query);
-		api.items = () => this.visibleItems();
-		api.listMeta = () => this.state.listMeta as CollectionMeta<TManager> | undefined;
-		api.pages = () => this.state.pages;
-		api.get = (args?: { readonly query?: unknown }) => this.get(args?.query);
-		api.refresh = () => this.refresh();
-		api.loadMore = () => this.loadMore();
-		api.add = (args: unknown, options?: StoreWriteOptions) => this.write('add', args, options);
-		api.mutate = (args: unknown, options?: StoreWriteOptions) => this.write('mutate', args, options);
-		api.delete = (argsOrOptions?: unknown, options?: StoreWriteOptions) => {
-			if (options === undefined && isStoreWriteOptions(argsOrOptions)) {
-				return this.write('delete', undefined, argsOrOptions);
+			dispose: () => this.dispose(),
+			data: () => this.state.data,
+			list: <TQuery>(query: TQuery) => this.list(query),
+			items: () => this.visibleItems(),
+			listMeta: () => this.state.listMeta,
+			pages: () => this.state.pages,
+			get: <TQuery>(args?: { readonly query?: TQuery }) => this.get(args?.query),
+			refresh: () => this.refresh(),
+			loadMore: () => this.loadMore(),
+			add: <TArgs>(args: TArgs, options?: StoreWriteOptions) =>
+				this.write<OutputOf<TManager, 'add'>, TArgs>('add', args, options),
+			mutate: <TArgs>(args: TArgs, options?: StoreWriteOptions) =>
+				this.write<OutputOf<TManager, 'mutate'>, TArgs>('mutate', args, options),
+			delete: <TArgs>(argsOrOptions?: TArgs, options?: StoreWriteOptions) => {
+				if (options === undefined && isStoreWriteOptions(argsOrOptions)) {
+					return this.write<OutputOf<TManager, 'delete'>, undefined>('delete', undefined, argsOrOptions);
+				}
+				return this.write<OutputOf<TManager, 'delete'>, TArgs | undefined>('delete', argsOrOptions, options);
 			}
-			return this.write('delete', argsOrOptions, options);
 		};
 
-		return api as ClientStore<TManager>;
+		return api as StoreRuntimeApi<TManager> & ClientStore<TManager>;
 	}
 
 	snapshot(): StoreSnapshot<TManager> {
 		return {
-			data: this.state.data as OutputOf<TManager, 'get'> | undefined,
+			data: this.state.data,
 			items: this.visibleItems(),
-			listMeta: this.state.listMeta as CollectionMeta<TManager> | undefined,
+			listMeta: this.state.listMeta,
 			pages: this.state.pages,
 			pending: this.pendingValue(),
 			hydrating: this.hydrating,
@@ -542,7 +587,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		this.clearEventSubscribers();
 	}
 
-	private async get(query?: unknown): Promise<SyncResult<OutputOf<TManager, 'get'>, SyncError>> {
+	private async get<TQuery>(query?: TQuery): Promise<SyncResult<OutputOf<TManager, 'get'>, SyncError>> {
 		return this.singleflightRead<OutputOf<TManager, 'get'>>(
 			`${this.cacheKey()}:get:${stableStringify(query)}`,
 			async () => {
@@ -561,7 +606,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		);
 	}
 
-	private async refresh(query?: unknown): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
+	private async refresh<TQuery>(query?: TQuery): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
 		const nextQuery = query ?? this.config.query?.();
 		this.activeQuery = nextQuery;
 		if (hasQueryFamily(this.state, nextQuery)) {
@@ -571,9 +616,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		return this.requestPage(nextQuery, nextQuery, true);
 	}
 
-	private async requestPage(
-		viewQuery: unknown,
-		requestQuery: unknown,
+	private async requestPage<TViewQuery, TRequestQuery>(
+		viewQuery: TViewQuery,
+		requestQuery: TRequestQuery,
 		activate: boolean
 	): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
 		if (activate) {
@@ -607,7 +652,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		);
 	}
 
-	private async loadMore(query?: unknown): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
+	private async loadMore<TQuery>(query?: TQuery): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
 		const viewQuery = query ?? this.activeQuery ?? this.config.query?.();
 		const activate = query === undefined;
 		if (activate) {
@@ -662,6 +707,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	): Promise<SyncResult<TValue, SyncError>> {
 		const existing = this.inflightReads.get(key);
 		if (existing) {
+			// The key includes the operation and serialized arguments, so a shared promise has the same TValue.
 			return existing as Promise<SyncResult<TValue, SyncError>>;
 		}
 
@@ -672,7 +718,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 					this.inflightReads.delete(key);
 				}
 			});
-		this.inflightReads.set(key, task as Promise<SyncResult<unknown, SyncError>>);
+		this.inflightReads.set(key, task);
 		return task;
 	}
 
@@ -731,11 +777,11 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 	}
 
-	private async write(
+	private async write<TOutput, TArgs>(
 		method: 'add' | 'mutate' | 'delete',
-		args: unknown,
+		args: TArgs,
 		options?: StoreWriteOptions
-	): Promise<SyncResult<unknown, SyncError>> {
+	): Promise<SyncResult<TOutput, SyncError>> {
 		try {
 			if (this.disposed) {
 				return err('disposed', 'Store is disposed.');
@@ -748,7 +794,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			this.applyPendingWrite(method, command);
 			this.emit(...this.writeOptimisticEvents(method));
 
-			const result = await this.request<unknown>(method, 'POST', args, undefined, mutationId, options?.signal);
+			const result = await this.request<TOutput>(method, 'POST', args, undefined, mutationId, options?.signal);
 			if (result.isErr()) {
 				this.pendingCommands.delete(mutationId);
 				return err(await this.rollback(result.error));
@@ -784,26 +830,29 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 	}
 
-	private async request<TValue>(
+	private async request<TValue, TBody = unknown, TQuery = unknown>(
 		method: string,
 		httpMethod: 'GET' | 'POST',
-		body?: unknown,
-		query?: unknown,
+		body?: TBody,
+		query?: TQuery,
 		mutationId?: string,
 		signal?: AbortSignal
 	): Promise<SyncResult<SyncHttpResult<TValue> & { readonly isOk: true }, SyncError>> {
 		const params = this.config.getParams();
 		const url = this.methodUrl(this.config.getUrl(params), method, query);
 		const requestAbort = combineAbortSignals(this.abort.signal, signal);
+		const headers = new Headers({
+			'content-type': 'application/json',
+			'x-client-id': this.runtime.clientId
+		});
+		if (mutationId) {
+			headers.set('x-mutation-id', mutationId);
+		}
 		try {
 			const response = await this.runtime.fetch(url, {
 				method: httpMethod,
 				body: body === undefined ? undefined : JSON.stringify(body),
-				headers: {
-					'content-type': 'application/json',
-					'x-client-id': this.runtime.clientId,
-					...(mutationId ? { 'x-mutation-id': mutationId } : {})
-				},
+				headers,
 				signal: requestAbort.signal
 			});
 			const payload = await response.json();
@@ -824,7 +873,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 	}
 
-	private methodUrl(baseUrl: string, method: string, query?: unknown): string {
+	private methodUrl<TQuery>(baseUrl: string, method: string, query?: TQuery): string {
 		const isAbsolute = /^https?:\/\//.test(baseUrl);
 		const url = new URL(`${baseUrl.replace(/\/$/, '')}/${method}`, 'http://sync.local');
 		if (query !== undefined) {
@@ -1202,9 +1251,11 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			this.visibleItemsCache = undefined;
 			this.listItemsCache.clear();
 		}
-		const snapshot = this.subscribers.size > 0 ? this.snapshot() : undefined;
-		for (const subscriber of this.subscribers) {
-			subscriber(snapshot ?? this.snapshot());
+		if (this.subscribers.size > 0) {
+			const snapshot = this.snapshot();
+			for (const subscriber of this.subscribers) {
+				subscriber(snapshot);
+			}
 		}
 		for (const event of events) {
 			this.emitEvent(event);
@@ -1213,7 +1264,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private emitEvent(event: StoreEventKey): void {
 		if (event === 'data') {
-			this.emitTo(this.dataSubscribers, this.state.data as StoreSnapshot<TManager>['data']);
+			this.emitTo(this.dataSubscribers, this.state.data);
 			return;
 		}
 		if (event === 'items') {
@@ -1221,7 +1272,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			return;
 		}
 		if (event === 'listMeta') {
-			this.emitTo(this.listMetaSubscribers, this.state.listMeta as StoreSnapshot<TManager>['listMeta']);
+			this.emitTo(this.listMetaSubscribers, this.state.listMeta);
 			return;
 		}
 		if (event === 'pages') {
@@ -1310,12 +1361,12 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private visibleItems(): readonly CollectionItem<TManager>[] {
 		if (!this.visibleItemsCache) {
-			this.visibleItemsCache = [...this.state.items.values()] as CollectionItem<TManager>[];
+			this.visibleItemsCache = [...this.state.items.values()];
 		}
 		return this.visibleItemsCache;
 	}
 
-	private list(query: unknown): StoreListHandle<TManager> {
+	private list<TQuery>(query: TQuery): StoreListHandle<TManager> {
 		return {
 			items: () => this.itemsForList(query),
 			meta: () => this.metaForList(query),
@@ -1325,31 +1376,31 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		};
 	}
 
-	private itemsForList(query: unknown): readonly CollectionItem<TManager>[] {
+	private itemsForList<TQuery>(query: TQuery): readonly CollectionItem<TManager>[] {
 		const key = stableStringify(query);
 		const cached = this.listItemsCache.get(key);
 		if (cached) {
 			return cached;
 		}
-		const items = itemsForQueryFamily(
+		const items = itemsForQueryFamily<CollectionItem<TManager>, TQuery>(
 			this.state,
 			query,
 			this.reconcileIdentity(),
 			this.pendingCommands.values()
-		) as CollectionItem<TManager>[];
+		);
 		this.listItemsCache.set(key, items);
 		return items;
 	}
 
-	private metaForList(query: unknown): CollectionMeta<TManager> | undefined {
-		return metaForQueryFamily(this.state, query) as CollectionMeta<TManager> | undefined;
+	private metaForList<TQuery>(query: TQuery): CollectionMeta<TManager> | undefined {
+		return metaForQueryFamily(this.state, query);
 	}
 
-	private pagesForList(query: unknown): readonly PageState[] {
+	private pagesForList<TQuery>(query: TQuery): readonly PageState[] {
 		return pagesForQueryFamily(this.state, query);
 	}
 
-	private async refreshList(query: unknown): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
+	private async refreshList<TQuery>(query: TQuery): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
 		return this.requestPage(query, query, false);
 	}
 
@@ -1375,15 +1426,11 @@ function toStoreSyncError(cause: unknown): SyncError {
 	return syncError('internal', cause instanceof Error ? cause.message : String(cause));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isStoreWriteOptions(value: unknown): value is StoreWriteOptions {
+function isStoreWriteOptions<TValue>(value: TValue): value is TValue & StoreWriteOptions {
 	return isRecord(value) && 'signal' in value && (value.signal === undefined || value.signal instanceof AbortSignal);
 }
 
-function mergeCursor(query: unknown, cursor: string | undefined): unknown {
+function mergeCursor<TQuery>(query: TQuery, cursor: string | undefined) {
 	if (!cursor) {
 		return query;
 	}

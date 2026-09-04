@@ -1,3 +1,4 @@
+import { isFiniteNumber, isRecord, isString } from '../shared/guards.ts';
 import { isSyncEnvelope, isSyncHttpResult, normalizeSyncError } from '../shared/index.ts';
 import { err, ok } from '../shared/result.ts';
 import type { SyncResult } from '../shared/result.ts';
@@ -42,20 +43,6 @@ interface LogicalSubscription {
 	connectAbort?: AbortController;
 }
 
-interface BroadcastPayload {
-	readonly type?: unknown;
-	readonly envelope?: unknown;
-	readonly hydrate?: unknown;
-}
-
-interface LockManagerLike {
-	request<TValue>(name: string, callback: () => Promise<TValue>): Promise<TValue>;
-}
-
-interface NavigatorWithLocks {
-	readonly locks?: LockManagerLike;
-}
-
 interface PendingSyncEnvelopeChunks {
 	readonly chunks: string[];
 	readonly total: number;
@@ -73,8 +60,29 @@ const LOCK_NAME = 'sync-resource:transport';
 const MAX_SSE_BUFFER_BYTES = MAX_SSE_FRAME_BYTES;
 const MAX_PENDING_SYNC_CHUNKS = 32;
 const SSE_PING_PREFIX = 'event: ping\n';
-const sseTextDecoder = new TextDecoder();
 const sseTextEncoder = new TextEncoder();
+type BroadcastPayload =
+	| { readonly type: 'envelope'; readonly envelope: unknown }
+	| { readonly type: 'reconnected'; readonly hydrate?: boolean };
+
+function isBroadcastPayload<TValue>(value: TValue): value is TValue & BroadcastPayload {
+	return (
+		isRecord(value) &&
+		((value.type === 'envelope' && 'envelope' in value) ||
+			(value.type === 'reconnected' &&
+				(value.hydrate === undefined || value.hydrate === true || value.hydrate === false)))
+	);
+}
+
+function isConnectScope<TValue>(value: TValue): value is TValue & { readonly scope?: string } {
+	return isRecord(value) && (value.scope === undefined || isString(value.scope));
+}
+
+function isOwnerRecord<TValue>(
+	value: TValue
+): value is TValue & { readonly ownerId: string; readonly expires: number } {
+	return isRecord(value) && isString(value.ownerId) && isFiniteNumber(value.expires);
+}
 
 // Default runtime transport uses one browser-session stream,
 // plus logical manager/scope subscriptions registered through manager-specific /connect routes.
@@ -320,7 +328,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			if (payload.isError) {
 				return err(normalizeSyncError(payload.error));
 			}
-			if (typeof payload.value?.scope === 'string') {
+			if (isConnectScope(payload.value) && payload.value.scope !== undefined) {
 				// The server owns scope encoding because manager.scope(params) can be narrower than frontend params.
 				entry.scope = payload.value.scope;
 				entry.scopeConfirmed = true;
@@ -387,7 +395,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			this.connectOwnerStream();
 			return;
 		}
-		const locks = (navigator as NavigatorWithLocks).locks;
+		const locks = navigator.locks;
 		if (locks) {
 			locks
 				.request(LOCK_NAME, async () => {
@@ -408,7 +416,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	}
 
 	private openBroadcastChannel(): void {
-		if (!isBrowserRuntime() || typeof BroadcastChannel === 'undefined') {
+		if (!isBrowserRuntime() || !globalThis.BroadcastChannel) {
 			return;
 		}
 		if (this.broadcast) {
@@ -416,7 +424,10 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		}
 		this.broadcast = new BroadcastChannel(BROADCAST_CHANNEL);
 		this.broadcast.onmessage = (message) => {
-			const data = message.data as BroadcastPayload;
+			const data = message.data;
+			if (!isBroadcastPayload(data)) {
+				return;
+			}
 			if (data.type === 'envelope' && isSyncEnvelope(data.envelope)) {
 				this.dispatchEnvelope(data.envelope);
 			}
@@ -489,10 +500,15 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			this.handleReconnect(wasReconnect);
 			this.broadcast?.postMessage({ type: 'reconnected', hydrate: wasReconnect });
 
-			const readResult = await readSseStream(response.body.getReader(), controller.signal, (envelope) => {
-				this.dispatchEnvelope(envelope);
-				this.broadcast?.postMessage({ type: 'envelope', envelope });
-			});
+			const readResult = await readSseStream(
+				response.body.getReader(),
+				controller.signal,
+				(envelope) => {
+					this.dispatchEnvelope(envelope);
+					this.broadcast?.postMessage({ type: 'envelope', envelope });
+				},
+				() => controller.abort()
+			);
 			if (!this.disposed && this.isOwner) {
 				this.scheduleReconnect();
 			}
@@ -586,7 +602,11 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		onEnvelope(this: void, envelope: SyncEnvelope): void;
 	}): Promise<SyncResult<() => void, SyncError>> {
 		const controller = new AbortController();
-		const abort = () => controller.abort();
+		const abort = () => controller.abort(options.signal.reason);
+		if (options.signal.aborted) {
+			abort();
+			return err('aborted', 'Realtime subscription was aborted.');
+		}
 		options.signal.addEventListener('abort', abort, { once: true });
 		try {
 			const response = await this.fetchImpl(urlWithCursor(options.url, options.getCursor?.()), {
@@ -595,25 +615,27 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 				},
 				signal: controller.signal
 			});
+			if (controller.signal.aborted) {
+				options.signal.removeEventListener('abort', abort);
+				return err('aborted', 'Realtime subscription was aborted.');
+			}
 			if (!response.ok || !response.body) {
+				options.signal.removeEventListener('abort', abort);
 				return err('bad_request', `Failed to subscribe: ${response.status}`);
 			}
-			this.readDirectSseStream(response.body.getReader(), controller.signal, options.onEnvelope);
+			readSseStream(response.body.getReader(), controller.signal, options.onEnvelope, () => controller.abort());
 			return ok(() => {
 				options.signal.removeEventListener('abort', abort);
 				controller.abort();
 			});
 		} catch (cause) {
-			return err('internal', cause instanceof Error ? cause.message : String(cause), { cause });
+			options.signal.removeEventListener('abort', abort);
+			return err(
+				controller.signal.aborted ? 'aborted' : 'internal',
+				cause instanceof Error ? cause.message : String(cause),
+				{ cause }
+			);
 		}
-	}
-
-	private async readDirectSseStream(
-		reader: ReadableStreamDefaultReader<Uint8Array>,
-		signal: AbortSignal,
-		onEnvelope: (envelope: SyncEnvelope) => void
-	): Promise<SyncResult<void, SyncError>> {
-		return readSseStream(reader, signal, onEnvelope);
 	}
 }
 
@@ -707,12 +729,12 @@ function getStoredTransportId(createId: (prefix: string) => string): string {
 }
 
 function isBrowserRuntime(): boolean {
-	return typeof window !== 'undefined' && typeof navigator !== 'undefined';
+	return globalThis.window !== undefined && globalThis.navigator !== undefined;
 }
 
 function createRuntimeIdSeed(): string {
 	const cryptoValue = globalThis.crypto;
-	if (cryptoValue && typeof cryptoValue.randomUUID === 'function') {
+	if (cryptoValue?.randomUUID) {
 		// Client and mutation ids are app-internal finality keys; a per-runtime seed avoids cross-session counter collisions.
 		return cryptoValue.randomUUID().replaceAll('-', '');
 	}
@@ -728,8 +750,8 @@ function readOwner(): { readonly ownerId: string; readonly expires: number } | u
 		if (!raw) {
 			return undefined;
 		}
-		const parsed = JSON.parse(raw) as { readonly ownerId?: unknown; readonly expires?: unknown };
-		if (typeof parsed.ownerId !== 'string' || typeof parsed.expires !== 'number') {
+		const parsed = JSON.parse(raw);
+		if (!isOwnerRecord(parsed)) {
 			return undefined;
 		}
 		return {
@@ -744,9 +766,13 @@ function readOwner(): { readonly ownerId: string; readonly expires: number } | u
 async function readSseStream(
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	signal: AbortSignal,
-	onEnvelope: (envelope: SyncEnvelope) => void
+	onEnvelope: (envelope: SyncEnvelope) => void,
+	onTerminalFailure: () => void
 ): Promise<SyncResult<void, SyncError>> {
 	let buffer = '';
+	let bufferBytes = 0;
+	let terminalFailure = false;
+	const textDecoder = new TextDecoder('utf-8', { fatal: true });
 	const pendingSyncChunks = new Map<string, PendingSyncEnvelopeChunks>();
 	const abort = () => {
 		cancelReader(reader);
@@ -758,12 +784,16 @@ async function readSseStream(
 			if (chunk.done) {
 				return ok(undefined);
 			}
-			buffer += sseTextDecoder.decode(chunk.value, { stream: true });
+			bufferBytes += chunk.value.byteLength;
+			buffer += textDecoder.decode(chunk.value, { stream: true });
 			let eventEnd = buffer.indexOf('\n\n');
 			while (eventEnd >= 0) {
 				const eventText = buffer.slice(0, eventEnd);
 				buffer = buffer.slice(eventEnd + 2);
-				if (eventText.length > MAX_SSE_BUFFER_BYTES) {
+				const frameBytes = sseTextEncoder.encode(eventText).byteLength + 2;
+				bufferBytes = Math.max(0, bufferBytes - frameBytes);
+				if (frameBytes > MAX_SSE_BUFFER_BYTES) {
+					terminalFailure = true;
 					return err('payload_too_large', 'Sync SSE frame exceeded max size.');
 				}
 				const envelope = parseSseEnvelope(eventText, pendingSyncChunks);
@@ -772,13 +802,15 @@ async function readSseStream(
 				}
 				eventEnd = buffer.indexOf('\n\n');
 			}
-			if (buffer.length > MAX_SSE_BUFFER_BYTES) {
+			if (bufferBytes > MAX_SSE_BUFFER_BYTES) {
 				// Bound malformed or stalled streams so a broken SSE response cannot grow memory without limit.
+				terminalFailure = true;
 				return err('payload_too_large', 'Sync SSE buffer exceeded max size.');
 			}
 		}
 		return ok(undefined);
 	} catch (cause) {
+		terminalFailure = !signal.aborted;
 		return err(signal.aborted ? 'aborted' : 'internal', cause instanceof Error ? cause.message : String(cause), {
 			cause
 		});
@@ -787,6 +819,9 @@ async function readSseStream(
 		try {
 			reader.releaseLock();
 		} catch {}
+		if (terminalFailure) {
+			onTerminalFailure();
+		}
 	}
 }
 
@@ -880,7 +915,7 @@ function acceptSyncEnvelopeChunk(
 
 function pruneOldestPendingSyncChunk(pendingSyncChunks: Map<string, PendingSyncEnvelopeChunks>): void {
 	const first = pendingSyncChunks.keys().next();
-	if (typeof first.value === 'string') {
+	if (!first.done) {
 		pendingSyncChunks.delete(first.value);
 	}
 }

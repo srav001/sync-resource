@@ -1,11 +1,15 @@
 import { isSyncEnvelope } from '../shared/index.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { normalizeSyncError, syncError, type SyncError } from './errors.js';
-import type { Awaitable, ManagerRealtimeBus, SyncEnvelope } from './types.js';
+import type { Awaitable, ManagerRealtimeBus, OperationExecution, SyncEnvelope } from './types.js';
 
 export interface ManagerRealtimePubSubTransport {
 	publish(channel: string, payload: string): Awaitable<void>;
-	subscribe(channel: string, onPayload: (payload: string) => Awaitable<void>): Awaitable<() => Awaitable<void>>;
+	subscribe(
+		channel: string,
+		onPayload: (payload: string) => Awaitable<void>,
+		execution?: OperationExecution
+	): Awaitable<() => Awaitable<void>>;
 }
 
 export interface ManagerRealtimeBusErrorContext {
@@ -43,38 +47,42 @@ export function createPubSubManagerRealtimeBus(options: PubSubManagerRealtimeBus
 			}
 		},
 
-		async subscribe(scope, onEnvelope) {
+		async subscribe(scope, onEnvelope, execution) {
 			const channel = buildRealtimeChannel(channelPrefix, scope);
 			try {
-				const unsubscribe = await options.transport.subscribe(channel, async (payload) => {
-					const envelope = parseInboundEnvelope(payload, deserialize);
-					if (envelope.isErr()) {
-						await reportRealtimeBusError(options, envelope.error, {
-							phase: 'receive',
-							channel,
-							scope
-						});
-						return;
-					}
-					if (envelope.value.scope !== scope) {
-						await reportRealtimeBusError(
-							options,
-							syncError('validation', 'Realtime bus envelope scope did not match subscription.', {
-								details: {
-									expectedScope: scope,
-									actualScope: envelope.value.scope
-								}
-							}),
-							{
+				const unsubscribe = await options.transport.subscribe(
+					channel,
+					async (payload) => {
+						const envelope = parseInboundEnvelope(payload, deserialize);
+						if (envelope.isErr()) {
+							await reportRealtimeBusError(options, envelope.error, {
 								phase: 'receive',
 								channel,
 								scope
-							}
-						);
-						return;
-					}
-					onEnvelope(envelope.value);
-				});
+							});
+							return;
+						}
+						if (envelope.value.scope !== scope) {
+							await reportRealtimeBusError(
+								options,
+								syncError('validation', 'Realtime bus envelope scope did not match subscription.', {
+									details: {
+										expectedScope: scope,
+										actualScope: envelope.value.scope
+									}
+								}),
+								{
+									phase: 'receive',
+									channel,
+									scope
+								}
+							);
+							return;
+						}
+						onEnvelope(envelope.value);
+					},
+					execution
+				);
 
 				return async () => {
 					try {
@@ -110,7 +118,7 @@ function defaultSerializeEnvelope(envelope: SyncEnvelope): string {
 }
 
 function defaultDeserializeEnvelope(payload: string): SyncEnvelope {
-	return JSON.parse(payload) as SyncEnvelope;
+	return JSON.parse(payload);
 }
 
 function parseInboundEnvelope(

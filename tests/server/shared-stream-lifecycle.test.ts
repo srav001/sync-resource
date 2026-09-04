@@ -4,9 +4,9 @@ import {
 	httpSharedSyncStream,
 	registerSharedStreamManager,
 	registerSharedStreamSubscription,
-	resetSharedStreamForTests,
 	type ManagerSyncPersistence
 } from '../../src/server/index.ts';
+import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 
 const FIVE_MINUTES_MS = 5 * 60_000;
@@ -85,6 +85,78 @@ describe('shared stream lifecycle', () => {
 		await secondReader.cancel();
 		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
 		expect(idleScopes).toEqual(['notes:workspace-1']);
+	});
+
+	it('routes idle cleanup only to the manager that owns the encoded scope', async () => {
+		vi.useFakeTimers();
+		const notesIdle: string[] = [];
+		const tasksIdle: string[] = [];
+		registerSharedStreamManager({ key: 'notes', onScopeIdle: (scope) => notesIdle.push(scope) });
+		registerSharedStreamManager({ key: 'tasks', onScopeIdle: (scope) => tasksIdle.push(scope) });
+		await registerSubscription('transport-owned', 'notes:workspace-1');
+		const response = await httpSharedSyncStream(streamRequest('transport-owned'));
+		const reader = response.body!.getReader();
+		await reader.read();
+		await reader.cancel();
+
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(notesIdle).toEqual(['notes:workspace-1']);
+		expect(tasksIdle).toEqual([]);
+	});
+
+	it('cancels pending replay with the physical stream and treats disconnect as normal termination', async () => {
+		let replayStarted!: () => void;
+		const didStartReplay = new Promise<void>((resolve) => {
+			replayStarted = resolve;
+		});
+		let replayFinalized = false;
+		const errors: string[] = [];
+		const replayPersistence: ManagerSyncPersistence = {
+			...persistence,
+			readAfter(_scope, _cursor, _limit, execution) {
+				return new Promise((resolve) => {
+					replayStarted();
+					execution?.signal.addEventListener(
+						'abort',
+						() => {
+							replayFinalized = true;
+							resolve({ cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 });
+						},
+						{ once: true }
+					);
+				});
+			}
+		};
+		registerSharedStreamManager({
+			key: 'notes',
+			handleError(error) {
+				errors.push(error.message);
+			}
+		});
+		const registered = await registerSharedStreamSubscription({
+			request: new Request('http://sync.test/connect', {
+				method: 'POST',
+				headers: { 'x-sync-transport-id': 'transport-replay-cancel' }
+			}),
+			managerKey: 'notes',
+			scope: 'notes:workspace-1',
+			afterCursor: 'cursor-before',
+			replayLimit: 100,
+			persistence: replayPersistence,
+			nextCursor: () => 'cursor-reset'
+		});
+		expect(registered.isOk()).toBe(true);
+		const response = await httpSharedSyncStream(streamRequest('transport-replay-cancel'));
+		const reader = response.body!.getReader();
+		await reader.read();
+		await didStartReplay;
+		await reader.cancel();
+		for (let index = 0; index < 10 && !replayFinalized; index += 1) {
+			await Promise.resolve();
+		}
+
+		expect(replayFinalized).toBe(true);
+		expect(errors).toEqual([]);
 	});
 });
 

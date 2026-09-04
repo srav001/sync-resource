@@ -14,7 +14,7 @@ import {
 import { createReactStore } from '../src/client/react.ts';
 import { createSolidStore } from '../src/client/solid.ts';
 import { createVueStore } from '../src/client/vue.ts';
-import { resetSharedStreamForTests } from '../src/server/index.ts';
+import { resetSharedStreamForTests } from '../src/server/streamMultiplexer.ts';
 import { createSyncTestSystem, type Note } from './fixtures/syncSystem.ts';
 
 vi.mock('solid-js', async () => import(['solid-js/dist', 'solid.js'].join('/')));

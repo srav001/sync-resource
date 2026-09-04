@@ -1,3 +1,4 @@
+import { isUnrefableTimer } from '../shared/guards.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { encodeSseFrame, encodeSyncEnvelopeSseFrames, MAX_SSE_FRAME_BYTES } from '../shared/sse.ts';
 import { normalizeSyncError, syncError, toSyncProtocolError, type SyncError } from './errors.js';
@@ -33,13 +34,14 @@ interface RegisteredManager {
 }
 
 interface IdleHeapEntry {
+	readonly managerKey: string;
 	readonly scope: string;
 	readonly expiry: number;
 	readonly epoch: number;
 }
 
 interface StreamState {
-	readonly transportId: string;
+	readonly signal: AbortSignal;
 	readonly sentCursors: Set<string>;
 	readonly sentCursorOrder: string[];
 	sentCursorStart: number;
@@ -199,6 +201,8 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 	let streamState: StreamState | undefined;
 	let closed = false;
 	let ipCounted = false;
+	const streamController = new AbortController();
+	const streamSignal = AbortSignal.any([request.signal, streamController.signal]);
 
 	const transportId = getTransportId(request);
 	if (!transportId) {
@@ -237,6 +241,8 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 						return;
 					}
 					closed = true;
+					streamController.abort();
+					request.signal.removeEventListener('abort', close);
 					if (heartbeat) {
 						clearInterval(heartbeat);
 						heartbeat = undefined;
@@ -282,7 +288,7 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 				}
 
 				streamState = {
-					transportId: resolvedTransportId,
+					signal: streamSignal,
 					sentCursors: new Set(),
 					sentCursorOrder: [],
 					sentCursorStart: 0,
@@ -321,11 +327,12 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 				unrefTimer(heartbeat);
 
 				request.signal.addEventListener('abort', close, { once: true });
-
-				const activeStream = streamState;
-				if (!activeStream) {
+				if (request.signal.aborted) {
+					close();
 					return;
 				}
+
+				const activeStream = streamState;
 				for (const scope of scopesByTransportId.get(resolvedTransportId) ?? []) {
 					const detail = subscriptionDetails.get(subscriptionKey(resolvedTransportId, scope));
 					if (detail) {
@@ -363,8 +370,8 @@ export function getRegisteredSharedStreamManagerKeys(): readonly string[] {
 	return cachedManagerKeys;
 }
 
+/** @internal Test isolation for the maintained source-level Vitest suite. */
 export function resetSharedStreamForTests(): void {
-	// Temporary harnesses run many isolated managers in one Node process; reset keeps stream timers/maps from crossing tests.
 	for (const stream of streamsByTransportId.values()) {
 		stream.close();
 	}
@@ -406,14 +413,16 @@ function sendFrames(stream: StreamState, frames: readonly Uint8Array[] | undefin
 }
 
 async function replaySubscription(stream: StreamState, detail: SubscriptionDetail): Promise<void> {
-	if (!detail.afterCursor) {
+	if (!detail.afterCursor || stream.signal.aborted) {
 		return;
 	}
 
 	stream.replayingScopes.add(detail.scope);
 	let replaySucceeded = false;
 	try {
-		const replay = await detail.persistence.readAfter(detail.scope, detail.afterCursor, detail.replayLimit);
+		const replay = await detail.persistence.readAfter(detail.scope, detail.afterCursor, detail.replayLimit, {
+			signal: stream.signal
+		});
 		if (!replay.cursorFound && replay.retainedEnvelopeCount > 0) {
 			stream.sendEnvelope(
 				buildResetEnvelope(detail.managerKey, detail.scope, detail.afterCursor, detail.nextCursor())
@@ -439,6 +448,9 @@ function scheduleReplaySubscription(stream: StreamState, detail: SubscriptionDet
 }
 
 async function handleReplayFailure(stream: StreamState, detail: SubscriptionDetail, cause: unknown): Promise<void> {
+	if (stream.signal.aborted) {
+		return;
+	}
 	const errorValue = normalizeSyncError(cause);
 	await reportSharedStreamError(detail, errorValue);
 	stream.replayingScopes.delete(detail.scope);
@@ -597,7 +609,9 @@ function removeTransportSubscriptions(transportId: string): void {
 	}
 	scopesByTransportId.delete(transportId);
 	for (const scope of scopes) {
-		subscriptionDetails.delete(subscriptionKey(transportId, scope));
+		const detailKey = subscriptionKey(transportId, scope);
+		const detail = subscriptionDetails.get(detailKey);
+		subscriptionDetails.delete(detailKey);
 		const transportIds = transportIdsByScope.get(scope);
 		transportIds?.delete(transportId);
 		if (transportIds && transportIds.size > 0) {
@@ -605,7 +619,9 @@ function removeTransportSubscriptions(transportId: string): void {
 		}
 		transportIdsByScope.delete(scope);
 		// Scope cleanup is delayed through a heap timer so busy apps do not pay per-scope polling cost.
-		markIdle(scope);
+		if (detail) {
+			markIdle(detail.managerKey, scope);
+		}
 	}
 }
 
@@ -634,9 +650,9 @@ function scheduleTransportSweep(): void {
 	unrefTimer(transportSweepTimer);
 }
 
-function markIdle(scope: string): void {
+function markIdle(managerKey: string, scope: string): void {
 	if (config.idleTtlMs <= 0) {
-		notifyScopeIdle(scope);
+		notifyScopeIdle(managerKey, scope);
 		return;
 	}
 
@@ -644,7 +660,7 @@ function markIdle(scope: string): void {
 	const epoch = (idleEpochByScope.get(scope) ?? 0) + 1;
 	idleEpochByScope.set(scope, epoch);
 	idleExpiryByScope.set(scope, expiry);
-	pushIdleEntry({ scope, expiry, epoch });
+	pushIdleEntry({ managerKey, scope, expiry, epoch });
 	scheduleIdleSweep();
 }
 
@@ -653,12 +669,10 @@ function clearIdle(scope: string): void {
 	idleEpochByScope.delete(scope);
 }
 
-function notifyScopeIdle(scope: string): void {
+function notifyScopeIdle(managerKey: string, scope: string): void {
 	idleExpiryByScope.delete(scope);
 	idleEpochByScope.delete(scope);
-	for (const manager of registeredManagers.values()) {
-		manager.onScopeIdle?.(scope);
-	}
+	registeredManagers.get(managerKey)?.onScopeIdle?.(scope);
 }
 
 async function reportSharedStreamError(
@@ -705,7 +719,7 @@ function scheduleIdleSweep(): void {
 					clearIdle(entry.scope);
 					continue;
 				}
-				notifyScopeIdle(entry.scope);
+				notifyScopeIdle(entry.managerKey, entry.scope);
 			}
 			scheduleIdleSweep();
 		},
@@ -723,8 +737,9 @@ function clearTransportSweepTimerIfIdle(): void {
 }
 
 function unrefTimer(timer: ReturnType<typeof setTimeout> | undefined): void {
-	const maybeTimer = timer as { unref?(): void } | undefined;
-	maybeTimer?.unref?.();
+	if (timer && isUnrefableTimer(timer)) {
+		timer.unref();
+	}
 }
 
 function pushIdleEntry(entry: IdleHeapEntry): void {
@@ -732,10 +747,11 @@ function pushIdleEntry(entry: IdleHeapEntry): void {
 	let current = idleExpiryHeap.length - 1;
 	while (current > 0) {
 		const parent = Math.floor((current - 1) / 2);
-		if ((idleExpiryHeap[parent] as IdleHeapEntry).expiry <= entry.expiry) {
+		const parentEntry = idleExpiryHeap[parent];
+		if (parentEntry === undefined || parentEntry.expiry <= entry.expiry) {
 			return;
 		}
-		idleExpiryHeap[current] = idleExpiryHeap[parent] as IdleHeapEntry;
+		idleExpiryHeap[current] = parentEntry;
 		current = parent;
 	}
 	idleExpiryHeap[current] = entry;
@@ -746,29 +762,34 @@ function popIdleEntry(): IdleHeapEntry | undefined {
 		return undefined;
 	}
 	const first = idleExpiryHeap[0];
+	if (first === undefined) {
+		return undefined;
+	}
 	const last = idleExpiryHeap.pop();
-	if (last && idleExpiryHeap.length > 0) {
+	if (last !== undefined && idleExpiryHeap.length > 0) {
 		let current = 0;
 		while (true) {
 			const left = current * 2 + 1;
 			const right = left + 1;
 			let next = current;
-			if (
-				left < idleExpiryHeap.length &&
-				(idleExpiryHeap[left] as IdleHeapEntry).expiry < (idleExpiryHeap[next] as IdleHeapEntry).expiry
-			) {
+			const currentEntry = idleExpiryHeap[next];
+			const leftEntry = idleExpiryHeap[left];
+			if (currentEntry !== undefined && leftEntry !== undefined && leftEntry.expiry < currentEntry.expiry) {
 				next = left;
 			}
-			if (
-				right < idleExpiryHeap.length &&
-				(idleExpiryHeap[right] as IdleHeapEntry).expiry < (idleExpiryHeap[next] as IdleHeapEntry).expiry
-			) {
+			const nextEntry = idleExpiryHeap[next];
+			const rightEntry = idleExpiryHeap[right];
+			if (nextEntry !== undefined && rightEntry !== undefined && rightEntry.expiry < nextEntry.expiry) {
 				next = right;
 			}
 			if (next === current) {
 				break;
 			}
-			idleExpiryHeap[current] = idleExpiryHeap[next] as IdleHeapEntry;
+			const selectedEntry = idleExpiryHeap[next];
+			if (selectedEntry === undefined) {
+				break;
+			}
+			idleExpiryHeap[current] = selectedEntry;
 			current = next;
 		}
 		idleExpiryHeap[current] = last;
@@ -778,7 +799,10 @@ function popIdleEntry(): IdleHeapEntry | undefined {
 
 function peekActiveIdleEntry(): IdleHeapEntry | undefined {
 	while (idleExpiryHeap.length > 0) {
-		const entry = idleExpiryHeap[0] as IdleHeapEntry;
+		const entry = idleExpiryHeap[0];
+		if (entry === undefined) {
+			return undefined;
+		}
 		if (idleExpiryByScope.get(entry.scope) === entry.expiry && idleEpochByScope.get(entry.scope) === entry.epoch) {
 			return entry;
 		}
@@ -787,7 +811,7 @@ function peekActiveIdleEntry(): IdleHeapEntry | undefined {
 	return undefined;
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse<TBody>(body: TBody, status = 200): Response {
 	return new Response(JSON.stringify(body), {
 		status,
 		headers: JSON_HEADERS

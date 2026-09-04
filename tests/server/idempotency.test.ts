@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
-import { manager, resetSharedStreamForTests, resource } from '../../src/server/index.ts';
+import {
+	manager,
+	resource,
+	type ManagerMutationRecord,
+	type ManagerOutboxRead,
+	type ManagerSyncPersistence,
+	type OperationExecution,
+	type SyncEnvelope
+} from '../../src/server/index.ts';
+import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { createSyncTestSystem } from '../fixtures/syncSystem.ts';
 
 afterEach(() => {
@@ -44,6 +53,96 @@ describe('manager mutation idempotency', () => {
 		const results = await Promise.all([first, second]);
 		expect(results.every((result) => result.isOk())).toBe(true);
 		expect(system.database.operations.filter((operation) => operation.startsWith('add:'))).toHaveLength(1);
+	});
+
+	it('lets a duplicate caller cancel its own wait without cancelling the execution owner', async () => {
+		const system = createSyncTestSystem();
+		const gate = system.database.pauseNextCommit();
+		const bound = system.manager.bind({ workspaceId: 'workspace-1' });
+		const args = { input: { id: 'n1', title: 'one' } };
+		let ownerSettled = false;
+		const owner = bound.add(args, { mutationId: 'same' }).then((result) => {
+			ownerSettled = true;
+			return result;
+		});
+		for (let index = 0; index < 10; index += 1) {
+			await Promise.resolve();
+		}
+
+		const abort = new AbortController();
+		abort.abort();
+		const duplicate = await bound.add(args, { mutationId: 'same', signal: abort.signal });
+		expect(duplicate.isErr() && duplicate.error.code).toBe('aborted');
+		expect(ownerSettled).toBe(false);
+
+		gate.resolve();
+		expect((await owner).isOk()).toBe(true);
+		expect(system.database.operations).toEqual(['add:workspace-1:n1']);
+	});
+
+	it('awaits asynchronous persistence and propagates operation execution state', async () => {
+		const paramsSchema = {
+			parse(value: unknown): { workspaceId: string } {
+				return value as { workspaceId: string };
+			}
+		};
+		const noteSchema = {
+			parse(value: unknown): { id: string } {
+				return value as { id: string };
+			}
+		};
+		const records: ManagerMutationRecord[] = [];
+		const executions: OperationExecution[] = [];
+		const persistence: ManagerSyncPersistence = {
+			async append(_envelope: SyncEnvelope, execution?: OperationExecution) {
+				await Promise.resolve();
+				if (execution) {
+					executions.push(execution);
+				}
+			},
+			async readAfter(): Promise<ManagerOutboxRead> {
+				return { cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 };
+			},
+			async readMutation(_scope, _mutationId, execution) {
+				await Promise.resolve();
+				if (execution) {
+					executions.push(execution);
+				}
+				return undefined;
+			},
+			async recordMutation(record, execution) {
+				await Promise.resolve();
+				records.push(record);
+				if (execution) {
+					executions.push(execution);
+				}
+			}
+		};
+		const repository = resource(paramsSchema, (method) => ({
+			add: method.add({
+				input: noteSchema,
+				output: noteSchema,
+				handler({ input, ctx }) {
+					return ctx.ok({ id: input.id });
+				}
+			})
+		}));
+		const notes = manager({
+			key: 'async-persistence',
+			resource: repository,
+			authorize: () => true,
+			scope: (params) => params.workspaceId,
+			persistence
+		});
+		const signal = new AbortController().signal;
+		const result = await notes
+			.bind({ workspaceId: 'w1' })
+			.add({ input: { id: 'n1' } }, { mutationId: 'm1', signal });
+
+		expect(result.isOk()).toBe(true);
+		expect(records).toHaveLength(1);
+		expect(executions.length).toBeGreaterThanOrEqual(2);
+		expect(executions.every((execution) => execution.signal === signal)).toBe(true);
 	});
 
 	it('re-executes a mutation only after the default memory idempotency window expires', async () => {

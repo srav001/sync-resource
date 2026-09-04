@@ -1,6 +1,6 @@
 import { computed, getCurrentScope, onScopeDispose, shallowRef, type ComputedRef, type ShallowRef } from 'vue';
 
-import { bindStoreEvents, createStore } from './core.ts';
+import { bindStoreEvents } from './adapter.ts';
 import type {
 	ClientStore,
 	CollectionMeta,
@@ -16,6 +16,7 @@ import type {
 	StoreListHandle,
 	StoreSnapshot
 } from './core.ts';
+import { createStoreRuntime } from './store.ts';
 
 type VueStoreWithGet<TManager extends ManagerTypeShape> = 'get' extends keyof TManager['methods']
 	? {
@@ -47,6 +48,10 @@ export interface VueStoreListHandle<TManager extends ManagerTypeShape> {
 	loadMore(): ReturnType<StoreListHandle<TManager>['loadMore']>;
 }
 
+interface VueAdapterMethods<TValue = unknown> {
+	readonly [key: string]: TValue;
+}
+
 export type VueClientStore<TManager extends ManagerTypeShape> = {
 	readonly core: ClientStore<TManager>;
 	readonly snapshot: ComputedRef<StoreSnapshot<TManager>>;
@@ -67,8 +72,7 @@ export function createVueStore<TManager extends ManagerTypeShape>(
 		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
 		: [(builder: ReconcileBuilder<TManager>) => ReconcileConfig] | []
 ): VueClientStore<TManager> {
-	const core = createStore(config, ...reconcile);
-	const coreMethods = core as unknown as Record<string, (...args: readonly unknown[]) => unknown>;
+	const core = createStoreRuntime(config, ...reconcile);
 	const initialSnapshot = core.snapshot();
 	const data = shallowRef<StoreSnapshot<TManager>['data']>(initialSnapshot.data);
 	const items = shallowRef<StoreSnapshot<TManager>['items']>(initialSnapshot.items);
@@ -149,7 +153,7 @@ export function createVueStore<TManager extends ManagerTypeShape>(
 		onScopeDispose(dispose);
 	}
 
-	const api: Record<string, unknown> = {
+	const api: VueAdapterMethods = {
 		core,
 		snapshot,
 		pending,
@@ -164,16 +168,16 @@ export function createVueStore<TManager extends ManagerTypeShape>(
 		connect: () => core.connect(),
 		repair: () => core.repair(),
 		data,
-		list: (query: unknown) => vueListHandle(coreMethods.list?.(query) as StoreListHandle<TManager>),
+		list: <TQuery>(query: TQuery) => vueListHandle(core.list(query)),
 		items,
 		listMeta,
 		pages,
-		get: (args?: unknown) => coreMethods.get?.(args),
-		refresh: () => coreMethods.refresh?.(),
-		loadMore: () => coreMethods.loadMore?.(),
-		add: (args: unknown, options?: unknown) => coreMethods.add?.(args, options),
-		mutate: (args: unknown, options?: unknown) => coreMethods.mutate?.(args, options),
-		delete: (args: unknown, options?: unknown) => coreMethods.delete?.(args, options)
+		get: <TQuery>(args?: { readonly query?: TQuery }) => core.get(args),
+		refresh: () => core.refresh(),
+		loadMore: () => core.loadMore(),
+		add: <TArgs>(args: TArgs, options?: { readonly signal?: AbortSignal }) => core.add(args, options),
+		mutate: <TArgs>(args: TArgs, options?: { readonly signal?: AbortSignal }) => core.mutate(args, options),
+		delete: <TArgs>(args: TArgs, options?: { readonly signal?: AbortSignal }) => core.delete(args, options)
 	};
 
 	return api as VueClientStore<TManager>;

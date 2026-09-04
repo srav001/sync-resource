@@ -79,8 +79,7 @@ export {
 	httpSharedSyncStream,
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
-	registerSharedStreamSubscription,
-	resetSharedStreamForTests
+	registerSharedStreamSubscription
 } from './streamMultiplexer.js';
 export { normalizeValidator, parseSchema } from './validator.js';
 export type {
@@ -107,6 +106,7 @@ export type {
 	ManagerType,
 	MethodType,
 	OperationMeta,
+	OperationExecution,
 	OperationOptions,
 	PageLoadedChange,
 	ResetChange,

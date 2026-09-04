@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from 'react';
 
-import { createStore } from './core.ts';
 import type {
 	ClientStore,
 	CollectionMeta,
@@ -16,6 +15,7 @@ import type {
 	StoreSnapshot
 } from './core.ts';
 import { createExternalStoreSource, type ExternalStoreSource } from './reactSource.ts';
+import { createStoreRuntime } from './store.ts';
 
 type ReactStoreWithGet<TManager extends ManagerTypeShape> = 'get' extends keyof TManager['methods']
 	? {
@@ -47,6 +47,10 @@ export interface ReactStoreListSnapshot<TManager extends ManagerTypeShape> {
 	loadMore(): ReturnType<StoreListHandle<TManager>['loadMore']>;
 }
 
+interface ReactAdapterMethods<TValue = unknown> {
+	readonly [key: string]: TValue;
+}
+
 export type ReactClientStore<TManager extends ManagerTypeShape> = {
 	readonly core: ClientStore<TManager>;
 	useSnapshot(): StoreSnapshot<TManager>;
@@ -67,8 +71,7 @@ export function createReactStore<TManager extends ManagerTypeShape>(
 		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
 		: [(builder: ReconcileBuilder<TManager>) => ReconcileConfig] | []
 ): ReactClientStore<TManager> {
-	const core = createStore(config, ...reconcile);
-	const coreMethods = core as unknown as Record<string, (...args: readonly unknown[]) => unknown>;
+	const core = createStoreRuntime(config, ...reconcile);
 	const snapshotSource = createExternalStoreSource(
 		() => core.snapshot(),
 		(callback) => core.subscribe(callback)
@@ -114,11 +117,11 @@ export function createReactStore<TManager extends ManagerTypeShape>(
 		return useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot);
 	}
 
-	function useList(query?: unknown): ReactStoreListSnapshot<TManager> {
+	function useList<TQuery>(query?: TQuery): ReactStoreListSnapshot<TManager> {
 		useSource(itemsSource);
 		useSource(listMetaSource);
 		useSource(pagesSource);
-		const handle = coreMethods.list?.(query) as StoreListHandle<TManager>;
+		const handle = core.list(query);
 		return {
 			items: handle.items(),
 			meta: handle.meta(),
@@ -128,7 +131,7 @@ export function createReactStore<TManager extends ManagerTypeShape>(
 		};
 	}
 
-	const api: Record<string, unknown> = {
+	const api: ReactAdapterMethods = {
 		core,
 		useSnapshot: () => useSource(snapshotSource),
 		usePending: () => useSource(pendingSource),
@@ -147,12 +150,12 @@ export function createReactStore<TManager extends ManagerTypeShape>(
 		useListMeta: () => useSource(listMetaSource),
 		usePages: () => useSource(pagesSource),
 		useList,
-		get: (args?: unknown) => coreMethods.get?.(args),
-		refresh: () => coreMethods.refresh?.(),
-		loadMore: () => coreMethods.loadMore?.(),
-		add: (args: unknown, options?: unknown) => coreMethods.add?.(args, options),
-		mutate: (args: unknown, options?: unknown) => coreMethods.mutate?.(args, options),
-		delete: (args: unknown, options?: unknown) => coreMethods.delete?.(args, options)
+		get: <TQuery>(args?: { readonly query?: TQuery }) => core.get(args),
+		refresh: () => core.refresh(),
+		loadMore: () => core.loadMore(),
+		add: <TArgs>(args: TArgs, options?: { readonly signal?: AbortSignal }) => core.add(args, options),
+		mutate: <TArgs>(args: TArgs, options?: { readonly signal?: AbortSignal }) => core.mutate(args, options),
+		delete: <TArgs>(args: TArgs, options?: { readonly signal?: AbortSignal }) => core.delete(args, options)
 	};
 
 	return api as ReactClientStore<TManager>;

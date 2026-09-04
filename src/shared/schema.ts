@@ -1,5 +1,5 @@
 export interface Validator<TValue> {
-	parse(value: unknown): TValue;
+	parse<TInput>(value: TInput): TValue;
 }
 
 export type StandardSchemaValidationResult<TOutput> =
@@ -38,18 +38,13 @@ export type InferSchemaOutput<TSchema> =
 			: never;
 
 function isStandardSchema<TValue>(schema: AnySchema<TValue>): schema is StandardSchema<unknown, TValue> {
-	return (
-		typeof schema === 'object' &&
-		schema !== null &&
-		'~standard' in schema &&
-		typeof schema['~standard']?.validate === 'function'
-	);
+	return '~standard' in schema && typeof schema['~standard']?.validate === 'function';
 }
 
 export function normalizeValidator<TValue>(schema: AnySchema<TValue>): Validator<TValue> {
 	if (isStandardSchema(schema)) {
 		return {
-			parse(value: unknown): TValue {
+			parse<TInput>(value: TInput): TValue {
 				const result = schema['~standard'].validate(value);
 				if (result instanceof Promise) {
 					throw new Error('Async validation is not supported by Sync Resource core validators.');

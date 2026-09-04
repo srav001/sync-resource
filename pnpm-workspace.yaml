@@ -9,3 +9,4 @@ peerDependencyRules:
 
 allowBuilds:
     esbuild: true
+    msgpackr-extract: true

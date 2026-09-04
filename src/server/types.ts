@@ -39,8 +39,8 @@ export type {
 
 export type Awaitable<TValue> = TValue | Promise<TValue>;
 
-export interface OperationMeta {
-	readonly [key: string]: unknown;
+export interface OperationMeta<TValue = unknown> {
+	readonly [key: string]: TValue;
 }
 
 export interface SyncActor {
@@ -54,10 +54,16 @@ export interface OperationOptions {
 	readonly mutationId?: string;
 	readonly meta?: OperationMeta;
 	readonly actor?: SyncActor;
+	/** Opaque server-owned execution state. Request metadata must never populate this field. */
+	readonly environment?: unknown;
 }
 
-export interface ResourceExecution {
+export interface OperationExecution {
 	readonly signal: AbortSignal;
+	readonly environment?: unknown;
+}
+
+export interface ResourceExecution extends OperationExecution {
 	readonly deadline?: number;
 	readonly mutationId?: string;
 	readonly meta?: OperationMeta;
@@ -145,8 +151,13 @@ export interface SyncBatchOutput<TValue> {
 }
 
 export interface ManagerOutbox {
-	append(envelope: SyncEnvelope): Awaitable<void>;
-	readAfter(scope: string, cursor: string, limit: number): Awaitable<ManagerOutboxRead>;
+	append(envelope: SyncEnvelope, execution?: OperationExecution): Awaitable<void>;
+	readAfter(
+		scope: string,
+		cursor: string,
+		limit: number,
+		execution?: OperationExecution
+	): Awaitable<ManagerOutboxRead>;
 }
 
 export interface ManagerOutboxRead {
@@ -157,7 +168,11 @@ export interface ManagerOutboxRead {
 
 export interface ManagerRealtimeBus {
 	publish(envelope: SyncEnvelope): Awaitable<void>;
-	subscribe(scope: string, onEnvelope: (envelope: SyncEnvelope) => void): Awaitable<() => Awaitable<void>>;
+	subscribe(
+		scope: string,
+		onEnvelope: (envelope: SyncEnvelope) => void,
+		execution?: OperationExecution
+	): Awaitable<() => Awaitable<void>>;
 }
 
 export type ManagerMutationStatus = 'acknowledged' | 'finalized';
@@ -176,8 +191,12 @@ export interface ManagerMutationRecord {
 }
 
 export interface ManagerSyncPersistence extends ManagerOutbox {
-	readMutation(scope: string, mutationId: string): Awaitable<ManagerMutationRecord | undefined>;
-	recordMutation(record: ManagerMutationRecord): Awaitable<void>;
+	readMutation(
+		scope: string,
+		mutationId: string,
+		execution?: OperationExecution
+	): Awaitable<ManagerMutationRecord | undefined>;
+	recordMutation(record: ManagerMutationRecord, execution?: OperationExecution): Awaitable<void>;
 }
 
 export interface ManagerHttpHandlerArgs<TContext, TParams> {
@@ -211,7 +230,7 @@ export interface ManagerType<TKey extends string, TParams, TMethods> {
 
 export type ResourceHandlerResult<TOutput> = Awaitable<SyncResult<ResourceHandlerOk<TOutput> | TOutput, SyncError>>;
 
-export interface ResourceTelemetryContext {
+export interface ResourceTelemetryContext extends OperationExecution {
 	readonly resource: string;
 	readonly method: string;
 	readonly mutationId?: string;
@@ -229,7 +248,7 @@ export interface ResourceOptions {
 	handleError?(error: SyncError, context: ResourceTelemetryContext): Awaitable<void>;
 }
 
-export interface ManagerTelemetryContext {
+export interface ManagerTelemetryContext extends OperationExecution {
 	readonly manager: string;
 	readonly method: string;
 	readonly scope: string;
@@ -246,7 +265,11 @@ export type ScopeValue = string | number | boolean | readonly (string | number |
 
 export type AuthorizeResult = void | boolean | SyncResult<void, SyncError>;
 
-export type AuthorizeHook<TContext, TParams> = (context: TContext, params: TParams) => Awaitable<AuthorizeResult>;
+export type AuthorizeHook<TContext, TParams> = (
+	context: TContext,
+	params: TParams,
+	execution: OperationExecution
+) => Awaitable<AuthorizeResult>;
 
 export interface ManagerOptions<TContext, TParams> {
 	readonly key: string;

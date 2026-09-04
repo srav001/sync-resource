@@ -12,7 +12,7 @@ import {
 	type SyncEnvelope,
 	type SyncError
 } from '../../src/client/core.ts';
-import { resetSharedStreamForTests } from '../../src/server/index.ts';
+import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { createSyncTestSystem, Deferred } from '../fixtures/syncSystem.ts';
 
 interface EventNote {

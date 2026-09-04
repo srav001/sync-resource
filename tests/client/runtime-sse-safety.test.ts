@@ -20,6 +20,20 @@ const cache: CacheAdapter = {
 };
 
 describe('browser runtime SSE safety', () => {
+	it('rejects a pre-aborted direct subscription without starting fetch', async () => {
+		const harness = createDirectStreamHarness();
+		const runtime = createRuntime({ cache, fetch: harness.fetch, createId: (prefix) => `${prefix}-pre-aborted` });
+		const abort = new AbortController();
+		abort.abort();
+		try {
+			const result = await runtime.transport.subscribe({ url: '/events', signal: abort.signal, onEnvelope() {} });
+			expect(result.isErr() && result.error.code).toBe('aborted');
+			expect(harness.controllers).toHaveLength(0);
+		} finally {
+			runtime.dispose();
+		}
+	});
+
 	it('ignores malformed and out-of-range chunk metadata, then delivers a valid envelope', async () => {
 		const harness = createDirectStreamHarness();
 		const runtime = createRuntime({
@@ -184,6 +198,57 @@ describe('browser runtime SSE safety', () => {
 
 	it('stops reading an unterminated buffer above the frame bound and a new subscription can recover', async () => {
 		await expectBoundedStreamRecovery('x'.repeat(MAX_SSE_FRAME_BYTES + 1), 'stalled-buffer');
+	});
+
+	it('counts unterminated SSE buffers by UTF-8 bytes', async () => {
+		await expectBoundedStreamRecovery(
+			'😀'.repeat(Math.floor(MAX_SSE_FRAME_BYTES / 4) + 1),
+			'unicode-stalled-buffer'
+		);
+	});
+
+	it('keeps stateful UTF-8 decoder state local to each concurrent stream', async () => {
+		const harness = createDirectStreamHarness();
+		const runtime = createRuntime({ cache, fetch: harness.fetch, createId: (prefix) => `${prefix}-local-decoder` });
+		const firstReceived: SyncEnvelope[] = [];
+		const secondReceived: SyncEnvelope[] = [];
+		const firstAbort = new AbortController();
+		const secondAbort = new AbortController();
+		try {
+			const first = await runtime.transport.subscribe({
+				url: '/first',
+				signal: firstAbort.signal,
+				onEnvelope: (value) => firstReceived.push(value)
+			});
+			const second = await runtime.transport.subscribe({
+				url: '/second',
+				signal: secondAbort.signal,
+				onEnvelope: (value) => secondReceived.push(value)
+			});
+			const firstEnvelope = envelope('cursor-first', 'first-😀');
+			const secondEnvelope = envelope('cursor-second', 'second-😀');
+			const firstFrame = encodeSseFrame('sync', firstEnvelope);
+			const secondFrame = encodeSseFrame('sync', secondEnvelope);
+			const firstSplit = firstFrame.indexOf(0xf0) + 2;
+			const secondSplit = secondFrame.indexOf(0xf0) + 2;
+
+			harness.controllers[0]?.enqueue(firstFrame.slice(0, firstSplit));
+			harness.controllers[1]?.enqueue(secondFrame.slice(0, secondSplit));
+			harness.controllers[0]?.enqueue(firstFrame.slice(firstSplit));
+			harness.controllers[1]?.enqueue(secondFrame.slice(secondSplit));
+			await waitFor(() => firstReceived.length === 1 && secondReceived.length === 1);
+			expect(firstReceived).toEqual([firstEnvelope]);
+			expect(secondReceived).toEqual([secondEnvelope]);
+
+			if (first.isOk()) {
+				first.value();
+			}
+			if (second.isOk()) {
+				second.value();
+			}
+		} finally {
+			runtime.dispose();
+		}
 	});
 });
 

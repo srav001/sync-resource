@@ -42,6 +42,7 @@ and repair provide convergence.
 
 - `src/server/resource.ts` — typed resource definitions, validation, direct execution, batching, and commits
 - `src/server/manager.ts` — authorization, scope, HTTP methods, idempotency, persistence, replay, and finality
+- `src/server/effect.ts` — optional Effect resource/manager boundary, context and cancellation bridging, and HTTP routes
 - `src/server/streamMultiplexer.ts` — one physical SSE stream with logical manager/scope subscriptions
 - `src/server/realtime.ts` — optional cross-process realtime bus
 - `src/server/changes.ts` — change constructors
@@ -72,6 +73,7 @@ The package name is `sync-resource`. Preserve these subpaths unless an explicit 
 approved:
 
 - `sync-resource/server`
+- `sync-resource/server/effect`
 - `sync-resource/client/core`
 - `sync-resource/client/react`
 - `sync-resource/client/solid`

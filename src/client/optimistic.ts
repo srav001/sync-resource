@@ -1,3 +1,4 @@
+import { isRecord, isString, type ValueRecord } from '../shared/guards.ts';
 import { stableStringify, toStableJson } from '../shared/stableJson.ts';
 import type { PageState, ReconcileConfig, SyncEnvelope } from './types.ts';
 
@@ -11,56 +12,56 @@ export interface PendingCommand {
 	readonly targetIds: readonly string[];
 }
 
-export interface InternalPendingCommand extends PendingCommand {
-	readonly args: unknown;
+export interface InternalPendingCommand<TArgs = unknown> extends PendingCommand {
+	readonly args: TArgs;
 }
 
-export interface PageFamilyState {
+export interface PageFamilyState<TQuery = unknown, TMeta = unknown> {
 	readonly key: string;
-	query: unknown;
+	query: TQuery;
 	pages: PageState[];
-	meta?: unknown;
+	meta?: TMeta;
 }
 
-export interface OptimisticState {
-	data?: unknown;
-	baseData?: unknown;
-	readonly items: Map<string, unknown>;
-	readonly baseItems: Map<string, unknown>;
-	readonly families: Map<string, PageFamilyState>;
+export interface OptimisticState<TItem = unknown, TData = unknown, TQuery = unknown, TMeta = unknown> {
+	data?: TData;
+	baseData?: TData;
+	readonly items: Map<string, TItem>;
+	readonly baseItems: Map<string, TItem>;
+	readonly families: Map<string, PageFamilyState<TQuery, TMeta>>;
 	activeFamilyKey?: string;
 	pages: PageState[];
-	listMeta?: unknown;
+	listMeta?: TMeta;
 	cursor?: string;
 }
 
-export interface CachedPageFamilyState {
+export interface CachedPageFamilyState<TQuery = unknown, TMeta = unknown> {
 	readonly key: string;
-	readonly query?: unknown;
+	readonly query?: TQuery;
 	readonly pages: readonly PageState[];
-	readonly meta?: unknown;
+	readonly meta?: TMeta;
 }
 
-export interface CachedOptimisticState {
-	readonly data?: unknown;
-	readonly baseData?: unknown;
-	readonly items: readonly unknown[];
-	readonly baseItems?: readonly unknown[];
-	readonly families?: readonly CachedPageFamilyState[];
+export interface CachedOptimisticState<TItem = unknown, TData = unknown, TQuery = unknown, TMeta = unknown> {
+	readonly data?: TData;
+	readonly baseData?: TData;
+	readonly items: readonly TItem[];
+	readonly baseItems?: readonly TItem[];
+	readonly families?: readonly CachedPageFamilyState<TQuery, TMeta>[];
 	readonly activeFamilyKey?: string;
 	readonly pages: readonly PageState[];
-	readonly listMeta?: unknown;
+	readonly listMeta?: TMeta;
 	readonly cursor?: string;
 }
 
-export interface OptimisticReconcile {
-	itemId(item: unknown): string | undefined;
-	targetId(query: unknown, input: unknown): string | undefined;
-	matchesQuery?(item: unknown, query: unknown): boolean;
-	compare?(this: void, left: unknown, right: unknown): number;
+export interface OptimisticReconcile<TItem = unknown, TQuery = unknown, TInput = unknown> {
+	itemId(item: TItem): string | undefined;
+	targetId(query: TQuery, input: TInput): string | undefined;
+	matchesQuery?(item: TItem, query: TQuery): boolean;
+	compare?(this: void, left: TItem, right: TItem): number;
 }
 
-export function createOptimisticState(): OptimisticState {
+export function createOptimisticState<TItem, TData, TQuery, TMeta>(): OptimisticState<TItem, TData, TQuery, TMeta> {
 	return {
 		items: new Map(),
 		baseItems: new Map(),
@@ -155,10 +156,10 @@ export function restoreOptimisticState(
 	state.cursor = snapshot.cursor;
 }
 
-export function applyPageOutput(
+export function applyPageOutput<TOutput, TQuery>(
 	state: OptimisticState,
-	output: unknown,
-	query: unknown,
+	output: TOutput,
+	query: TQuery,
 	reconcile: OptimisticReconcile,
 	pendingCommands: Iterable<InternalPendingCommand>,
 	activate = true
@@ -183,9 +184,9 @@ export function applyPageOutput(
 	);
 }
 
-export function setBaseData(
+export function setBaseData<TValue>(
 	state: OptimisticState,
-	value: unknown,
+	value: TValue,
 	reconcile: OptimisticReconcile,
 	pendingCommands: Iterable<InternalPendingCommand>
 ): void {
@@ -193,9 +194,9 @@ export function setBaseData(
 	rebuildVisible(state, reconcile, pendingCommands);
 }
 
-export function selectQueryFamily(
+export function selectQueryFamily<TQuery>(
 	state: OptimisticState,
-	query: unknown,
+	query: TQuery,
 	reconcile: OptimisticReconcile,
 	pendingCommands: Iterable<InternalPendingCommand>
 ): void {
@@ -207,13 +208,13 @@ export function selectQueryFamily(
 	rebuildVisible(state, reconcile, pendingCommands);
 }
 
-export function hasQueryFamily(state: OptimisticState, query: unknown): boolean {
+export function hasQueryFamily<TQuery>(state: OptimisticState, query: TQuery): boolean {
 	return state.families.has(queryFamilyKey(query));
 }
 
-export function createPendingCommand(
+export function createPendingCommand<TArgs>(
 	method: WriteMethod,
-	args: unknown,
+	args: TArgs,
 	mutationId: string,
 	reconcile: OptimisticReconcile
 ): InternalPendingCommand {
@@ -234,12 +235,12 @@ export function ackPendingCommand(command: InternalPendingCommand): InternalPend
 	};
 }
 
-export function applyEnvelope(
+export function applyEnvelope<TQuery>(
 	state: OptimisticState,
 	envelope: SyncEnvelope,
 	reconcile: OptimisticReconcile,
 	pendingCommands: Map<string, InternalPendingCommand>,
-	activeQuery: unknown
+	activeQuery: TQuery
 ): void {
 	if (envelope.changes.some((change) => change.type === 'pageLoaded' || change.type === 'reset')) {
 		applyEnvelopeWithRebuild(state, envelope, reconcile, pendingCommands, activeQuery);
@@ -331,18 +332,18 @@ export function rebuildVisible(
 	sortVisibleItems(state, reconcile);
 }
 
-export function itemsForQueryFamily(
-	state: OptimisticState,
-	query: unknown,
-	reconcile: OptimisticReconcile,
+export function itemsForQueryFamily<TItem, TQuery>(
+	state: OptimisticState<TItem>,
+	query: TQuery,
+	reconcile: OptimisticReconcile<TItem>,
 	pendingCommands: Iterable<InternalPendingCommand>
-): unknown[] {
+): TItem[] {
 	const family = state.families.get(queryFamilyKey(query));
 	if (!family) {
 		return [];
 	}
 
-	const scopedState: OptimisticState = {
+	const scopedState: OptimisticState<TItem> = {
 		data: state.data,
 		baseData: state.baseData,
 		items: new Map(),
@@ -369,19 +370,22 @@ export function itemsForQueryFamily(
 	return [...scopedState.items.values()];
 }
 
-export function pagesForQueryFamily(state: OptimisticState, query: unknown): readonly PageState[] {
+export function pagesForQueryFamily<TQuery>(state: OptimisticState, query: TQuery): readonly PageState[] {
 	return state.families.get(queryFamilyKey(query))?.pages ?? [];
 }
 
-export function metaForQueryFamily(state: OptimisticState, query: unknown): unknown {
+export function metaForQueryFamily<TQuery, TMeta>(
+	state: OptimisticState<unknown, unknown, TQuery, TMeta>,
+	query: TQuery
+): TMeta | undefined {
 	return state.families.get(queryFamilyKey(query))?.meta;
 }
 
-export function reconcileFromConfig(
-	config: ReconcileConfig | undefined,
-	getParams: () => unknown = () => undefined
-): OptimisticReconcile {
-	const reconcile: OptimisticReconcile = {
+export function reconcileFromConfig<TItem, TQuery, TInput, TParams>(
+	config: ReconcileConfig<TItem, TParams, TQuery, TInput> | undefined,
+	getParams: () => TParams
+): OptimisticReconcile<TItem, TQuery, TInput> {
+	const reconcile: OptimisticReconcile<TItem, TQuery, TInput> = {
 		itemId(item) {
 			return config?.itemId?.(item, { params: getParams() }) ?? getDefaultId(item);
 		},
@@ -398,7 +402,7 @@ export function reconcileFromConfig(
 	return reconcile;
 }
 
-export function applyPatch(current: unknown, patch: unknown): unknown {
+export function applyPatch<TCurrent, TPatch>(current: TCurrent, patch: TPatch) {
 	const base = isRecord(current) ? { ...current } : {};
 	if (!isRecord(patch)) {
 		return base;
@@ -413,7 +417,7 @@ export function applyPatch(current: unknown, patch: unknown): unknown {
 	const unsetValue = patch.$unset;
 	if (Array.isArray(unsetValue)) {
 		for (const key of unsetValue) {
-			if (typeof key === 'string') {
+			if (isString(key)) {
 				unsetPathMutable(base, key);
 			}
 		}
@@ -424,55 +428,59 @@ export function applyPatch(current: unknown, patch: unknown): unknown {
 	return base;
 }
 
-function setPathMutable(target: Record<string, unknown>, path: string, value: unknown): void {
+function setPathMutable<TValue>(target: ValueRecord, path: string, value: TValue): void {
 	const parts = path.split('.');
-	let cursor: Record<string, unknown> = target;
+	let cursor = target;
 	for (let index = 0; index < parts.length - 1; index += 1) {
 		const key = parts[index];
 		if (!key) {
 			return;
 		}
-		const current = cursor[key];
+		const current = Object.getOwnPropertyDescriptor(cursor, key)?.value;
 		if (isRecord(current)) {
 			cursor = current;
 			continue;
 		}
-		const next: Record<string, unknown> = {};
-		cursor[key] = next;
+		const next = {};
+		Object.defineProperty(cursor, key, { configurable: true, enumerable: true, value: next, writable: true });
 		cursor = next;
 	}
 	const last = parts[parts.length - 1];
 	if (last) {
-		cursor[last] = value;
+		Object.defineProperty(cursor, last, { configurable: true, enumerable: true, value, writable: true });
 	}
 }
 
-function unsetPathMutable(target: Record<string, unknown>, path: string): void {
+function unsetPathMutable(target: ValueRecord, path: string): void {
 	const parts = path.split('.');
-	let cursor: Record<string, unknown> = target;
+	let cursor = target;
 	for (let index = 0; index < parts.length - 1; index += 1) {
 		const key = parts[index];
-		if (!key || !isRecord(cursor[key])) {
+		if (!key) {
 			return;
 		}
-		cursor = cursor[key] as Record<string, unknown>;
+		const next = Object.getOwnPropertyDescriptor(cursor, key)?.value;
+		if (!isRecord(next)) {
+			return;
+		}
+		cursor = next;
 	}
 	const last = parts[parts.length - 1];
 	if (last) {
-		delete cursor[last];
+		Reflect.deleteProperty(cursor, last);
 	}
 }
 
-function applyPageItems(
+function applyPageItems<TItem, TQuery, TMeta>(
 	state: OptimisticState,
-	items: readonly unknown[],
-	query: unknown,
+	items: readonly TItem[],
+	query: TQuery,
 	pageCursor: string | undefined,
 	syncCursor: string | undefined,
-	meta: unknown,
+	meta: TMeta,
 	hasMeta: boolean,
 	source: 'cache' | 'network' | 'realtime',
-	reconcile: OptimisticReconcile,
+	reconcile: OptimisticReconcile<TItem, TQuery>,
 	pendingCommands: Iterable<InternalPendingCommand>,
 	activate: boolean
 ): void {
@@ -511,12 +519,12 @@ function applyPageItems(
 	rebuildVisible(state, reconcile, pendingCommands);
 }
 
-function applyEnvelopeWithRebuild(
+function applyEnvelopeWithRebuild<TQuery>(
 	state: OptimisticState,
 	envelope: SyncEnvelope,
 	reconcile: OptimisticReconcile,
 	pendingCommands: Map<string, InternalPendingCommand>,
-	activeQuery: unknown
+	activeQuery: TQuery
 ): void {
 	const sourceCommand = envelope.sourceMutationId ? pendingCommands.get(envelope.sourceMutationId) : undefined;
 	for (const syncChange of envelope.changes) {
@@ -604,29 +612,23 @@ function addToLoadedPage(state: OptimisticState, id: string): void {
 	if (!firstPage || firstPage.ids.includes(id)) {
 		return;
 	}
-	const firstPageIds = new Array<string>(firstPage.ids.length + 1);
-	for (let index = 0; index < firstPage.ids.length; index += 1) {
-		firstPageIds[index] = firstPage.ids[index] as string;
-	}
-	firstPageIds[firstPage.ids.length] = id;
-	const nextFamilyPages = new Array<PageState>(pages.length);
-	nextFamilyPages[0] = {
-		...firstPage,
-		ids: firstPageIds
-	};
-	for (let index = 1; index < pages.length; index += 1) {
-		nextFamilyPages[index] = pages[index] as PageState;
-	}
+	const nextFamilyPages: PageState[] = [
+		{
+			...firstPage,
+			ids: [...firstPage.ids, id]
+		},
+		...pages.slice(1)
+	];
 	if (family) {
 		family.pages = nextFamilyPages;
 	}
 	state.pages = nextFamilyPages;
 }
 
-function reconcileAddedItemAcrossFamilies(
+function reconcileAddedItemAcrossFamilies<TItem>(
 	state: OptimisticState,
 	id: string,
-	item: unknown,
+	item: TItem,
 	reconcile: OptimisticReconcile
 ): readonly string[] {
 	const affectedIds: string[] = [];
@@ -638,11 +640,11 @@ function reconcileAddedItemAcrossFamilies(
 	return affectedIds;
 }
 
-function reconcileAddedItemWithFamily(
+function reconcileAddedItemWithFamily<TItem>(
 	state: OptimisticState,
 	family: PageFamilyState,
 	id: string,
-	item: unknown,
+	item: TItem,
 	reconcile: OptimisticReconcile
 ): readonly string[] {
 	if (family.pages.length === 0 || isLoadedInPages(family.pages, id)) {
@@ -690,10 +692,8 @@ function reconcileAddedItemWithFamily(
 		loadedIds.splice(insertedIndex, 0, id);
 	} else {
 		droppedId = loadedIds[existingCount - 1];
-		for (let index = existingCount - 1; index > insertedIndex; index -= 1) {
-			loadedIds[index] = loadedIds[index - 1] as string;
-		}
-		loadedIds[insertedIndex] = id;
+		loadedIds.splice(insertedIndex, 0, id);
+		loadedIds.pop();
 	}
 	family.pages = distributeLoadedIdsToPages(family.pages, loadedIds);
 	if (droppedId) {
@@ -702,10 +702,10 @@ function reconcileAddedItemWithFamily(
 	return [id];
 }
 
-function reconcileUpdatedItemAcrossFamilies(
+function reconcileUpdatedItemAcrossFamilies<TItem>(
 	state: OptimisticState,
 	id: string,
-	item: unknown,
+	item: TItem,
 	reconcile: OptimisticReconcile
 ): readonly string[] {
 	const affectedIds: string[] = [];
@@ -864,13 +864,17 @@ function distributeLoadedIdsToPages(pages: readonly PageState[], ids: readonly s
 			source: 'realtime'
 		});
 	}
-	const lastPage = nextPages[nextPages.length - 1];
-	while (lastPage && cursor < ids.length) {
+	const lastPage = nextPages.at(-1);
+	const lastPageIds = lastPage ? [...lastPage.ids] : undefined;
+	while (lastPageIds && cursor < ids.length) {
 		const id = ids[cursor];
 		cursor += 1;
 		if (id) {
-			(lastPage.ids as string[]).push(id);
+			lastPageIds.push(id);
 		}
+	}
+	if (lastPage && lastPageIds) {
+		nextPages[nextPages.length - 1] = { ...lastPage, ids: lastPageIds };
 	}
 	return nextPages;
 }
@@ -907,13 +911,13 @@ function getActiveFamily(state: OptimisticState): PageFamilyState | undefined {
 	return state.activeFamilyKey ? state.families.get(state.activeFamilyKey) : undefined;
 }
 
-function getOrCreateFamily(state: OptimisticState, key: string, query: unknown): PageFamilyState {
+function getOrCreateFamily<TQuery>(state: OptimisticState, key: string, query: TQuery): PageFamilyState {
 	const existing = state.families.get(key);
 	if (existing) {
 		existing.query = query;
 		return existing;
 	}
-	const family = {
+	const family: PageFamilyState = {
 		key,
 		query,
 		pages: []
@@ -922,33 +926,32 @@ function getOrCreateFamily(state: OptimisticState, key: string, query: unknown):
 	return family;
 }
 
-function hasOwn(value: object, key: string): boolean {
+function hasOwn<TValue>(value: TValue, key: string): boolean {
 	return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function queryFamilyKey(query: unknown): string {
+function queryFamilyKey<TQuery>(query: TQuery): string {
 	return stableStringify(queryWithoutCursor(query));
 }
 
-function queryWithoutCursor(query: unknown): unknown {
+function queryWithoutCursor<TQuery>(query: TQuery) {
 	if (!isRecord(query)) {
 		return query;
 	}
-	const next: Record<string, unknown> = {};
+	const entries: [string, ReturnType<typeof toStableJson>][] = [];
 	for (const key of Object.keys(query).sort()) {
-		if (key === 'cursor') {
-			continue;
+		if (key !== 'cursor') {
+			entries.push([key, toStableJson(query[key])]);
 		}
-		next[key] = toStableJson(query[key]);
 	}
-	return next;
+	return Object.fromEntries(entries);
 }
 
-function applyPendingToVisible(
+function applyPendingToVisible<TItem>(
 	state: OptimisticState,
 	command: InternalPendingCommand,
 	reconcile: OptimisticReconcile,
-	shouldApplyAdd?: (item: unknown) => boolean
+	shouldApplyAdd?: (item: TItem) => boolean
 ): void {
 	const items =
 		command.method === 'delete' && command.args === undefined
@@ -971,7 +974,8 @@ function applyPendingToVisible(
 		}
 
 		if (command.method === 'add') {
-			const input = item.input;
+			// Automatic optimistic adds use the client-known input as the collection item.
+			const input = item.input as TItem;
 			if (shouldApplyAdd && !shouldApplyAdd(input)) {
 				continue;
 			}
@@ -1006,11 +1010,11 @@ function applyPendingToVisible(
 	}
 }
 
-function pendingItemMatchesQuery(item: unknown, query: unknown, reconcile: OptimisticReconcile): boolean {
+function pendingItemMatchesQuery<TItem, TQuery>(item: TItem, query: TQuery, reconcile: OptimisticReconcile): boolean {
 	return !reconcile.matchesQuery || reconcile.matchesQuery(item, query);
 }
 
-function collectTargetIds(method: WriteMethod, args: unknown, reconcile: OptimisticReconcile): readonly string[] {
+function collectTargetIds<TArgs>(method: WriteMethod, args: TArgs, reconcile: OptimisticReconcile): readonly string[] {
 	const items = method === 'delete' && args === undefined ? [undefined] : Array.isArray(args) ? args : [args];
 	const targetIds: string[] = [];
 	for (const item of items) {
@@ -1153,18 +1157,18 @@ function markPagesStale(state: OptimisticState, cursor: string): void {
 	syncActivePages(state);
 }
 
-function getDefaultId(value: unknown): string | undefined {
+function getDefaultId<TValue>(value: TValue): string | undefined {
 	if (!isRecord(value)) {
 		return undefined;
 	}
-	return typeof value.id === 'string' ? value.id : undefined;
+	return isString(value.id) ? value.id : undefined;
 }
 
-function readString(value: unknown): string | undefined {
-	return typeof value === 'string' ? value : undefined;
+function readString<TValue>(value: TValue): string | undefined {
+	return isString(value) ? value : undefined;
 }
 
-function readStringFromRecord(value: unknown, key: string): string | undefined {
+function readStringFromRecord<TValue>(value: TValue, key: string): string | undefined {
 	if (!isRecord(value)) {
 		return undefined;
 	}
@@ -1191,8 +1195,4 @@ function markPageListStale(pages: readonly PageState[], cursor: string): PageSta
 		});
 	}
 	return nextPages;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

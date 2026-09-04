@@ -4,7 +4,6 @@ import {
 	err,
 	manager,
 	ok,
-	resetSharedStreamForTests,
 	resource,
 	syncError,
 	type ManagerMutationRecord,
@@ -14,6 +13,7 @@ import {
 	type ResourceCommitContext,
 	type SyncEnvelope
 } from '../../src/server/index.ts';
+import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 
 const paramsSchema = {
 	parse(value: unknown): { workspaceId: string } {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test';
 
 import { resetSyncConfiguration } from '../../src/client/core.ts';
-import { resetSharedStreamForTests } from '../../src/server/index.ts';
+import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { createSyncTestSystem, SYNC_TEST_NOW } from '../fixtures/syncSystem.ts';
 
 beforeEach(() => {

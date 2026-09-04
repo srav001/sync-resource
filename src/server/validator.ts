@@ -4,9 +4,9 @@ import type { AnySchema, SyncError } from './types.js';
 
 export { normalizeValidator } from '../shared/index.ts';
 
-export function parseSchema<TValue>(
+export function parseSchema<TValue, TInput>(
 	schema: AnySchema<TValue>,
-	value: unknown,
+	value: TInput,
 	label: string
 ): SyncResult<TValue, SyncError> {
 	const validator = normalizeValidator(schema);

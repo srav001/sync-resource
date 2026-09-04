@@ -8,6 +8,7 @@ export default defineConfig({
 			'client/solid': './src/client/solid.ts',
 			'client/vue': './src/client/vue.ts',
 			server: './src/server/index.ts',
+			'server/effect': './src/server/effect.ts',
 			shared: './src/shared/index.ts'
 		},
 		format: 'esm',

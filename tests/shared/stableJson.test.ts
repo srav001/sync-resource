@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vite-plus/test';
+import { describe, expect, it, vi } from 'vite-plus/test';
 
 import { stableStringify } from '../../src/shared/stableJson.ts';
 
@@ -19,5 +19,11 @@ describe('stableStringify', () => {
 	it('characterizes primitive and top-level undefined output', () => {
 		expect(stableStringify('text')).toBe('"text"');
 		expect(stableStringify(undefined)).toBe('undefined');
+	});
+	it('uses one native JSON serialization on the hot path', () => {
+		const stringify = vi.spyOn(JSON, 'stringify');
+		expect(stableStringify({ z: { b: 2, a: 1 }, a: [3, 2, 1] })).toBe('{"a":[3,2,1],"z":{"a":1,"b":2}}');
+		expect(stringify).toHaveBeenCalledTimes(1);
+		stringify.mockRestore();
 	});
 });

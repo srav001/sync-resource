@@ -34,6 +34,35 @@ const outputSchema = {
 };
 
 describe('resource batch execution', () => {
+	it('awaits an asynchronous batch handler before validating its output', async () => {
+		let completed = false;
+		const notes = resource(paramsSchema, (method) => ({
+			add: method.add({
+				input: inputSchema,
+				output: outputSchema,
+				handler({ ctx }) {
+					return ctx.error(ctx.syncError('internal', 'single handler should not run'));
+				},
+				async batchHandler({ items }) {
+					await Promise.resolve();
+					completed = true;
+					return ok({
+						items: items.map((item, index) => ({
+							index,
+							status: 'ok' as const,
+							value: { output: { id: item.input.id } }
+						})),
+						execution: { mode: 'bulk', atomic: false, okCount: items.length, errorCount: 0 }
+					});
+				}
+			})
+		}));
+
+		const result = await notes.add([{ params: { workspaceId: 'w1' }, input: { id: 'a' } }]);
+		expect(completed).toBe(true);
+		expect(result.isOk() && result.value.items[0]).toMatchObject({ status: 'ok', value: { output: { id: 'a' } } });
+	});
+
 	it('validates one shared scope and invokes an atomic batch handler once with partial results', async () => {
 		let batchCalls = 0;
 		const notes = resource(paramsSchema, (method) => ({
@@ -149,6 +178,11 @@ describe('resource batch execution', () => {
 		]);
 		expect(result.isOk()).toBe(true);
 		expect(commitContexts).toEqual([{}]);
+		expect(Object.keys(commitContexts[0] as object)).toEqual([]);
+		expect(Object.getOwnPropertyDescriptor(commitContexts[0] as object, 'signal')).toMatchObject({
+			enumerable: false,
+			value: expect.any(AbortSignal)
+		});
 		expect(result.isOk() && result.value.metrics).toEqual([
 			{ name: 'write', value: 2, unit: 'row' },
 			{ name: 'commit', value: 1, unit: 'transaction' }

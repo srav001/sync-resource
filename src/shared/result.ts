@@ -1,4 +1,4 @@
-import { syncError, type SyncError, type SyncErrorCode, type SyncErrorOptions } from './protocol.ts';
+import { SyncError, syncError, type SyncErrorCode, type SyncErrorOptions } from './protocol.ts';
 
 export class SyncOk<TValue, TError extends SyncError = SyncError> {
 	readonly status = 'ok';
@@ -57,11 +57,12 @@ export function err(
 		| readonly [errorValue: SyncError]
 		| readonly [code: SyncErrorCode, message: string, options?: SyncErrorOptions]
 ): SyncErr<never, SyncError> {
-	if (typeof args[0] === 'string') {
-		return new SyncErr(syncError(args[0], args[1], args[2]));
+	if (args.length === 1) {
+		return new SyncErr(args[0]);
 	}
 
-	return new SyncErr(args[0]);
+	const [code, message, options] = args;
+	return new SyncErr(syncError(code, message, options));
 }
 
 export function isOk<TValue, TError extends SyncError>(
@@ -95,7 +96,7 @@ export function mapError<TValue, TError extends SyncError, TNextError extends Sy
 		return err(mapper(result.error));
 	}
 
-	return result as unknown as SyncOk<TValue, TNextError>;
+	return new SyncOk(result.value);
 }
 
 export function andThen<TValue, TError extends SyncError, TNext, TNextError extends SyncError>(

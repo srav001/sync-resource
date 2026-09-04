@@ -1,8 +1,10 @@
+import { isCallable, isRecord, isString, isUnrefableTimer } from '../shared/guards.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { encodeSseFrame, encodeSyncEnvelopeSseFrames, MAX_SSE_FRAME_BYTES } from '../shared/sse.ts';
 import { stableStringify } from '../shared/stableJson.ts';
 import { normalizeSyncError, syncError, syncErrorToHttpStatus, toSyncProtocolError, type SyncError } from './errors.js';
-import type { MethodKind } from './resource.js';
+import { withCommitExecution } from './executionState.js';
+import { combineAbortSignals, type MethodKind } from './resource.js';
 import {
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
@@ -19,9 +21,12 @@ import type {
 	ManagerRealtimeBus,
 	ManagerSyncPersistence,
 	ManagerTelemetry,
+	ManagerTelemetryContext,
 	MethodType,
 	OperationMeta,
+	OperationExecution,
 	OperationOptions,
+	ResourceCommitContext,
 	ResourceHandlerOk,
 	ResetManifest,
 	ScopeValue,
@@ -36,10 +41,12 @@ const JSON_HEADERS = {
 	'content-type': 'application/json; charset=utf-8',
 	'cache-control': 'no-store'
 };
+// Body decoding never uses streaming state, so one decoder safely avoids per-request allocation.
 const textDecoder = new TextDecoder();
 const MAX_STREAM_BACKPRESSURE_QUEUE = 4096;
 const MAX_MEMORY_MUTATION_RECORDS = 10_000;
 const MEMORY_MUTATION_RECORD_TTL_MS = 60 * 60_000;
+const unboundedExecution: OperationExecution = { signal: new AbortController().signal };
 
 type ResourceParams<TResource> = TResource extends { readonly type: { readonly params: infer TParams extends object } }
 	? TParams
@@ -104,49 +111,58 @@ export interface CreateManagerOptions<TKey extends string, TParams extends objec
 		readonly maxEventBytes?: number;
 		onScopeIdle?(scope: string): void;
 	};
-	handleError?(
-		error: SyncError,
-		context: {
-			readonly manager: string;
-			readonly method: string;
-			readonly scope: string;
-			readonly mutationId?: string;
-		}
-	): Promise<void> | void;
+	handleError?(error: SyncError, context: ManagerTelemetryContext): Promise<void> | void;
+}
+
+interface RuntimeMethodDefinition {
+	readonly kind: MethodKind;
+	readonly query?: object;
 }
 
 interface RuntimeResource {
 	readonly definition: {
-		readonly methods: Partial<Record<MethodKind, unknown>>;
+		readonly methods: Partial<Record<MethodKind, RuntimeMethodDefinition>>;
 	};
 	readonly type: {
 		readonly params: object;
-		readonly methods: unknown;
+		readonly methods: object;
 	};
-	readonly [key: string]: unknown;
+	readonly get?: RuntimeResourceMethod;
+	readonly list?: RuntimeResourceMethod;
+	readonly add?: RuntimeResourceMethod;
+	readonly mutate?: RuntimeResourceMethod;
+	readonly delete?: RuntimeResourceMethod;
 }
 
 interface ResourceLike {
 	readonly definition: {
-		readonly methods: Partial<Record<MethodKind, unknown>>;
+		readonly methods: Partial<Record<MethodKind, RuntimeMethodDefinition>>;
 	};
 	readonly type: {
 		readonly params: object;
-		readonly methods: unknown;
+		readonly methods: object;
 	};
-	readonly [key: string]: unknown;
 }
 
-type RuntimeResourceMethod = (
-	args: unknown,
+type RuntimeResourceMethod = <TArgs>(
+	args: TArgs,
 	options?: OperationOptions
 ) => Promise<SyncResult<ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>>;
+type BoundRuntimeMethod = <TArgs>(args: TArgs, options?: OperationOptions) => Promise<SyncResult<unknown, SyncError>>;
 
 interface ManagerExecutionSuccess {
 	readonly output: unknown;
 	readonly raw: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>;
 	readonly envelope?: SyncEnvelope;
 }
+
+interface PublishOptions {
+	readonly alreadyPersisted?: boolean;
+	readonly transient?: boolean;
+	readonly execution?: OperationExecution;
+}
+
+type PublishEnvelope = (envelope: SyncEnvelope, options?: PublishOptions) => Promise<void>;
 
 interface InternalOperationOptions extends OperationOptions {
 	readonly deferSourceCommit?: boolean;
@@ -168,6 +184,13 @@ interface InFlightManagerMutation {
 	readonly promise: Promise<SyncResult<ManagerExecutionSuccess, SyncError>>;
 }
 
+interface BusSubscriptionEntry {
+	readonly controller: AbortController;
+	owners: number;
+	readonly ready: Promise<(() => Awaitable<void>) | undefined>;
+	closing?: Promise<void>;
+}
+
 interface RuntimeManagerOptions<TContext, TParams extends object> {
 	readonly key: string;
 	readonly authorize: AuthorizeHook<TContext | undefined, TParams>;
@@ -185,21 +208,13 @@ interface RuntimeManagerOptions<TContext, TParams extends object> {
 		readonly maxEventBytes?: number;
 		onScopeIdle?(scope: string): void;
 	};
-	handleError?(
-		error: SyncError,
-		context: {
-			readonly manager: string;
-			readonly method: string;
-			readonly scope: string;
-			readonly mutationId?: string;
-		}
-	): Promise<void> | void;
+	handleError?(error: SyncError, context: ManagerTelemetryContext): Promise<void> | void;
 }
 
 export function manager<TKey extends string, TResource extends ResourceLike, TContext = undefined>(
 	options: CreateManagerOptions<TKey, ResourceParams<TResource>, TResource, TContext>
 ): Manager<TKey, TResource, TContext, ResourceParams<TResource>> {
-	const runtimeResource = options.resource as unknown as RuntimeResource;
+	const runtimeResource: RuntimeResource = options.resource as never;
 	const runtimeMethods = runtimeResource.definition.methods;
 	const persistence = resolveManagerPersistence(options.persistence, options.outbox);
 	const inFlightMutations = new Map<string, InFlightManagerMutation>();
@@ -211,18 +226,19 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	};
 	let cursorIndex = 0;
 	const subscribers = new Map<string, Set<(envelope: SyncEnvelope) => void>>();
-	const busUnsubscribers = new Map<string, () => Awaitable<void>>();
+	const busSubscriptions = new Map<string, BusSubscriptionEntry>();
+	const sharedBusLeases = new Map<string, () => void>();
 
 	registerSharedStreamManager({
 		key: options.key,
 		...options.stream,
 		onScopeIdle(scope) {
-			releaseBusSubscription(scope);
+			releaseSharedBusSubscription(scope);
 			prunePersistenceScope(persistence, scope);
 			options.stream?.onScopeIdle?.(scope);
 		},
 		handleError(errorValue, context) {
-			return reportManagerError(managerOptions, context, errorValue);
+			return reportManagerError(managerOptions, { ...context, ...unboundedExecution }, errorValue);
 		}
 	});
 
@@ -230,8 +246,8 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		key: options.key,
 		type: {
 			key: options.key,
-			params: undefined as unknown as ResourceParams<TResource>,
-			methods: undefined as unknown as ResourceMethodTypes<TResource>
+			params: undefined as never,
+			methods: undefined as never
 		},
 		http: createHttpHandlers(managerOptions),
 		bind(params: ResourceParams<TResource>, context?: TContext) {
@@ -250,10 +266,10 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		context?: TContext
 	): BoundManager<TKey, TResource> {
 		const scope = encodeScope(options.key, options.scope(params));
-		const methods: Partial<Record<string, unknown>> = {};
+		const methods: Partial<Record<MethodKind, BoundRuntimeMethod>> = {};
 
 		if (runtimeMethods.get) {
-			methods.get = (argsOrOptions?: unknown, callOptions?: OperationOptions) => {
+			methods.get = <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) => {
 				const hasQuery = methodHasQuery(runtimeMethods.get);
 				return executeManagerMethod(
 					managerOptions,
@@ -270,7 +286,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		}
 
 		if (runtimeMethods.list) {
-			methods.list = (argsOrOptions?: unknown, callOptions?: OperationOptions) => {
+			methods.list = <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) => {
 				const hasQuery = methodHasQuery(runtimeMethods.list);
 				return executeManagerMethod(
 					managerOptions,
@@ -287,7 +303,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		}
 
 		if (runtimeMethods.add) {
-			methods.add = (args: unknown, callOptions?: OperationOptions) =>
+			methods.add = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
 				executeManagerMethod(
 					managerOptions,
 					runtimeResource,
@@ -302,7 +318,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		}
 
 		if (runtimeMethods.mutate) {
-			methods.mutate = (args: unknown, callOptions?: OperationOptions) =>
+			methods.mutate = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
 				executeManagerMethod(
 					managerOptions,
 					runtimeResource,
@@ -317,7 +333,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		}
 
 		if (runtimeMethods.delete) {
-			methods.delete = (argsOrOptions?: unknown, callOptions?: OperationOptions) => {
+			methods.delete = <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) => {
 				const hasQuery = methodHasQuery(runtimeMethods.delete);
 				return executeManagerMethod(
 					managerOptions,
@@ -375,17 +391,26 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 
 		handlers.connect = async (args) => {
 			const scope = encodeScope(managerOptions.key, managerOptions.scope(args.params));
+			const execution = operationExecution(
+				mergeOperationOptions(operationOptionsFromRequest(args.request), args.options)
+			);
 			const telemetryContext = {
 				manager: managerOptions.key,
 				method: 'connect',
-				scope
+				scope,
+				...execution
 			};
 			const authResult = await authorize(managerOptions, args.context, args.params, telemetryContext);
 			if (authResult.isErr()) {
-				return jsonResponse(syncHttpError(authResult.error), syncErrorToStatus(authResult.error));
+				return jsonResponse(syncHttpError(authResult.error), syncErrorToHttpStatus(authResult.error));
 			}
 
-			await ensureBusSubscription(managerOptions, scope);
+			const releaseBus = await acquireBusSubscription(managerOptions, scope, execution.signal);
+			if (execution.signal.aborted) {
+				releaseBus?.();
+				const errorValue = syncError('aborted', 'Sync operation was aborted.');
+				return jsonResponse(syncHttpError(errorValue), syncErrorToHttpStatus(errorValue));
+			}
 			const subscriptionResult = await registerSharedStreamSubscription({
 				request: args.request,
 				managerKey: managerOptions.key,
@@ -396,11 +421,13 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 				nextCursor
 			});
 			if (subscriptionResult.isErr()) {
+				releaseBus?.();
 				return jsonResponse(
 					syncHttpError(subscriptionResult.error),
-					syncErrorToStatus(subscriptionResult.error)
+					syncErrorToHttpStatus(subscriptionResult.error)
 				);
 			}
+			retainSharedBusSubscription(scope, releaseBus);
 
 			return jsonResponse({
 				isOk: true,
@@ -415,15 +442,21 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 
 		handlers.events = async (args) => {
 			const scope = encodeScope(managerOptions.key, managerOptions.scope(args.params));
-			const authResult = await authorize(managerOptions, args.context, args.params, {
+			const execution = operationExecution(
+				mergeOperationOptions(operationOptionsFromRequest(args.request), args.options)
+			);
+			const telemetryContext = {
 				manager: managerOptions.key,
 				method: 'events',
-				scope
-			});
+				scope,
+				...execution
+			};
+			const authResult = await authorize(managerOptions, args.context, args.params, telemetryContext);
 			if (authResult.isErr()) {
-				return jsonResponse(syncHttpError(authResult.error), syncErrorToStatus(authResult.error));
+				return jsonResponse(syncHttpError(authResult.error), syncErrorToHttpStatus(authResult.error));
 			}
 
+			let cancelStream = (): void => {};
 			const stream = new ReadableStream<Uint8Array>(
 				{
 					async start(controller) {
@@ -439,8 +472,47 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 						let replaying = afterCursor !== undefined;
 						let closed = false;
 						let heartbeat: ReturnType<typeof setInterval> | undefined;
+						let releaseBus: (() => void) | undefined;
+						const streamController = new AbortController();
+						const streamExecution = {
+							...execution,
+							signal: AbortSignal.any([execution.signal, streamController.signal])
+						};
+						let scopeSubscribers = subscribers.get(scope);
+						if (!scopeSubscribers) {
+							scopeSubscribers = new Set();
+							subscribers.set(scope, scopeSubscribers);
+						}
+						const onAbort = () => close();
 
-						function enqueue(eventName: string, payload: unknown): void {
+						function close(failure?: { readonly cause: unknown }): void {
+							if (closed) {
+								return;
+							}
+							closed = true;
+							streamController.abort();
+							execution.signal.removeEventListener('abort', onAbort);
+							scopeSubscribers?.delete(send);
+							if (scopeSubscribers?.size === 0) {
+								subscribers.delete(scope);
+							}
+							releaseBus?.();
+							releaseBus = undefined;
+							if (heartbeat) {
+								clearInterval(heartbeat);
+								heartbeat = undefined;
+							}
+							try {
+								if (failure) {
+									controller.error(failure.cause);
+								} else {
+									controller.close();
+								}
+							} catch {}
+						}
+						cancelStream = close;
+
+						function enqueue<TPayload>(eventName: string, payload: TPayload): void {
 							if (closed) {
 								return;
 							}
@@ -453,8 +525,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 							}
 							const frames = encodeSyncEnvelopeSseFrames(envelope, { maxEnvelopeBytes: maxEventBytes });
 							if (!frames) {
-								closed = true;
-								controller.close();
+								close();
 								return;
 							}
 							for (const frame of frames) {
@@ -467,22 +538,20 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 								return;
 							}
 							if (frame.byteLength > MAX_SSE_FRAME_BYTES) {
-								closed = true;
-								controller.close();
+								close();
 								return;
 							}
 							if (
 								controller.desiredSize !== null &&
 								controller.desiredSize < -MAX_STREAM_BACKPRESSURE_QUEUE
 							) {
-								closed = true;
-								controller.close();
+								close();
 								return;
 							}
 							try {
 								controller.enqueue(frame);
 							} catch {
-								closed = true;
+								close();
 							}
 						}
 
@@ -517,66 +586,72 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 							}
 						}
 
-						let scopeSubscribers = subscribers.get(scope);
-						if (!scopeSubscribers) {
-							scopeSubscribers = new Set();
-							subscribers.set(scope, scopeSubscribers);
-						}
-						scopeSubscribers.add(send);
-						await ensureBusSubscription(managerOptions, scope);
-						enqueue('ready', { scope, after: afterCursor });
-						const ping = { type: 'ping' as const, managerKey: managerOptions.key, scope, ts: 0 };
-						heartbeat = setInterval(() => {
-							// This direct stream is not the production browser transport, but the heartbeat keeps test/diagnostic streams bounded and observable.
-							ping.ts = Date.now();
-							enqueue('ping', ping);
-						}, heartbeatMs);
-						unrefTimer(heartbeat);
+						try {
+							scopeSubscribers.add(send);
+							if (execution.signal.aborted) {
+								close();
+								return;
+							}
+							execution.signal.addEventListener('abort', onAbort, { once: true });
+							const acquiredBus = await acquireBusSubscription(
+								managerOptions,
+								scope,
+								streamExecution.signal
+							);
+							if (closed) {
+								acquiredBus?.();
+								return;
+							}
+							releaseBus = acquiredBus;
+							enqueue('ready', { scope, after: afterCursor });
+							const ping = { type: 'ping' as const, managerKey: managerOptions.key, scope, ts: 0 };
+							heartbeat = setInterval(() => {
+								// This direct stream is not the production browser transport, but the heartbeat keeps diagnostic streams bounded and observable.
+								ping.ts = Date.now();
+								enqueue('ping', ping);
+							}, heartbeatMs);
+							unrefTimer(heartbeat);
 
-						args.request.signal.addEventListener(
-							'abort',
-							() => {
-								scopeSubscribers?.delete(send);
-								if (scopeSubscribers?.size === 0) {
-									subscribers.delete(scope);
-									releaseBusSubscription(scope);
-								}
-								closed = true;
-								if (heartbeat) {
-									clearInterval(heartbeat);
-									heartbeat = undefined;
-								}
-								try {
-									controller.close();
-								} catch {}
-							},
-							{ once: true }
-						);
-
-						if (afterCursor !== undefined) {
-							const replay = await persistence.readAfter(scope, afterCursor, replayLimit);
-							if (!replay.cursorFound && replay.retainedEnvelopeCount > 0) {
-								const resetEnvelope = buildResetEnvelope(
-									managerOptions.key,
+							if (afterCursor !== undefined) {
+								const replay = await persistence.readAfter(
 									scope,
 									afterCursor,
-									nextCursor()
+									replayLimit,
+									streamExecution
 								);
-								rememberSentCursor(resetEnvelope.cursor);
-								enqueueSync(resetEnvelope);
+								if (!replay.cursorFound && replay.retainedEnvelopeCount > 0) {
+									const resetEnvelope = buildResetEnvelope(
+										managerOptions.key,
+										scope,
+										afterCursor,
+										nextCursor()
+									);
+									rememberSentCursor(resetEnvelope.cursor);
+									enqueueSync(resetEnvelope);
+								}
+								for (const envelope of replay.envelopes) {
+									rememberSentCursor(envelope.cursor);
+									enqueueSync(envelope);
+								}
 							}
-							for (const envelope of replay.envelopes) {
-								rememberSentCursor(envelope.cursor);
-								enqueueSync(envelope);
-							}
-						}
 
-						replaying = false;
-						for (const envelope of buffered) {
-							if (!sentCursors.has(envelope.cursor)) {
-								send(envelope);
+							replaying = false;
+							for (const envelope of buffered) {
+								if (!sentCursors.has(envelope.cursor)) {
+									send(envelope);
+								}
 							}
+						} catch (cause) {
+							const cancelled = streamExecution.signal.aborted;
+							close(cancelled ? undefined : { cause });
+							if (cancelled) {
+								return;
+							}
+							await reportManagerError(managerOptions, telemetryContext, normalizeSyncError(cause));
 						}
+					},
+					cancel() {
+						cancelStream();
 					}
 				},
 				{ highWaterMark: 1 }
@@ -594,12 +669,9 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		return handlers;
 	}
 
-	async function recordAndPublish(
-		envelope: SyncEnvelope,
-		options?: { readonly alreadyPersisted?: boolean; readonly transient?: boolean }
-	): Promise<void> {
+	async function recordAndPublish(envelope: SyncEnvelope, options?: PublishOptions): Promise<void> {
 		if (options?.alreadyPersisted !== true && options?.transient !== true) {
-			await persistence.append(envelope);
+			await persistence.append(envelope, options?.execution);
 		}
 		publishToLocalSubscribers(envelope);
 		publishSharedStreamEnvelope(envelope);
@@ -607,19 +679,18 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	}
 
 	async function publishToRealtimeBusBestEffort(envelope: SyncEnvelope): Promise<void> {
-		try {
-			await callHook(() => managerOptions.realtimeBus?.publish(envelope));
-		} catch (cause) {
-			await reportManagerError(
-				managerOptions,
-				{
-					manager: options.key,
-					method: 'realtimeBus.publish',
-					scope: envelope.scope
-				},
-				normalizeSyncError(cause)
-			);
+		const result = await callHook(() => managerOptions.realtimeBus?.publish(envelope));
+		if (result.isErr()) {
+			await reportRealtimeError('realtimeBus.publish', envelope.scope, result.error);
 		}
+	}
+
+	function reportRealtimeError(method: string, scope: string, errorValue: SyncError): Promise<void> {
+		return reportManagerError(
+			managerOptions,
+			{ manager: options.key, method, scope, ...unboundedExecution },
+			errorValue
+		);
 	}
 
 	function publishToLocalSubscribers(envelope: SyncEnvelope): void {
@@ -633,38 +704,96 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		}
 	}
 
-	async function ensureBusSubscription(
+	async function acquireBusSubscription(
 		managerOptions: RuntimeManagerOptions<TContext, ResourceParams<TResource>>,
-		scope: string
-	): Promise<void> {
-		if (!managerOptions.realtimeBus || busUnsubscribers.has(scope)) {
-			return;
+		scope: string,
+		signal: AbortSignal
+	): Promise<(() => void) | undefined> {
+		const bus = managerOptions.realtimeBus;
+		if (!bus || signal.aborted) {
+			return undefined;
 		}
-
-		try {
-			const unsubscribe = await managerOptions.realtimeBus.subscribe(scope, publishToLocalSubscribers);
-			busUnsubscribers.set(scope, unsubscribe);
-		} catch (cause) {
-			const errorValue = normalizeSyncError(cause);
-			await reportManagerError(
-				managerOptions,
-				{
-					manager: managerOptions.key,
-					method: 'events',
-					scope
-				},
-				errorValue
-			);
+		let entry = busSubscriptions.get(scope);
+		if (entry?.closing) {
+			await waitForInFlight(entry.closing, signal);
+			return signal.aborted ? undefined : acquireBusSubscription(managerOptions, scope, signal);
 		}
+		if (!entry) {
+			const controller = new AbortController();
+			let created!: BusSubscriptionEntry;
+			const ready = Promise.resolve()
+				.then(() => bus.subscribe(scope, publishToLocalSubscribers, { signal: controller.signal }))
+				.catch(async (cause: unknown) => {
+					if (controller.signal.aborted) {
+						return undefined;
+					}
+					if (busSubscriptions.get(scope) === created) {
+						busSubscriptions.delete(scope);
+					}
+					await reportRealtimeError('events', scope, normalizeSyncError(cause));
+					return undefined;
+				});
+			created = { controller, owners: 0, ready };
+			entry = created;
+			busSubscriptions.set(scope, entry);
+		}
+		entry.owners += 1;
+		const unsubscribe = await waitForInFlight(entry.ready, signal);
+		if (!unsubscribe || signal.aborted) {
+			releaseBusOwner(scope, entry);
+			return undefined;
+		}
+		let released = false;
+		return () => {
+			if (released) {
+				return;
+			}
+			released = true;
+			releaseBusOwner(scope, entry);
+		};
 	}
 
-	function releaseBusSubscription(scope: string): void {
-		const unsubscribe = busUnsubscribers.get(scope);
-		if (!unsubscribe) {
+	function retainSharedBusSubscription(scope: string, release: (() => void) | undefined): void {
+		if (!release) {
 			return;
 		}
-		busUnsubscribers.delete(scope);
-		callHook(unsubscribe);
+		if (sharedBusLeases.has(scope)) {
+			release();
+			return;
+		}
+		sharedBusLeases.set(scope, release);
+	}
+
+	function releaseSharedBusSubscription(scope: string): void {
+		const release = sharedBusLeases.get(scope);
+		if (!release) {
+			return;
+		}
+		sharedBusLeases.delete(scope);
+		release();
+	}
+
+	function releaseBusOwner(scope: string, entry: BusSubscriptionEntry): void {
+		entry.owners -= 1;
+		if (entry.owners > 0 || entry.closing) {
+			return;
+		}
+		entry.controller.abort();
+		entry.closing = entry.ready
+			.then(async (unsubscribe) => {
+				if (!unsubscribe) {
+					return;
+				}
+				const result = await callHook(unsubscribe);
+				if (result.isErr()) {
+					await reportRealtimeError('realtimeBus.unsubscribe', scope, result.error);
+				}
+			})
+			.finally(() => {
+				if (busSubscriptions.get(scope) === entry) {
+					busSubscriptions.delete(scope);
+				}
+			});
 	}
 }
 
@@ -826,21 +955,26 @@ class OutboxBackedManagerPersistence implements ManagerSyncPersistence {
 		this.outbox = outbox;
 	}
 
-	append(envelope: SyncEnvelope): Promise<void> | void {
-		return this.outbox.append(envelope);
+	append(envelope: SyncEnvelope, execution?: OperationExecution): Promise<void> | void {
+		return this.outbox.append(envelope, execution);
 	}
 
-	readAfter(scope: string, cursor: string, limit: number): Promise<ManagerOutboxRead> | ManagerOutboxRead {
-		return this.outbox.readAfter(scope, cursor, limit);
+	readAfter(
+		scope: string,
+		cursor: string,
+		limit: number,
+		execution?: OperationExecution
+	): Promise<ManagerOutboxRead> | ManagerOutboxRead {
+		return this.outbox.readAfter(scope, cursor, limit, execution);
 	}
 
 	readMutation(scope: string, mutationId: string): ManagerMutationRecord | undefined {
 		return this.mutations.read(scope, mutationId);
 	}
 
-	async recordMutation(record: ManagerMutationRecord): Promise<void> {
+	async recordMutation(record: ManagerMutationRecord, execution?: OperationExecution): Promise<void> {
 		if (record.envelope) {
-			await this.outbox.append(record.envelope);
+			await this.outbox.append(record.envelope, execution);
 		}
 		this.mutations.record(record);
 	}
@@ -864,14 +998,13 @@ function resolveManagerPersistence(
 }
 
 function isManagerSyncPersistence(value: ManagerOutbox | undefined): value is ManagerSyncPersistence {
-	if (!value) {
-		return false;
-	}
-	const candidate = value as {
-		readonly readMutation?: unknown;
-		readonly recordMutation?: unknown;
-	};
-	return typeof candidate.readMutation === 'function' && typeof candidate.recordMutation === 'function';
+	return (
+		value !== undefined &&
+		'readMutation' in value &&
+		isCallable(value.readMutation) &&
+		'recordMutation' in value &&
+		isCallable(value.recordMutation)
+	);
 }
 
 function mutationKey(scope: string, mutationId: string): string {
@@ -888,7 +1021,7 @@ function createCursorSeed(): string {
 
 function withGeneratedMutationId(
 	managerKey: string,
-	method: string,
+	method: MethodKind,
 	options: OperationOptions | undefined
 ): OperationOptions | undefined {
 	if (!isWriteMethod(method)) {
@@ -903,19 +1036,16 @@ function withGeneratedMutationId(
 	};
 }
 
-async function executeManagerMethod<TContext, TParams extends object>(
+async function executeManagerMethod<TContext, TParams extends object, TArgs>(
 	options: RuntimeManagerOptions<TContext, TParams>,
 	resource: RuntimeResource,
-	method: string,
-	params: TParams | undefined,
+	method: MethodKind,
+	params: TParams,
 	context: TContext | undefined,
-	args: unknown,
+	args: TArgs,
 	callOptions: OperationOptions | undefined,
 	nextCursor: () => string,
-	publish: (
-		envelope: SyncEnvelope,
-		options?: { readonly alreadyPersisted?: boolean; readonly transient?: boolean }
-	) => Promise<void>
+	publish: PublishEnvelope
 ): Promise<SyncResult<unknown, SyncError>> {
 	const result = await executeManagerResourceMethod(
 		options,
@@ -935,48 +1065,43 @@ async function executeManagerMethod<TContext, TParams extends object>(
 	return ok(result.value.output);
 }
 
-async function executeManagerResourceMethod<TContext, TParams extends object>(
+async function executeManagerResourceMethod<TContext, TParams extends object, TArgs>(
 	options: RuntimeManagerOptions<TContext, TParams>,
 	resource: RuntimeResource,
-	method: string,
-	params: TParams | undefined,
+	method: MethodKind,
+	params: TParams,
 	context: TContext | undefined,
-	args: unknown,
+	args: TArgs,
 	callOptions: OperationOptions | undefined,
 	nextCursor: () => string,
-	publish: (
-		envelope: SyncEnvelope,
-		options?: { readonly alreadyPersisted?: boolean; readonly transient?: boolean }
-	) => Promise<void>
+	publish: PublishEnvelope
 ): Promise<SyncResult<ManagerExecutionSuccess, SyncError>> {
-	if (!params) {
-		return err('bad_request', 'Manager method called before params were bound.');
-	}
-
-	const boundParams = params;
-	const scope = encodeScope(options.key, options.scope(boundParams));
+	const scope = encodeScope(options.key, options.scope(params));
 	const effectiveCallOptions = withGeneratedMutationId(options.key, method, callOptions);
+	const execution = operationExecution(effectiveCallOptions);
 	const telemetryContext = {
 		manager: options.key,
 		method,
 		scope,
-		mutationId: effectiveCallOptions?.mutationId
+		mutationId: effectiveCallOptions?.mutationId,
+		...execution
 	};
 
 	await callHook(() => options.telemetry?.start?.(telemetryContext));
 
-	const authResult = await authorize(options, context, boundParams, telemetryContext);
+	const authResult = await authorize(options, context, params, telemetryContext);
 	if (authResult.isErr()) {
 		return authResult;
 	}
 
 	try {
 		const resourceMethod = resource[method];
-		if (typeof resourceMethod !== 'function') {
+		if (!resourceMethod) {
 			const errorValue = syncError('bad_request', `Sync manager method is not defined: ${method}.`);
 			await reportManagerError(options, telemetryContext, errorValue);
 			return err(errorValue);
 		}
+		const executeResource = resourceMethod;
 
 		const mutationIdentity =
 			isWriteMethod(method) && effectiveCallOptions?.mutationId
@@ -987,7 +1112,7 @@ async function executeManagerResourceMethod<TContext, TParams extends object>(
 				: undefined;
 
 		if (mutationIdentity) {
-			const existing = await options.persistence.readMutation(scope, mutationIdentity.id);
+			const existing = await options.persistence.readMutation(scope, mutationIdentity.id, execution);
 			if (existing) {
 				if (existing.method !== method || existing.argsHash !== mutationIdentity.argsHash) {
 					const errorValue = syncError('conflict', 'Mutation id was already used with different arguments.', {
@@ -1031,7 +1156,12 @@ async function executeManagerResourceMethod<TContext, TParams extends object>(
 					return err(errorValue);
 				}
 
-				const inFlightResult = await inFlight.promise;
+				const inFlightResult = await waitForInFlight(inFlight.promise, execution.signal);
+				if (!inFlightResult) {
+					const errorValue = syncError('aborted', 'Sync operation was aborted.');
+					await reportManagerError(options, telemetryContext, errorValue);
+					return err(errorValue);
+				}
 				if (inFlightResult.isOk()) {
 					await callHook(() =>
 						options.telemetry?.success?.(telemetryContext, collectMetrics(inFlightResult.value.raw))
@@ -1058,11 +1188,8 @@ async function executeManagerResourceMethod<TContext, TParams extends object>(
 		return executeResourceAndPersist();
 
 		async function executeResourceAndPersist(): Promise<SyncResult<ManagerExecutionSuccess, SyncError>> {
-			const resourceArgs = mergeParams(boundParams, args);
-			const result = await (resourceMethod as RuntimeResourceMethod)(
-				resourceArgs,
-				withDeferredSourceCommit(method, effectiveCallOptions)
-			);
+			const resourceArgs = mergeParams(params, args);
+			const result = await executeResource(resourceArgs, withDeferredSourceCommit(method, effectiveCallOptions));
 			if (result.isErr()) {
 				await reportManagerError(options, telemetryContext, result.error);
 				return result;
@@ -1088,10 +1215,10 @@ async function executeManagerResourceMethod<TContext, TParams extends object>(
 						metrics: collectMetrics(result.value)
 					})
 				: undefined;
-			const commitResult = await commitDeferredSourceWrite(result.value, {
-				mutationRecord,
-				envelope
-			});
+			const commitResult = await commitDeferredSourceWrite(
+				result.value,
+				withCommitExecution({ mutationRecord, envelope }, execution)
+			);
 			if (commitResult.isErr()) {
 				await reportManagerError(options, telemetryContext, commitResult.error);
 				return commitResult;
@@ -1100,26 +1227,32 @@ async function executeManagerResourceMethod<TContext, TParams extends object>(
 			const metrics = collectMetrics(raw);
 			if (envelope && isWriteMethod(method)) {
 				if (mutationRecord && !commitResult.value.syncPersisted) {
-					await options.persistence.recordMutation({
-						...mutationRecord,
-						metrics
-					});
-					await publish(envelope, { alreadyPersisted: true });
+					await options.persistence.recordMutation(
+						{
+							...mutationRecord,
+							metrics
+						},
+						execution
+					);
+					await publish(envelope, { alreadyPersisted: true, execution });
 				} else if (commitResult.value.syncPersisted) {
-					await publish(envelope, { alreadyPersisted: true });
+					await publish(envelope, { alreadyPersisted: true, execution });
 				} else {
-					await publish(envelope);
+					await publish(envelope, { execution });
 				}
 			} else if (mutationRecord && !commitResult.value.syncPersisted) {
-				await options.persistence.recordMutation({
-					...mutationRecord,
-					metrics
-				});
+				await options.persistence.recordMutation(
+					{
+						...mutationRecord,
+						metrics
+					},
+					execution
+				);
 			}
 
 			const signalEnvelope = buildSignalEnvelope(options.key, scope, raw, nextCursor);
 			if (signalEnvelope) {
-				await publish(signalEnvelope, { transient: true });
+				await publish(signalEnvelope, { transient: true, execution });
 			}
 
 			await callHook(() => options.telemetry?.success?.(telemetryContext, metrics));
@@ -1130,7 +1263,9 @@ async function executeManagerResourceMethod<TContext, TParams extends object>(
 			});
 		}
 	} catch (cause) {
-		const errorValue = normalizeSyncError(cause);
+		const errorValue = execution.signal.aborted
+			? syncError('aborted', 'Sync operation was aborted.')
+			: normalizeSyncError(cause);
 		await reportManagerError(options, telemetryContext, errorValue);
 		return err(errorValue);
 	}
@@ -1139,7 +1274,7 @@ async function executeManagerResourceMethod<TContext, TParams extends object>(
 async function executeHttpMethod<TContext, TParams extends object>(
 	options: RuntimeManagerOptions<TContext, TParams> & { readonly maxPayloadBytes?: number },
 	resource: RuntimeResource,
-	method: string,
+	method: MethodKind,
 	args: {
 		readonly request: Request;
 		readonly params: TParams;
@@ -1147,15 +1282,12 @@ async function executeHttpMethod<TContext, TParams extends object>(
 		readonly options?: OperationOptions;
 	},
 	nextCursor: () => string,
-	publish: (
-		envelope: SyncEnvelope,
-		options?: { readonly alreadyPersisted?: boolean; readonly transient?: boolean }
-	) => Promise<void>
+	publish: PublishEnvelope
 ): Promise<Response> {
-	const definition = resource.definition.methods[method as MethodKind];
+	const definition = resource.definition.methods[method];
 	const parsedArgs = await parseHttpArgs(method, definition, args.request, options.maxPayloadBytes ?? 1024 * 1024);
 	if (parsedArgs.isErr()) {
-		return jsonResponse(syncHttpError(parsedArgs.error), syncErrorToStatus(parsedArgs.error));
+		return jsonResponse(syncHttpError(parsedArgs.error), syncErrorToHttpStatus(parsedArgs.error));
 	}
 
 	const operationOptions = mergeOperationOptions(operationOptionsFromRequest(args.request), args.options);
@@ -1177,7 +1309,7 @@ async function executeHttpMethod<TContext, TParams extends object>(
 			isError: true,
 			error: toSyncProtocolError(result.error)
 		};
-		return jsonResponse(body, syncErrorToStatus(result.error));
+		return jsonResponse(body, syncErrorToHttpStatus(result.error));
 	}
 
 	const body: SyncHttpResult<unknown> = {
@@ -1197,6 +1329,7 @@ function mergeOperationOptions(base: OperationOptions, next: OperationOptions | 
 	return {
 		...base,
 		...next,
+		signal: base.signal ? combineAbortSignals(base.signal, next.signal) : next.signal,
 		meta:
 			base.meta || next.meta
 				? {
@@ -1208,8 +1341,8 @@ function mergeOperationOptions(base: OperationOptions, next: OperationOptions | 
 }
 
 async function parseHttpArgs(
-	method: string,
-	definition: unknown,
+	method: MethodKind,
+	definition: RuntimeMethodDefinition | undefined,
 	request: Request,
 	maxPayloadBytes: number
 ): Promise<SyncResult<unknown, SyncError>> {
@@ -1243,7 +1376,8 @@ function parseQuery(request: Request): unknown {
 	const rawQuery = url.searchParams.get('query');
 	if (rawQuery) {
 		try {
-			return JSON.parse(rawQuery) as unknown;
+			const value: unknown = JSON.parse(rawQuery);
+			return value;
 		} catch {
 			return rawQuery;
 		}
@@ -1313,7 +1447,8 @@ async function readJsonBody(request: Request, maxPayloadBytes: number): Promise<
 		}
 
 		const text = textDecoder.decode(bytes);
-		return ok(JSON.parse(text) as unknown);
+		const value: unknown = JSON.parse(text);
+		return ok(value);
 	} catch (cause) {
 		return err('bad_request', 'Invalid JSON body.', { cause });
 	}
@@ -1333,16 +1468,15 @@ function operationOptionsFromRequest(request: Request): OperationOptions {
 	const mutationId = request.headers.get('x-mutation-id') ?? url.searchParams.get('mutationId') ?? undefined;
 	const clientId = request.headers.get('x-client-id') ?? url.searchParams.get('clientId') ?? undefined;
 	const meta = readRequestMeta(request);
+	if (!clientId && !meta) {
+		return { mutationId, signal: request.signal };
+	}
+
+	const requestMeta = clientId ? { ...meta, clientId } : meta;
 	return {
 		mutationId,
 		signal: request.signal,
-		meta:
-			clientId || meta
-				? {
-						...meta,
-						...(clientId ? { clientId } : {})
-					}
-				: undefined
+		meta: requestMeta
 	};
 }
 
@@ -1353,9 +1487,9 @@ function readRequestMeta(request: Request): OperationMeta | undefined {
 	}
 
 	try {
-		const value = JSON.parse(raw) as unknown;
-		if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-			return value as OperationMeta;
+		const value = JSON.parse(raw);
+		if (isRecord(value)) {
+			return value;
 		}
 	} catch {}
 
@@ -1371,15 +1505,10 @@ async function authorize<TContext, TParams extends object>(
 	options: RuntimeManagerOptions<TContext, TParams>,
 	context: TContext | undefined,
 	params: TParams,
-	telemetryContext: {
-		readonly manager: string;
-		readonly method: string;
-		readonly scope: string;
-		readonly mutationId?: string;
-	}
+	telemetryContext: ManagerTelemetryContext
 ): Promise<SyncResult<void, SyncError>> {
 	try {
-		const result = await options.authorize(context, params);
+		const result = await options.authorize(context, params, telemetryContext);
 		if (result === false) {
 			const errorValue = syncError('forbidden', 'Forbidden.');
 			await reportManagerError(options, telemetryContext, errorValue);
@@ -1391,13 +1520,15 @@ async function authorize<TContext, TParams extends object>(
 		}
 		return ok();
 	} catch (cause) {
-		const errorValue = normalizeSyncError(cause);
+		const errorValue = telemetryContext.signal.aborted
+			? syncError('aborted', 'Sync operation was aborted.')
+			: normalizeSyncError(cause);
 		await reportManagerError(options, telemetryContext, errorValue);
 		return err(errorValue);
 	}
 }
 
-function mergeParams(params: object, args: unknown): unknown {
+function mergeParams<TParams extends object, TArgs>(params: TParams, args: TArgs) {
 	if (args === undefined) {
 		return {
 			params
@@ -1406,7 +1537,7 @@ function mergeParams(params: object, args: unknown): unknown {
 
 	if (Array.isArray(args)) {
 		return args.map((item) => {
-			if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+			if (!isRecord(item)) {
 				return item;
 			}
 			return {
@@ -1416,7 +1547,7 @@ function mergeParams(params: object, args: unknown): unknown {
 		});
 	}
 
-	if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+	if (!isRecord(args)) {
 		return args;
 	}
 
@@ -1426,7 +1557,7 @@ function mergeParams(params: object, args: unknown): unknown {
 	};
 }
 
-function unwrapResourceValue(value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>): unknown {
+function unwrapResourceValue<TValue>(value: ResourceHandlerOk<TValue> | SyncBatchOutput<ResourceHandlerOk<TValue>>) {
 	if (!isBatchOutput(value)) {
 		return 'output' in value ? value.output : undefined;
 	}
@@ -1504,7 +1635,10 @@ function buildMutationRecord(input: {
 	};
 }
 
-function withDeferredSourceCommit(method: string, options: OperationOptions | undefined): OperationOptions | undefined {
+function withDeferredSourceCommit(
+	method: MethodKind,
+	options: OperationOptions | undefined
+): InternalOperationOptions | undefined {
 	if (!isWriteMethod(method)) {
 		return options;
 	}
@@ -1512,15 +1646,12 @@ function withDeferredSourceCommit(method: string, options: OperationOptions | un
 	return {
 		...options,
 		deferSourceCommit: true
-	} as InternalOperationOptions;
+	};
 }
 
 async function commitDeferredSourceWrite(
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>,
-	context: {
-		readonly mutationRecord?: ManagerMutationRecord;
-		readonly envelope?: SyncEnvelope;
-	}
+	context: ResourceCommitContext
 ): Promise<SyncResult<DeferredSourceCommitResult, SyncError>> {
 	if (isBatchOutput(value)) {
 		if (value.sourceCommit) {
@@ -1596,11 +1727,11 @@ function mergeMetrics(
 	return [...first, ...second];
 }
 
-function buildEnvelope(
+function buildEnvelope<TArgs>(
 	managerKey: string,
 	scope: string,
 	method: string,
-	args: unknown,
+	args: TArgs,
 	options: OperationOptions | undefined,
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>,
 	nextCursor: () => string
@@ -1648,9 +1779,9 @@ function buildSignalEnvelope(
 	};
 }
 
-function collectChanges(
+function collectChanges<TArgs>(
 	method: string,
-	args: unknown,
+	args: TArgs,
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>
 ): readonly SyncChange[] {
 	if (!isBatchOutput(value)) {
@@ -1676,7 +1807,7 @@ function collectChanges(
 	return changes;
 }
 
-function inferChanges(method: string, args: unknown, output: unknown): readonly SyncChange[] {
+function inferChanges<TArgs, TOutput>(method: string, args: TArgs, output: TOutput): readonly SyncChange[] {
 	switch (method) {
 		case 'list': {
 			if (isRecord(output) && Array.isArray(output.items)) {
@@ -1736,20 +1867,16 @@ function inferChanges(method: string, args: unknown, output: unknown): readonly 
 	}
 }
 
-function readRecordField(value: unknown, key: string): unknown {
+function readRecordField<TValue>(value: TValue, key: string) {
 	return isRecord(value) ? value[key] : undefined;
 }
 
-function readStringField(value: unknown, key: string): string | undefined {
+function readStringField<TValue>(value: TValue, key: string): string | undefined {
 	return isRecord(value) ? readString(value[key]) : undefined;
 }
 
-function readString(value: unknown): string | undefined {
-	return typeof value === 'string' ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
+function readString<TValue>(value: TValue): string | undefined {
+	return isString(value) ? value : undefined;
 }
 
 function getSyncCursor(
@@ -1833,14 +1960,14 @@ function isWriteMethod(method: string): boolean {
 	return method === 'add' || method === 'mutate' || method === 'delete';
 }
 
-function methodHasQuery(method: unknown): boolean {
-	return isRecord(method) && 'query' in method && method.query !== undefined;
+function methodHasQuery(method: RuntimeMethodDefinition | undefined): boolean {
+	return method?.query !== undefined;
 }
 
 function isBatchOutput(
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>
 ): value is SyncBatchOutput<ResourceHandlerOk<unknown>> {
-	return typeof value === 'object' && value !== null && 'items' in value && Array.isArray(value.items);
+	return isRecord(value) && 'items' in value && Array.isArray(value.items);
 }
 
 export function encodeScope(key: string, scope: ScopeValue): string {
@@ -1850,19 +1977,33 @@ export function encodeScope(key: string, scope: ScopeValue): string {
 
 async function reportManagerError<TContext, TParams extends object>(
 	options: RuntimeManagerOptions<TContext, TParams>,
-	context: {
-		readonly manager: string;
-		readonly method: string;
-		readonly scope: string;
-		readonly mutationId?: string;
-	},
+	context: ManagerTelemetryContext,
 	errorValue: SyncError
 ): Promise<void> {
 	await callHook(() => options.telemetry?.error?.(context, errorValue));
 	await callHook(() => options.handleError?.(errorValue, context));
 }
 
-async function callHook(run: () => unknown): Promise<SyncResult<void, SyncError>> {
+function operationExecution(options: OperationOptions | undefined): OperationExecution {
+	return {
+		signal: options?.signal ?? unboundedExecution.signal,
+		environment: options?.environment
+	};
+}
+
+function waitForInFlight<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+	if (signal.aborted) {
+		return Promise.resolve(undefined);
+	}
+	let onAbort!: () => void;
+	const aborted = new Promise<undefined>((resolve) => {
+		onAbort = () => resolve(undefined);
+		signal.addEventListener('abort', onAbort, { once: true });
+	});
+	return Promise.race([promise, aborted]).finally(() => signal.removeEventListener('abort', onAbort));
+}
+
+async function callHook<TValue>(run: () => TValue): Promise<SyncResult<void, SyncError>> {
 	try {
 		await run();
 		return ok();
@@ -1872,13 +2013,12 @@ async function callHook(run: () => unknown): Promise<SyncResult<void, SyncError>
 }
 
 function prunePersistenceScope(persistence: ManagerSyncPersistence, scope: string): void {
-	const maybePrunable = persistence as {
-		pruneScope?(scope: string): void;
-	};
-	maybePrunable.pruneScope?.(scope);
+	if ('pruneScope' in persistence && isCallable(persistence.pruneScope)) {
+		persistence.pruneScope(scope);
+	}
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse<TBody>(body: TBody, status = 200): Response {
 	return new Response(JSON.stringify(body), {
 		status,
 		headers: JSON_HEADERS
@@ -1894,10 +2034,7 @@ function syncHttpError(errorValue: SyncError): SyncHttpResult<unknown> {
 }
 
 function unrefTimer(timer: ReturnType<typeof setInterval> | undefined): void {
-	const maybeTimer = timer as { unref?(): void } | undefined;
-	maybeTimer?.unref?.();
-}
-
-function syncErrorToStatus(errorValue: SyncError): number {
-	return syncErrorToHttpStatus(errorValue);
+	if (timer && isUnrefableTimer(timer)) {
+		timer.unref();
+	}
 }

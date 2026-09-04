@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
 	manager,
 	ok,
-	resetSharedStreamForTests,
 	resource,
 	type ManagerMutationRecord,
 	type ManagerOutboxRead,
@@ -11,6 +10,7 @@ import {
 	type ManagerSyncPersistence,
 	type SyncEnvelope
 } from '../../src/server/index.ts';
+import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 
 const paramsSchema = {
 	parse(value: unknown): { workspaceId: string } {
@@ -344,5 +344,92 @@ describe('manager HTTP argument and metadata boundaries', () => {
 		expect(await response.json()).toMatchObject({ error: { code: 'payload_too_large' } });
 		expect(cancelled).toBe(true);
 		expect(handlerCalls).toBe(0);
+	});
+
+	it('counts exact UTF-8 request bytes rather than UTF-16 characters', async () => {
+		const body = JSON.stringify({ input: { id: '😀' } });
+		const byteLength = new TextEncoder().encode(body).byteLength;
+		let handlerCalls = 0;
+		const repository = resource(paramsSchema, (method) => ({
+			add: method.add({
+				input: recordSchema,
+				output: recordSchema,
+				handler({ input, ctx }) {
+					handlerCalls += 1;
+					return ctx.ok(input);
+				}
+			})
+		}));
+		const exact = manager({
+			key: 'http-unicode-exact',
+			resource: repository,
+			authorize: () => true,
+			scope: (params) => params.workspaceId,
+			maxPayloadBytes: byteLength
+		});
+		const tooSmall = manager({
+			key: 'http-unicode-small',
+			resource: repository,
+			authorize: () => true,
+			scope: (params) => params.workspaceId,
+			maxPayloadBytes: byteLength - 1
+		});
+
+		const accepted = await exact.http.add!({
+			request: new Request('https://sync.test/add', { method: 'POST', body }),
+			params: { workspaceId: 'w1' }
+		});
+		const rejected = await tooSmall.http.add!({
+			request: new Request('https://sync.test/add', { method: 'POST', body }),
+			params: { workspaceId: 'w1' }
+		});
+
+		expect(accepted.status).toBe(200);
+		expect(rejected.status).toBe(413);
+		expect(handlerCalls).toBe(1);
+	});
+
+	it('composes request and explicit signals and classifies explicit cancellation as aborted', async () => {
+		let started!: () => void;
+		const didStart = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		let handlerSignal: AbortSignal | undefined;
+		const repository = resource(paramsSchema, (method) => ({
+			add: method.add({
+				input: recordSchema,
+				output: recordSchema,
+				handler({ ctx }) {
+					handlerSignal = ctx.signal;
+					started();
+					return new Promise((_, reject) => {
+						ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true });
+					});
+				}
+			})
+		}));
+		const notes = manager({
+			key: 'http-signal-composition',
+			resource: repository,
+			authorize: () => true,
+			scope: (params) => params.workspaceId
+		});
+		const explicitAbort = new AbortController();
+		const request = new Request('https://sync.test/add', {
+			method: 'POST',
+			body: JSON.stringify({ input: { id: 'n1' } })
+		});
+		const responsePromise = notes.http.add!({
+			request,
+			params: { workspaceId: 'w1' },
+			options: { signal: explicitAbort.signal }
+		});
+		await didStart;
+		explicitAbort.abort(new Error('caller stopped'));
+		const response = await responsePromise;
+
+		expect(request.signal.aborted).toBe(false);
+		expect(handlerSignal?.aborted).toBe(true);
+		expect(await response.json()).toMatchObject({ error: { code: 'aborted' } });
 	});
 });

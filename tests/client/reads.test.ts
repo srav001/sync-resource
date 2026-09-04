@@ -10,7 +10,7 @@ import {
 	type MethodType,
 	type RuntimeTransport
 } from '../../src/client/core.ts';
-import { resetSharedStreamForTests } from '../../src/server/index.ts';
+import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 
 interface ReadManager extends ManagerTypeShape {
 	readonly key: 'read-tests';

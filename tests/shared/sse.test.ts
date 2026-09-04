@@ -48,6 +48,19 @@ describe('SSE framing', () => {
 		expect(JSON.parse(ordered.map((chunk) => chunk!.data).join(''))).toEqual(large);
 		expect(ordered[0]!.totalBytes).toBeGreaterThan(0);
 	});
+	it('rejects fractional and non-finite chunk indexes, counts, and byte lengths', () => {
+		const base = { type: 'sync-chunk', id: 'chunk', index: 0, total: 1, totalBytes: 1, data: 'x' };
+		expect(parseSyncEnvelopeChunkJson(JSON.stringify(base))).toEqual(base);
+		for (const malformed of [
+			{ ...base, index: 0.5 },
+			{ ...base, total: 1.5 },
+			{ ...base, totalBytes: 1.5 },
+			{ ...base, index: Number.NaN },
+			{ ...base, total: Number.POSITIVE_INFINITY }
+		]) {
+			expect(parseSyncEnvelopeChunkJson(JSON.stringify(malformed))).toBeUndefined();
+		}
+	});
 	it('rejects envelopes above the logical limit and respects frame limits', () => {
 		const large = {
 			...envelope,
