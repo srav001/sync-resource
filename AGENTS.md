@@ -106,9 +106,6 @@ and concrete IndexedDB implementations do not belong in this package.
 - Avoid barrel files except the three intentional package entrypoints.
 - Keep code formatted with tabs, width 4, single quotes, semicolons, no trailing commas, and a 120-column print width.
 - Keep persistent keys, channels, examples, and documentation product-neutral.
-- `tools/oxlint/` contains the generic Anti-Slop and Effect lint plugins loaded by `vite.config.ts`; lint and format
-  ignore this tooling directory. Custom rules apply to `src/`; tests retain their existing built-in lint rules. Library lint keeps the shared rules except `no-known-value-widening`,
-  `no-unknown-returns`, and `require-safety-comment-for-type-assertion`, which are intentionally disabled here.
 
 ## Bug Fixes
 
@@ -129,8 +126,6 @@ pnpm run validate
 
 Vite+ runs Oxfmt, Oxlint, type-aware checks, and Vitest. `pnpm run validate` is the required final validation command.
 It checks, tests, and builds the publishable ESM and declaration output into `dist`. Never edit `dist` by hand.
-The pinned `@oxlint/plugins` dependency supplies the local flat plugins in `tools/oxlint/`; keep that directory out of
-lint and format scans when changing the tooling.
 
 ## Publishing
 
