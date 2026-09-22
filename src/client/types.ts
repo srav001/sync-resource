@@ -145,6 +145,7 @@ export interface ReconcileConfig<
 	targetId?(context: ReconcileTargetContext<TParams, TTargetQuery, TTargetInput>): string;
 	matchesQuery?(item: TItem, context: ReconcileQueryContext<TParams, TPageQuery>): boolean;
 	compare?(this: void, left: TItem, right: TItem): number;
+	readonly addPlacement?: 'sorted';
 }
 
 export interface ReconcileBuilder<TManager extends ManagerTypeShape> {

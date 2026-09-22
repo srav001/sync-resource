@@ -59,6 +59,7 @@ export interface OptimisticReconcile<TItem = unknown, TQuery = unknown, TInput =
 	targetId(query: TQuery, input: TInput): string | undefined;
 	matchesQuery?(item: TItem, query: TQuery): boolean;
 	compare?(this: void, left: TItem, right: TItem): number;
+	addPlacement?: 'sorted';
 }
 
 export function createOptimisticState<TItem, TData, TQuery, TMeta>(): OptimisticState<TItem, TData, TQuery, TMeta> {
@@ -252,7 +253,7 @@ export function applyEnvelope<TQuery>(
 	for (const syncChange of envelope.changes) {
 		if (syncChange.type === 'itemAdded') {
 			state.baseItems.set(syncChange.id, syncChange.value);
-			if (sourceCommand?.method === 'add') {
+			if (sourceCommand?.method === 'add' && reconcile.addPlacement !== 'sorted') {
 				addToLoadedPage(state, syncChange.id);
 			} else {
 				for (const affectedId of reconcileAddedItemAcrossFamilies(
@@ -398,6 +399,9 @@ export function reconcileFromConfig<TItem, TQuery, TInput, TParams>(
 	}
 	if (config?.compare) {
 		reconcile.compare = config.compare;
+	}
+	if (config?.addPlacement) {
+		reconcile.addPlacement = config.addPlacement;
 	}
 	return reconcile;
 }
@@ -545,7 +549,7 @@ function applyEnvelopeWithRebuild<TQuery>(
 		}
 		if (syncChange.type === 'itemAdded') {
 			state.baseItems.set(syncChange.id, syncChange.value);
-			if (sourceCommand?.method === 'add') {
+			if (sourceCommand?.method === 'add' && reconcile.addPlacement !== 'sorted') {
 				addToLoadedPage(state, syncChange.id);
 			} else {
 				reconcileAddedItemAcrossFamilies(state, syncChange.id, syncChange.value, reconcile);
@@ -688,7 +692,8 @@ function reconcileAddedItemWithFamily<TItem>(
 	}
 
 	let droppedId: string | undefined;
-	if (familyComplete) {
+	if (familyComplete || reconcile.addPlacement === 'sorted') {
+		// Sorted opt-in additions must keep the existing cursor boundary reachable by a later loadMore.
 		loadedIds.splice(insertedIndex, 0, id);
 	} else {
 		droppedId = loadedIds[existingCount - 1];

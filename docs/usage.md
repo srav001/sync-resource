@@ -1390,12 +1390,27 @@ const notes = createStore<NotesManager>(config, (reconcile) =>
 
 `compare` is optional. Use it when user-visible order is domain-specific.
 
+`addPlacement: 'sorted'` is an opt-in for authoritative acknowledgements of the current browser's `add` writes. It
+uses the same `matchesQuery` and `compare` reconciliation as external realtime adds across every loaded query family,
+so a partially loaded page keeps its sorted window as later realtime changes arrive. Without this option, local add
+acknowledgements retain the legacy behavior of appending to the active family's first loaded page.
+
+`addPlacement: 'sorted'` requires `compare`; store construction throws when the option is supplied without an
+ordering function. The client does not infer an order or refetch to guess placement, so provide `compare` when sorted
+acknowledgement placement is needed.
+
+With sorted placement enabled, an item that belongs inside a partially loaded window grows the loaded ids instead of
+trimming the oldest id. The page's existing `cursorOut` remains the boundary for `loadMore()`, so later pagination can
+continue without skipping the row that was previously at that boundary. This applies to the acknowledged local add
+and to subsequent external realtime adds in the same loaded families.
+
 For realtime external `itemAdded` on a loaded page window:
 
 - if `matchesQuery` rejects the item, keep it out of the visible window
 - if the loaded family has one complete empty page and `matchesQuery` accepts the item, insert it into that page
 - if `compare` is missing, keep other non-empty entities cached but do not guess page placement
 - if `compare` proves the item sorts into a non-complete loaded window, insert and trim to the current loaded capacity
+  (unless `addPlacement: 'sorted'` is enabled, which preserves the existing cursor boundary by growing the loaded ids)
 - if the loaded family is complete, insert the matching item and grow the visible list
 - if it sorts beyond the loaded window, leave visible ids unchanged and do not refetch
 

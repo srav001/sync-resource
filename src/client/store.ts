@@ -336,6 +336,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly hasDefaultListQuery: boolean;
 
 	constructor(config: StoreConfig<TManager>, reconcile?: ReconcileConfig) {
+		if (reconcile?.addPlacement === 'sorted' && !reconcile.compare) {
+			throw new Error("reconcile.addPlacement 'sorted' requires reconcile.compare.");
+		}
 		this.config = config;
 		this.runtime = getSyncRuntime();
 		this.reconcile = reconcile;
