@@ -325,7 +325,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private cacheSaveRequested = false;
 	private cachedScopeParamsText: string | undefined;
 	private cachedScopeCacheKey: string | undefined;
-	private cachedPendingStateCleared = false;
+	private bootstrap: { readonly key: string; readonly task: Promise<SyncResult<void, SyncError>> } | undefined;
 	private activeHydrationCount = 0;
 	private hydrating = false;
 	private refreshing = false;
@@ -425,7 +425,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	async restore(): Promise<SyncResult<void, SyncError>> {
 		try {
 			const cached = await this.loadCachedState();
-			await this.clearCachedPendingStateOnce();
 			if (!cached) {
 				return ok(undefined);
 			}
@@ -670,13 +669,19 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private bootstrapCacheRead(): void {
 		// Construction must stay network-free; cache bootstrap gives instant UI without triggering server RU.
-		this.restore();
+		this.bootstrap = { key: this.cacheKey(), task: this.restore() };
 	}
 
 	private async hydrateOnce(onAuthoritativeReadStart?: () => void): Promise<SyncResult<void, SyncError>> {
 		this.beginHydration();
 		try {
-			const restoreResult = await this.restore();
+			// The first hydrate reuses the constructor's cache read unless the params changed or it failed.
+			const bootstrap = this.bootstrap;
+			this.bootstrap = undefined;
+			let restoreResult = bootstrap?.key === this.cacheKey() ? await bootstrap.task : undefined;
+			if (!restoreResult?.isOk()) {
+				restoreResult = await this.restore();
+			}
 			if (restoreResult.isErr()) {
 				return restoreResult;
 			}
@@ -1050,14 +1055,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		return item.value;
 	}
 
-	private async clearCachedPendingStateOnce(): Promise<void> {
-		if (this.cachedPendingStateCleared) {
-			return;
-		}
-		await this.cache().del(this.pendingCacheKey());
-		this.cachedPendingStateCleared = true;
-	}
-
 	private async saveCachedRuntimeState(): Promise<void> {
 		await this.saveCachedState();
 	}
@@ -1135,10 +1132,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private cacheKey(): string {
 		return `${this.scopeCacheKey()}:view`;
-	}
-
-	private pendingCacheKey(): string {
-		return `${this.scopeCacheKey()}:pending`;
 	}
 
 	private scopeCacheKey(): string {
