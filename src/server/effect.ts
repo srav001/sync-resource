@@ -350,6 +350,7 @@ export interface EffectManager<TKey extends string, TResource, TContext = undefi
 export interface EffectManagerOutbox<R> {
 	append(this: void, envelope: SyncEnvelope): Effect.Effect<void, SyncError, R>;
 	readAfter(this: void, scope: string, cursor: string, limit: number): Effect.Effect<ManagerOutboxRead, SyncError, R>;
+	latestCursor?(this: void, scope: string): Effect.Effect<string | undefined, SyncError, R>;
 }
 export interface EffectManagerPersistence<R> extends EffectManagerOutbox<R> {
 	readMutation(
@@ -540,7 +541,9 @@ function adaptManagerOptions<TKey extends string, TResource extends EffectResour
 	base: Context.Context<R>
 ): CreateManagerOptions<TKey, ResourceParams<TResource>, PlainResource<object, ResourceMethodMap>, TContext> {
 	const outbox = options.outbox;
+	const outboxLatestCursor = outbox?.latestCursor;
 	const persistence = options.persistence;
+	const persistenceLatestCursor = persistence?.latestCursor;
 	const realtimeBus = options.realtimeBus;
 	const telemetry = options.telemetry;
 	const telemetryStart = telemetry?.start;
@@ -561,7 +564,9 @@ function adaptManagerOptions<TKey extends string, TResource extends EffectResour
 			? {
 					append: (envelope, execution) => runFinal(() => outbox.append(envelope), execution),
 					readAfter: (scope, cursor, limit, execution) =>
-						run(() => outbox.readAfter(scope, cursor, limit), execution)
+						run(() => outbox.readAfter(scope, cursor, limit), execution),
+					latestCursor:
+						outboxLatestCursor && ((scope, execution) => run(() => outboxLatestCursor(scope), execution))
 				}
 			: undefined,
 		persistence: persistence
@@ -569,6 +574,9 @@ function adaptManagerOptions<TKey extends string, TResource extends EffectResour
 					append: (envelope, execution) => runFinal(() => persistence.append(envelope), execution),
 					readAfter: (scope, cursor, limit, execution) =>
 						run(() => persistence.readAfter(scope, cursor, limit), execution),
+					latestCursor:
+						persistenceLatestCursor &&
+						((scope, execution) => run(() => persistenceLatestCursor(scope), execution)),
 					readMutation: (scope, mutationId, execution) =>
 						run(() => persistence.readMutation(scope, mutationId), execution),
 					recordMutation: (record, execution) => runFinal(() => persistence.recordMutation(record), execution)

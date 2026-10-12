@@ -127,12 +127,33 @@ describe('shared stream replay gaps', () => {
 
 	it('resets instead of sending a replay truncated at the replay limit', async () => {
 		registerSharedStreamManager({ key: 'notes' });
-		const full = Array.from({ length: 100 }, (_, index) => env(`c${index + 1}`));
-		const p = persistence(() => ({ cursorFound: true, retainedEnvelopeCount: 150, envelopes: full }));
+		const retained = Array.from({ length: 150 }, (_, index) => env(`c${index + 1}`));
+		const p = persistence((_s, _c, limit) => ({
+			cursorFound: true,
+			retainedEnvelopeCount: 150,
+			envelopes: retained.slice(0, limit)
+		}));
 		await reg('t5', p, 'c0');
 		const res = await httpSharedSyncStream(stream('t5'));
 		const reader = res.body!.getReader();
 		await reader.read();
 		expect(await drain(reader, 150)).toEqual(['reset:retention_gap']);
+	});
+
+	it('replays without a reset when the pending envelopes exactly fill the replay limit', async () => {
+		registerSharedStreamManager({ key: 'notes' });
+		const retained = Array.from({ length: 100 }, (_, index) => env(`c${index + 1}`));
+		const p = persistence((_s, _c, limit) => ({
+			cursorFound: true,
+			retainedEnvelopeCount: 100,
+			envelopes: retained.slice(0, limit)
+		}));
+		await reg('t6', p, 'c0');
+		const res = await httpSharedSyncStream(stream('t6'));
+		const reader = res.body!.getReader();
+		await reader.read();
+		const frames = await drain(reader, 300);
+		expect(frames).toHaveLength(100);
+		expect(frames.at(-1)).toBe('c100');
 	});
 });

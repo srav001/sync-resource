@@ -286,6 +286,13 @@ export function createStoreRuntime<TManager extends ManagerTypeShape>(
 	return new ClientStoreCore(config, reconcileConfig).api();
 }
 
+interface RealtimeSubscription {
+	readonly scope: string;
+	readonly controller: AbortController;
+	registration?: Promise<SyncResult<void, SyncError>>;
+	unsubscribe?: () => void;
+}
+
 class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly config: StoreConfig<TManager>;
 	private readonly runtime: SyncRuntime;
@@ -317,9 +324,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly inflightHydrates = new Map<string, Promise<SyncResult<void, SyncError>>>();
 	private readonly queuedForcedHydrates = new Map<string, ForcedHydrationQueue>();
 	private readonly successfulHydrates = new Map<string, SyncResult<void, SyncError>>();
-	private transportUnsubscribe: (() => void) | undefined;
-	private realtimeScope: string | undefined;
-	private connectPromise: Promise<SyncResult<void, SyncError>> | undefined;
+	private realtime: RealtimeSubscription | undefined;
 	private visibleItemsCache: readonly CollectionItem<TManager>[] | undefined;
 	private readonly listItemsCache = new Map<string, readonly CollectionItem<TManager>[]>();
 	private cacheSaveTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -584,7 +589,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		this.queuedForcedHydrates.clear();
 		this.successfulHydrates.clear();
 		this.abort.abort();
-		this.transportUnsubscribe?.();
+		this.endRealtime();
 		this.repairScheduler.dispose();
 		this.pendingCommands.clear();
 		this.emit('disposed', 'pending', 'hydrating', 'refreshing');
@@ -899,51 +904,53 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		if (this.disposed) {
 			return err('disposed', 'Store is disposed.');
 		}
-		if (this.transportUnsubscribe) {
-			if (this.realtimeScope === this.scopeCacheKey()) {
-				return ok(undefined);
-			}
-			this.transportUnsubscribe();
-			this.transportUnsubscribe = undefined;
+		const scope = this.scopeCacheKey();
+		if (this.realtime?.scope !== scope) {
+			this.endRealtime();
+			this.realtime = { scope, controller: new AbortController() };
 		}
-		if (this.connectPromise) {
-			return this.connectPromise;
-		}
-		this.connectPromise = this.connectRealtime().finally(() => {
-			this.connectPromise = undefined;
-		});
-		return this.connectPromise;
+		const realtime = this.realtime;
+		realtime.registration ??= this.connectRealtime(realtime);
+		return realtime.registration;
 	}
 
-	private async connectRealtime(): Promise<SyncResult<void, SyncError>> {
+	private async connectRealtime(realtime: RealtimeSubscription): Promise<SyncResult<void, SyncError>> {
 		const params = this.config.getParams();
 		const baseUrl = this.config.getUrl(params).replace(/\/$/, '');
-		const controller = this.abort;
-		const scope = this.scopeCacheKey();
 		const result = await this.runtime.transport.subscribe({
 			url: this.realtimeUrl(`${baseUrl}/events`),
 			connectUrl: this.realtimeUrl(`${baseUrl}/connect`),
 			managerKey: this.config.key,
-			scope,
-			signal: controller.signal,
+			scope: realtime.scope,
+			signal: realtime.controller.signal,
 			getCursor: () => this.state.cursor,
 			onReconnect: this.handleReconnect,
 			onEnvelope: this.handleLiveEnvelope
 		});
-		if (this.disposed) {
-			if (result.isOk()) {
+		if (result.isOk()) {
+			realtime.unsubscribe = result.value;
+			if (realtime.controller.signal.aborted) {
 				result.value();
 			}
+		}
+		if (this.disposed) {
 			return err('disposed', 'Store is disposed.');
 		}
 		if (result.isOk()) {
-			this.transportUnsubscribe = result.value;
-			this.realtimeScope = scope;
 			return ok(undefined);
 		}
-		this.lastError = result.error;
-		this.emit('error');
+		if (result.error.code !== 'aborted') {
+			realtime.registration = undefined;
+			this.lastError = result.error;
+			this.emit('error');
+		}
 		return result;
+	}
+
+	// The signal also ends a registration the transport is still retrying after a failed connect.
+	private endRealtime(): void {
+		this.realtime?.controller.abort();
+		this.realtime?.unsubscribe?.();
 	}
 
 	// Stable identities let the transport keep one subscriber when a failed registration is retried by connect().

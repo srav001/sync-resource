@@ -437,6 +437,36 @@ describe('Effect server entrypoint', () => {
 		expect(events).toContain('subscribe');
 	});
 
+	it('forwards the persistence latest cursor to list reads', async () => {
+		const notes = resource(paramsSchema, (method) => ({
+			list: method.list({
+				output: { parse: (value: unknown) => value as { readonly items: readonly Note[] } },
+				handler: () => Effect.succeed({ items: [{ id: 'n1', title: 'one' }] })
+			})
+		}));
+		const notesManager = await Effect.runPromise(
+			manager({
+				key: 'effect-read-cursor',
+				resource: notes,
+				authorize: () => Effect.succeed(true),
+				scope: (params) => params.workspaceId,
+				persistence: {
+					append: () => Effect.void,
+					readAfter: () => Effect.succeed({ cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 }),
+					latestCursor: (scope) => Effect.succeed(`latest:${scope}`),
+					readMutation: () => Effect.succeed(undefined),
+					recordMutation: () => Effect.void
+				}
+			})
+		);
+		const response = await notesManager.http.list!({
+			request: new Request('https://sync.test/list'),
+			params: { workspaceId: 'w1' }
+		});
+		const body = (await response.json()) as { readonly envelope?: { readonly cursor: string } };
+		expect(body.envelope?.cursor).toBe('latest:effect-read-cursor:w1');
+	});
+
 	it('adapts the standalone outbox and shared-stream idle hook', async () => {
 		vi.useFakeTimers();
 		const events: string[] = [];

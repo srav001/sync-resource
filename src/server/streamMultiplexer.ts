@@ -430,10 +430,10 @@ function startReplay(stream: StreamState, detail: SubscriptionDetail, deferred: 
 async function replaySubscription(stream: StreamState, detail: SubscriptionDetail, afterCursor: string): Promise<void> {
 	let replaySucceeded = false;
 	try {
-		const replay = await detail.persistence.readAfter(detail.scope, afterCursor, detail.replayLimit, {
+		const replay = await detail.persistence.readAfter(detail.scope, afterCursor, detail.replayLimit + 1, {
 			signal: stream.signal
 		});
-		if (!replay.cursorFound || replay.envelopes.length >= detail.replayLimit) {
+		if (!replay.cursorFound || replay.envelopes.length > detail.replayLimit) {
 			stream.sendEnvelope(buildResetEnvelope(detail.managerKey, detail.scope, afterCursor, detail.nextCursor()));
 		} else {
 			for (const envelope of replay.envelopes) {
@@ -460,7 +460,6 @@ async function handleReplayFailure(stream: StreamState, detail: SubscriptionDeta
 	}
 	const errorValue = normalizeSyncError(cause);
 	await reportSharedStreamError(detail, errorValue);
-	stream.replayingScopes.delete(detail.scope);
 	stream.bufferedByScope.delete(detail.scope);
 	if (detail.afterCursor) {
 		stream.sendEnvelope(

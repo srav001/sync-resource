@@ -473,7 +473,7 @@ interface ManagerOutbox {
 		limit: number,
 		execution?: OperationExecution
 	): Awaitable<ManagerOutboxRead>;
-	latestCursor?(scope: string): Awaitable<string | undefined>;
+	latestCursor?(scope: string, execution?: OperationExecution): Awaitable<string | undefined>;
 }
 
 interface ManagerSyncPersistence extends ManagerOutbox {
@@ -494,11 +494,11 @@ Cursor contract:
 
 - Cursors are opaque replay tokens scoped to one manager scope.
 - `readAfter(scope, cursor, limit)` must return envelopes strictly after that cursor when it is retained.
-- If the cursor is not retained, return `cursorFound: false` and the retained count; the stream always emits a reset for an unknown cursor, including when nothing is retained. A replay that fills the replay limit also emits a reset instead of a partial replay.
-- `latestCursor(scope)` is optional and returns the cursor of the newest retained envelope of the scope, or `undefined` when there is none. It must return a cursor that `readAfter` can find.
+- If the cursor is not retained, return `cursorFound: false` and the retained count; the stream always emits a reset for an unknown cursor, including when nothing is retained. The stream reads up to `replayLimit + 1` envelopes and emits a reset instead of a partial replay when more than `replayLimit` are pending.
+- `latestCursor(scope)` is optional and returns the cursor of the newest retained envelope of the scope, or `undefined` when there is none. It must return a cursor that `readAfter` can find. Effect outboxes and persistence take the same optional `latestCursor(scope)` returning an Effect.
 - Manager-generated cursors include process entropy to avoid cross-process token collisions, but they are not a durable ordered sequence by themselves.
 - Durable persistence should make replay ordering stable across processes. If the backing store owns sequence numbers, the resource/commit path should return that persisted cursor through `syncCursor`.
-- Read/list responses must not invent replay cursors that are not present in durable persistence. When a read returns no `syncCursor` and the outbox implements `latestCursor`, the manager attaches the scope's latest outbox cursor, captured before the read handler runs, so replay covers commits that land between the read and the stream registration.
+- Read/list responses must not invent replay cursors that are not present in durable persistence. When a `list` read returns no `syncCursor` and the outbox implements `latestCursor`, the manager attaches the scope's latest outbox cursor, captured before the read handler runs, so replay covers commits that land between the read and the stream registration.
 
 Use `sourceCommit` when a resource needs the manager-supplied mutation record and envelope before committing the source DB write:
 

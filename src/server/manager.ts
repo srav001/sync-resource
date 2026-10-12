@@ -616,10 +616,10 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 								const replay = await persistence.readAfter(
 									scope,
 									afterCursor,
-									replayLimit,
+									replayLimit + 1,
 									streamExecution
 								);
-								if (!replay.cursorFound || replay.envelopes.length >= replayLimit) {
+								if (!replay.cursorFound || replay.envelopes.length > replayLimit) {
 									const resetEnvelope = buildResetEnvelope(
 										managerOptions.key,
 										scope,
@@ -973,8 +973,8 @@ class OutboxBackedManagerPersistence implements ManagerSyncPersistence {
 		return this.outbox.readAfter(scope, cursor, limit, execution);
 	}
 
-	latestCursor(scope: string): Awaitable<string | undefined> {
-		return this.outbox.latestCursor?.(scope);
+	latestCursor(scope: string, execution?: OperationExecution): Awaitable<string | undefined> {
+		return this.outbox.latestCursor?.(scope, execution);
 	}
 
 	readMutation(scope: string, mutationId: string): ManagerMutationRecord | undefined {
@@ -1198,7 +1198,8 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 
 		async function executeResourceAndPersist(): Promise<SyncResult<ManagerExecutionSuccess, SyncError>> {
 			// Captured before the read so replay from it covers every commit that lands while the read runs.
-			const readCursor = isWriteMethod(method) ? undefined : await options.persistence.latestCursor?.(scope);
+			const readCursor =
+				method === 'list' ? await options.persistence.latestCursor?.(scope, execution) : undefined;
 			const resourceArgs = mergeParams(params, args);
 			const result = await executeResource(resourceArgs, withDeferredSourceCommit(method, effectiveCallOptions));
 			if (result.isErr()) {

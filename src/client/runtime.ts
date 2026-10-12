@@ -386,7 +386,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		if (reconnectHydrator) {
 			entry.reconnectHydrators.delete(reconnectHydrator);
 		}
-		if (entry.subscribers.size > 0) {
+		if (entry.subscribers.size > 0 || this.subscriptions.get(entry.key) !== entry) {
 			return;
 		}
 		this.subscriptions.delete(entry.key);
