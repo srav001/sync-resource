@@ -267,14 +267,17 @@ describe('operation execution', () => {
 	it('reaches the authorize hook and the outbox latestCursor, append and readAfter', async () => {
 		let authorized: OperationExecution | undefined;
 		const notes = plainManager(recordingOutbox, (execution) => {
-			authorized = execution as OperationExecution;
+			authorized ??= execution as OperationExecution;
 			return true;
 		});
-		await notes.http.list!({ request: request('http://sync.test/list'), params });
-		const added = await notes.http.add!({
-			request: request('http://sync.test/add', { method: 'POST', body: JSON.stringify({ input: { id: 'n2' } }) }),
-			params
+		// A Request's signal follows the caller's signal only while the Request is reachable, so the test keeps both.
+		const listRequest = request('http://sync.test/list');
+		const addRequest = request('http://sync.test/add', {
+			method: 'POST',
+			body: JSON.stringify({ input: { id: 'n2' } })
 		});
+		await notes.http.list!({ request: listRequest, params });
+		const added = await notes.http.add!({ request: addRequest, params });
 		expect(added.status).toBe(200);
 		const reader = await openSharedStream(notes.http, params, { afterCursor: 'c1', signal: abort.signal });
 		await vi.waitFor(() => expect(calls).toHaveProperty('readAfter'));
@@ -283,6 +286,7 @@ describe('operation execution', () => {
 		const signals = [authorized, calls.latestCursor, calls.append, calls.readAfter].map(signalOf);
 		abort.abort();
 		expect(signals.every((signal) => signal.aborted)).toBe(true);
+		expect([listRequest.signal.aborted, addRequest.signal.aborted]).toEqual([true, true]);
 	});
 
 	it('reaches the outbox append when the write carries a mutation id', async () => {
