@@ -228,20 +228,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		this.disposed = true;
 		this.settleStreamAttempt();
 		clearTimeout(this.registrationHoldTimer);
-		this.streamAbort?.abort();
-		this.streamAbort = undefined;
-		if (this.reconnectTimer) {
-			clearTimeout(this.reconnectTimer);
-			this.reconnectTimer = undefined;
-		}
-		if (this.ownerHeartbeatTimer) {
-			clearInterval(this.ownerHeartbeatTimer);
-			this.ownerHeartbeatTimer = undefined;
-		}
-		this.broadcast?.close();
-		this.broadcast = undefined;
-		this.releaseOwnerLock?.();
-		this.releaseOwnerLock = undefined;
+		this.stopStream();
 		for (const entry of this.subscriptions.values()) {
 			entry.connectAbort?.abort();
 			clearTimeout(entry.retryTimer);
@@ -507,17 +494,17 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		// Do not keep a server subscription consuming cursors when no local store can observe the events.
 		this.isOwner = false;
 		this.started = false;
+		this.reconnectAttempt = 0;
+		this.stopStream();
+	}
+
+	private stopStream(): void {
 		this.streamAbort?.abort();
 		this.streamAbort = undefined;
-		this.reconnectAttempt = 0;
-		if (this.reconnectTimer) {
-			clearTimeout(this.reconnectTimer);
-			this.reconnectTimer = undefined;
-		}
-		if (this.ownerHeartbeatTimer) {
-			clearInterval(this.ownerHeartbeatTimer);
-			this.ownerHeartbeatTimer = undefined;
-		}
+		clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = undefined;
+		clearInterval(this.ownerHeartbeatTimer);
+		this.ownerHeartbeatTimer = undefined;
 		this.broadcast?.close();
 		this.broadcast = undefined;
 		this.releaseOwnerLock?.();
