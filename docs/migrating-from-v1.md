@@ -293,6 +293,8 @@ Sync Resource no longer uses any of these. Remove them from your code.
   `Sync operation failed.`.
 - **`SyncRecoveryMetadata`:** removed from every entry point; use `SyncErrorRecovery`.
 - **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.
+- **Shared stream:** the transport id is read only from the `x-sync-transport-id` header; the `transportId` query
+  parameter is gone. The browser client always sent the header.
 - **`RuntimeTransport.subscribe`:** the `url` and `streamUrl` options are removed, and `connectUrl`, `managerKey` and
   `scope` are required. The direct per-manager SSE subscription they served is gone with the `/events` route. The
   `streamUrl` option of `configureSync` is unchanged.

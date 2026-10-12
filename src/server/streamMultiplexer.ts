@@ -519,12 +519,8 @@ function buildResetEnvelope(
 	};
 }
 
-function getTransportId(request: Request): string | undefined {
-	return (
-		request.headers.get('x-sync-transport-id') ??
-		new URL(request.url, 'http://sync.local').searchParams.get('transportId') ??
-		undefined
-	);
+function getTransportId(request: Request): string | null {
+	return request.headers.get('x-sync-transport-id');
 }
 
 function getClientIp(request: Request): string {

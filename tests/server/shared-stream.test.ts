@@ -22,6 +22,11 @@ describe('shared physical SSE stream', () => {
 		expect(await response.json()).toMatchObject({ isError: true, error: { code: 'bad_request' } });
 	});
 
+	it('does not take the transport id from the query string', async () => {
+		const response = await httpSharedSyncStream(new Request('http://sync.test/stream?transportId=transport-1'));
+		expect(response.status).toBe(400);
+	});
+
 	it('opens with protocol hello version 1 and registered manager keys', async () => {
 		const system = createSyncTestSystem();
 		const transportId = 'transport-1';
