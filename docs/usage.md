@@ -166,24 +166,24 @@ the public shape; the source is the
 authoritative guide for exact validation, self-call, batch, envelope, and error behavior.
 
 ```ts
+import { and, desc, eq } from 'drizzle-orm';
 import { resource } from 'sync-resource/server';
 
-const notesRepository = getNotesRepository();
+import { db, notes } from './db.js';
 
 export const notesResource = resource(noteParamsSchema, (method) => ({
 	list: method.list({
 		query: notePageQuerySchema,
 		output: notePageSchema,
 		async handler({ params, query, ctx }) {
-			const page = await notesRepository.list<NoteDocument>({ params, query });
-			if (page.isErr()) {
-				return ctx.error(ctx.syncError('internal', page.error.message, { cause: page.error }));
-			}
+			const items = await db
+				.select()
+				.from(notes)
+				.where(eq(notes.workspaceId, params.workspaceId))
+				.orderBy(desc(notes.createdAt))
+				.limit(query.limit);
 
-			return ctx.ok({
-				items: page.value.items,
-				pageCursor: buildNextNoteCursor(page.value.items)
-			});
+			return ctx.ok({ items, pageCursor: buildNextNoteCursor(items) });
 		}
 	}),
 
@@ -191,16 +191,12 @@ export const notesResource = resource(noteParamsSchema, (method) => ({
 		input: createNoteSchema,
 		output: noteSchema,
 		async handler({ params, input, ctx }) {
-			const note = buildNoteDocument(params, input, ctx.actor);
-			const created = await notesRepository.create<NoteDocument>(note, 'create_note');
-			if (created.isErr()) {
-				return ctx.error(ctx.syncError('internal', created.error.message, { cause: created.error }));
-			}
-			if (!created.value.resource) {
-				return ctx.error(ctx.syncError('internal', 'Repository create did not return a note.'));
-			}
+			const [note] = await db
+				.insert(notes)
+				.values(buildNoteDocument(params, input, ctx.actor))
+				.returning();
 
-			return ctx.ok(created.value.resource);
+			return ctx.ok(note);
 		}
 	}),
 
@@ -209,20 +205,16 @@ export const notesResource = resource(noteParamsSchema, (method) => ({
 		input: notePatchSchema,
 		output: noteSchema,
 		async handler({ params, query, input, ctx }) {
-			const patched = await notesRepository.patch<NoteDocument>(
-				query.id,
-				{ operations: buildNotePatchOperations(input, ctx.actor) },
-				'patch_note',
-				params.workspaceId
-			);
-			if (patched.isErr()) {
-				return ctx.error(ctx.syncError('internal', patched.error.message, { cause: patched.error }));
-			}
-			if (!patched.value.resource) {
+			const [note] = await db
+				.update(notes)
+				.set({ ...input, updatedBy: ctx.actor })
+				.where(and(eq(notes.id, query.id), eq(notes.workspaceId, params.workspaceId)))
+				.returning();
+			if (!note) {
 				return ctx.error(ctx.syncError('not_found', 'Note not found.'));
 			}
 
-			return ctx.ok(patched.value.resource);
+			return ctx.ok(note);
 		}
 	}),
 
@@ -230,9 +222,12 @@ export const notesResource = resource(noteParamsSchema, (method) => ({
 		query: noteByIdSchema,
 		output: noteTombstoneSchema,
 		async handler({ params, query, ctx }) {
-			const deleted = await notesRepository.delete(query.id, 'delete_note', params.workspaceId);
-			if (deleted.isErr()) {
-				return ctx.error(ctx.syncError('internal', deleted.error.message, { cause: deleted.error }));
+			const deleted = await db
+				.delete(notes)
+				.where(and(eq(notes.id, query.id), eq(notes.workspaceId, params.workspaceId)))
+				.returning({ id: notes.id });
+			if (!deleted.length) {
+				return ctx.error(ctx.syncError('not_found', 'Note not found.'));
 			}
 
 			return ctx.ok({ id: query.id, deleted: true });
@@ -241,11 +236,11 @@ export const notesResource = resource(noteParamsSchema, (method) => ({
 }));
 ```
 
-Resource dependencies such as repositories, clocks, and id generators belong in closures or factory parameters:
+Resource dependencies such as the database client, clocks, and id generators belong in closures or factory parameters:
 
 ```ts
 interface CreateNotesResourceDeps {
-	readonly repository: NotesRepository;
+	readonly db: typeof db;
 	readonly clock: Clock;
 }
 
@@ -256,20 +251,16 @@ export function createNotesResource(deps: CreateNotesResourceDeps) {
 			input: notePatchSchema,
 			output: noteSchema,
 			async handler({ params, query, input, ctx }) {
-				const patched = await deps.repository.patch<NoteDocument>(
-					query.id,
-					{ operations: buildNotePatchOperations(input, deps.clock.now()) },
-					'patch_note',
-					params.workspaceId
-				);
-				if (patched.isErr()) {
-					return ctx.error(ctx.syncError('internal', patched.error.message, { cause: patched.error }));
-				}
-				if (!patched.value.resource) {
+				const [note] = await deps.db
+					.update(notes)
+					.set({ ...input, updatedAt: deps.clock.now() })
+					.where(and(eq(notes.id, query.id), eq(notes.workspaceId, params.workspaceId)))
+					.returning();
+				if (!note) {
 					return ctx.error(ctx.syncError('not_found', 'Note not found.'));
 				}
 
-				return ctx.ok(patched.value.resource);
+				return ctx.ok(note);
 			}
 		})
 	}));
@@ -513,26 +504,12 @@ return ctx.ok({
 	changes: [change.itemUpdated({ id: note.id, value: note })],
 	sourceCommit: {
 		async commit({ mutationRecord, envelope }) {
-			const response = await notesRepository.patch<NoteDocument>(
-				note.id,
-				{ operations: buildNoteAndSyncPatch(note, mutationRecord, envelope) },
-				'commit_note_and_sync',
-				note.workspaceId
-			);
-			if (response.isErr()) {
-				return ctx.error(ctx.syncError('internal', response.error.message, { cause: response.error }));
-			}
+			await db
+				.update(notes)
+				.set({ ...note, syncRecord: mutationRecord, syncEnvelope: envelope })
+				.where(and(eq(notes.id, note.id), eq(notes.workspaceId, note.workspaceId)));
 
-			return ctx.ok({
-				syncPersisted: true,
-				metrics: [
-					{
-						name: 'database.operationCost',
-						value: response.value.operationCost ?? 0,
-						unit: 'units'
-					}
-				]
-			});
+			return ctx.ok({ syncPersisted: true });
 		}
 	}
 });
@@ -586,6 +563,10 @@ Rules:
 Example DB-native batch handler:
 
 ```ts
+import { and, eq } from 'drizzle-orm';
+
+import { db, notes } from './db.js';
+
 mutate: method.mutate({
 	query: noteByIdSchema,
 	input: notePatchSchema,
@@ -597,24 +578,13 @@ mutate: method.mutate({
 
 		for (let index = 0; index < items.length; index += 1) {
 			const item = items[index];
-			const patched = await notesRepository.patch<NoteDocument>(
-				item.query.id,
-				{ operations: buildNotePatchOperations(item.input) },
-				'patch_notes_batch',
-				params.workspaceId
-			);
+			const [patched] = await db
+				.update(notes)
+				.set(item.input)
+				.where(and(eq(notes.id, item.query.id), eq(notes.workspaceId, params.workspaceId)))
+				.returning();
 
-			if (patched.isErr()) {
-				errorCount += 1;
-				outputs.push({
-					index,
-					status: 'error',
-					error: ctx.syncError('internal', patched.error.message, { cause: patched.error })
-				});
-				continue;
-			}
-
-			if (!patched.value.resource) {
+			if (!patched) {
 				errorCount += 1;
 				outputs.push({
 					index,
@@ -628,7 +598,7 @@ mutate: method.mutate({
 			outputs.push({
 				index,
 				status: 'ok',
-				value: { output: patched.value.resource }
+				value: { output: patched }
 			});
 		}
 
@@ -675,11 +645,11 @@ export function handleSyncResourceConnect(request: Request): Promise<Response> {
 with a `POST` `Request` built from the item URL, so each item runs through the manager's normal `/connect` route with
 its own params, context, and authentication.
 
-Mount manager handlers only for methods defined by that manager:
+`manager.http` has one handler per method the resource defines, plus `connect`:
 
 ```ts
-export function connectNotes(request: Request, workspaceId: string): Promise<Response> | undefined {
-	return notesManager.http.connect?.({
+export function connectNotes(request: Request, workspaceId: string): Promise<Response> {
+	return notesManager.http.connect({
 		request,
 		params: { workspaceId }
 	});
@@ -725,8 +695,12 @@ Effect is an optional peer dependency (`effect >=4.0.3 <5`): install it only for
 shared, client, and Promise-native server imports never load Effect.
 
 ```ts
+import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
+import { syncError } from 'sync-resource/server';
 import { manager, resource } from 'sync-resource/server/effect';
+
+import { Database, notes } from './db.js';
 
 const notesResource = resource(noteParamsSchema, (method) => ({
 	list: method.list({
@@ -734,8 +708,13 @@ const notesResource = resource(noteParamsSchema, (method) => ({
 		output: notePageSchema,
 		handler: ({ params, query }) =>
 			Effect.gen(function* () {
-				const repository = yield* NotesRepository;
-				return yield* repository.list(params, query.limit);
+				const db = yield* Database;
+				const items = yield* Effect.tryPromise({
+					try: () =>
+						db.select().from(notes).where(eq(notes.workspaceId, params.workspaceId)).limit(query.limit),
+					catch: (cause) => syncError('internal', 'Notes read failed.', { cause })
+				});
+				return { items };
 			})
 	})
 }));
@@ -960,9 +939,9 @@ once with method `realtimeBus.publish`; neither failure invalidates a committed 
 
 ### Batched registration
 
-By default the browser sends every registration queued in the same microtask as one
-`POST /api/sync-resource/connect` request instead of one request per store. A page boot that opens 13 stores sends one
-request. The body lists each registration's manager `/connect` URL, including its `after` replay cursor:
+The browser sends every registration queued in the same microtask as one `POST /api/sync-resource/connect` request. A
+page boot that opens 13 stores sends one request. The body lists each registration's manager `/connect` URL, including
+its `after` replay cursor:
 
 ```json
 { "connects": ["/api/notes/sync/connect?after=cursor-1", "/api/tasks/sync/connect"] }
@@ -982,9 +961,9 @@ item, in request order:
 }
 ```
 
-Each `body` is exactly what the direct route returned, so the client applies its normal connect handling per item. A
-failed item fails and retries alone with the usual registration backoff; a failed or malformed batch response fails and
-retries every item. A dispatch that throws becomes `{ status: 500, body: <internal error> }` for that item only.
+Each `body` is exactly what the manager's `/connect` route returned, so the client applies its normal connect handling
+per item. A failed item fails and retries alone with the usual registration backoff; a failed or malformed batch
+response fails and retries every item. A dispatch that throws becomes `{ status: 500, body: <internal error> }` for that item only.
 
 Rules:
 
@@ -995,8 +974,6 @@ Rules:
 - While any store read is in flight the transport holds queued registrations (`RuntimeTransport.holdRegistrations`, optional for custom transports) and sends them together a task after the last read ends, or after two seconds. A boot whose stores finish their reads at different times still sends one request; each read's replay cursor covers the wait.
 - Registrations still wait for the owner's first stream attempt, so a boot sends one batch. Reconnect re-registrations
   batch the same way.
-- Set `batchConnect: false` in `configureSync(...)` to send one direct `POST <manager>/connect` per registration, and do
-  not mount the batch route.
 
 ## Frontend Runtime Configuration
 
@@ -1013,7 +990,6 @@ configureSync({
 	fetch: globalFetch,
 	streamUrl: '/api/sync-resource/stream',
 	connectUrl: '/api/sync-resource/connect',
-	batchConnect: true,
 	cache: {
 		adapter: new IndexedDbCacheAdapter('Sync Resource V1', 'store'),
 		ttlMs: 14 * DAY
@@ -1037,7 +1013,6 @@ Runtime options:
 
 - `streamUrl` defaults to `/api/sync-resource/stream`.
 - `connectUrl` defaults to `/api/sync-resource/connect`, the batch connect route.
-- `batchConnect` defaults to `true`. `false` sends one direct `POST <manager>/connect` per registration.
 
 Rules:
 
@@ -1612,6 +1587,10 @@ The 50,000-row local harness showed that 10,000-item pages were correct but made
 Backend list example:
 
 ```ts
+import { and, desc, eq, lt } from 'drizzle-orm';
+
+import { db, notes } from './db.js';
+
 const noteListQuerySchema = t.Object({
 	search: t.Optional(t.String()),
 	limit: t.Number(),
@@ -1632,17 +1611,24 @@ list: method.list({
 	query: noteListQuerySchema,
 	output: noteListPageSchema,
 	async handler({ params, query, ctx }) {
-		const page = await notesRepository.list<NoteDocument>({ params, query, limit: query.limit + 1 });
-		if (page.isErr()) {
-			return ctx.error(ctx.syncError('internal', page.error.message, { cause: page.error }));
-		}
-
 		const limit = query.limit;
-		const items = page.value.items.slice(0, limit);
+		const rows = await db
+			.select()
+			.from(notes)
+			.where(
+				and(
+					eq(notes.workspaceId, params.workspaceId),
+					query.cursor ? lt(notes.createdAt, decodeNoteCursor(query.cursor)) : undefined
+				)
+			)
+			.orderBy(desc(notes.createdAt))
+			.limit(limit + 1);
+
+		const items = rows.slice(0, limit);
 		const meta = query.cursor ? undefined : await buildNoteListMeta(params, query);
 		return ctx.ok({
 			items,
-			pageCursor: page.value.items.length > limit ? encodeNoteCursor(items[items.length - 1]) : undefined,
+			pageCursor: rows.length > limit ? encodeNoteCursor(items[items.length - 1]) : undefined,
 			meta
 		});
 	}
@@ -1731,7 +1717,7 @@ When adding a synced domain:
 - Putting DB dependencies into manager config.
 - Adding cache adapters per store instead of configuring cache once.
 - Opening one stream per store/manager/scope.
-- Mounting the stream route but not the batch connect route, while `batchConnect` is still `true`.
+- Mounting the stream route but not the batch connect route.
 - Treating HTTP ACK as finality.
 - Clearing pending state without authoritative envelope/reset coverage.
 - Persisting optimistic pending overlays or pending metadata in IndexedDB.

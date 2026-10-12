@@ -3,6 +3,9 @@
 Typed, server-authoritative synchronization: cached reads, optimistic writes, realtime updates, replay, repair, and
 mutation finality.
 
+> **Coding agents:** read [AGENTS.md](./AGENTS.md) first. It routes you to the correct usage guide and source layer. In
+> an installed project it is at `node_modules/sync-resource/AGENTS.md`, beside this README and `docs/`.
+
 - **Effect-native server.** `sync-resource/server/effect` takes Effect v4 handlers, typed failures, services, and
   interruption, and mounts on Effect's `HttpRouter`.
 - **Plain Promises, fully supported.** `sync-resource/server` and the client use ordinary `async` functions and strict
@@ -30,13 +33,17 @@ The same resource and manager, written both ways. Both expose the same HTTP hand
 **Promise**
 
 ```ts
+import { eq } from 'drizzle-orm';
 import { httpSharedSyncConnect, httpSharedSyncStream, manager, resource } from 'sync-resource/server';
+
+import { db, notes } from './db.js';
 
 const notesResource = resource(paramsSchema, (method) => ({
 	list: method.list({
 		output: pageSchema,
 		async handler({ params, ctx }) {
-			return ctx.ok(await notesRepository.list(params));
+			const items = await db.select().from(notes).where(eq(notes.workspaceId, params.workspaceId));
+			return ctx.ok({ items });
 		}
 	})
 }));
@@ -52,15 +59,18 @@ export type NotesManager = typeof notesManager.type;
 // Mount once per app: the shared stream and the batch connect route.
 httpSharedSyncStream(request);
 httpSharedSyncConnect(request, handleApplicationRequest);
-// Mount per manager: notesManager.http.list, .add, .mutate, .delete, .connect (only the methods you defined).
-notesManager.http.list?.({ request, params });
+// Mount per manager: one handler per method the resource defines, plus .connect.
+notesManager.http.list({ request, params });
+notesManager.http.connect({ request, params });
 ```
 
 **Effect**
 
 ```ts
+import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 import { HttpRouter } from 'effect/http';
+import { syncError } from 'sync-resource/server';
 import {
 	httpSharedSyncConnectRoute,
 	httpSharedSyncStreamRoute,
@@ -69,14 +79,16 @@ import {
 	resource
 } from 'sync-resource/server/effect';
 
+import { db, notes } from './db.js';
+
 const notesResource = resource(paramsSchema, (method) => ({
 	list: method.list({
 		output: pageSchema,
 		handler: ({ params }) =>
-			Effect.gen(function* () {
-				const repository = yield* NotesRepository;
-				return yield* repository.list(params);
-			})
+			Effect.tryPromise({
+				try: () => db.select().from(notes).where(eq(notes.workspaceId, params.workspaceId)),
+				catch: (cause) => syncError('internal', 'Notes read failed.', { cause })
+			}).pipe(Effect.map((items) => ({ items })))
 	})
 }));
 
@@ -146,14 +158,10 @@ is applied; realtime registration continues in the background. The application o
 
 ## Documentation
 
-- **Coding agents:** start with [AGENTS.md](./AGENTS.md). It routes agents to the correct usage guide and source layer.
 - [Complete usage and API](./docs/usage.md): resources, managers, the Effect server API, client stores, protocol,
   replay, repair, pagination, reconciliation, and finality
 - [Solid](./docs/solid.md), [Vue](./docs/vue.md), [React](./docs/react.md): adapter mapping and store ownership
 - [Migrating from v1](./docs/migrating-from-v1.md)
-
-`README.md`, `AGENTS.md`, and the complete `docs/` directory are published with the npm package. Agents working from
-an installed dependency can find them under `node_modules/sync-resource/`.
 
 ## Public Entry Points
 

@@ -7,8 +7,8 @@ carry the page, and an idle scope keeps only its newest outbox envelope. Everyth
 
 ## Checklist
 
-1. Mount the batch connect route on the server, or set `batchConnect: false` on the client. [Details](#1-mount-the-batch-connect-route-or-opt-out)
-2. Deploy the server before the v2 client. [Details](#1-mount-the-batch-connect-route-or-opt-out)
+1. Mount the batch connect route on the server. [Details](#1-mount-the-batch-connect-route)
+2. Deploy the server before the v2 client. [Details](#1-mount-the-batch-connect-route)
 3. Check code that relied on `hydrate()` also meaning "realtime is registered". [Details](#2-hydrate-resolves-when-the-read-is-applied)
 4. Remove `resetSharedStreamForTests` imports. [Details](#3-resetsharedstreamfortests-is-no-longer-exported)
 5. Only if you wrote your own outbox, persistence, or realtime bus: review [custom persistence](#4-custom-outbox-persistence-or-realtime-bus).
@@ -24,11 +24,10 @@ are listed in [No code change needed](#no-code-change-needed).
 
 ## Required changes
 
-### 1. Mount the batch connect route, or opt out
+### 1. Mount the batch connect route
 
 **What changed.** v1 sent one `POST <manager>/connect` per store. v2 sends every registration queued in the same
-microtask as one `POST /api/sync-resource/connect` (a boot that opens 13 stores sends one request). `batchConnect` defaults
-to `true`.
+microtask as one `POST /api/sync-resource/connect` (a boot that opens 13 stores sends one request).
 
 **Why it matters.** Without the route, each registration fails with `bad_request` (`Sync subscribe failed: 404`), the
 error appears as the store error, and the client retries with backoff up to 30 seconds. Reads, writes, and cache still
@@ -80,18 +79,12 @@ const SyncRoutes = Layer.mergeAll(
 configureSync({ cache: { adapter }, connectUrl: '/internal/sync/connect' });
 ```
 
-**Opt out.** Keep v1 behavior and do not mount the route:
-
-```ts
-configureSync({ cache: { adapter }, batchConnect: false });
-```
-
 Notes:
 
 - Keep the per-manager `/connect` routes mounted; the batch route dispatches to them.
 - The batch route accepts 1 to 64 same-origin paths ending in `/connect`; the client splits larger queues.
 - Deploy order: ship the server with the batch route first. The per-manager routes are unchanged, so v1 clients keep
-  using them. A v2 client against a server without the route loses realtime until the route exists (or `batchConnect: false`).
+  using them. A v2 client against a server without the route loses realtime until the route exists.
 - A store URL on another origin than the batch route connects directly.
 
 ### 2. `hydrate()` resolves when the read is applied
@@ -304,6 +297,8 @@ import { isOk, Result } from 'sync-resource/client/core';
 - Adapters (`sync-resource/client/react`, `solid`, `vue`) are unchanged.
 - TypeScript signatures that only widened (`Validator.parse`, `OperationMeta`, telemetry contexts now extend
   `OperationExecution`) need no change.
+- `manager.http` is typed from the resource: each method the resource defines, plus `connect`, is a required handler,
+  so existing `?.` and `!` calls keep working and can be dropped. Methods the resource does not define are not on the type.
 
 ## Optional additions
 
@@ -347,7 +342,10 @@ interruption. The client and HTTP protocol are identical, so you can move one ma
 **Before (Promise).**
 
 ```ts
+import { eq } from 'drizzle-orm';
 import { manager, resource } from 'sync-resource/server';
+
+import { db, notes } from './db.js';
 
 const notesResource = resource(paramsSchema, (method) => ({
 	mutate: method.mutate({
@@ -355,7 +353,7 @@ const notesResource = resource(paramsSchema, (method) => ({
 		input: noteSchema,
 		output: noteSchema,
 		async handler({ query, input, ctx }) {
-			const note = await notesRepository.find(query.id);
+			const [note] = await db.select().from(notes).where(eq(notes.id, query.id)).limit(1);
 			if (!note) {
 				return ctx.error(ctx.syncError('not_found', 'Note not found.'));
 			}
@@ -376,9 +374,12 @@ const notesManager = manager({
 an Effect; `manager(...)` is itself an Effect:
 
 ```ts
+import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 import { syncError } from 'sync-resource/server';
 import { manager, resource } from 'sync-resource/server/effect';
+
+import { db, notes } from './db.js';
 
 const notesResource = resource(paramsSchema, (method) => ({
 	mutate: method.mutate({
@@ -387,7 +388,10 @@ const notesResource = resource(paramsSchema, (method) => ({
 		output: noteSchema,
 		handler: ({ query, input }) =>
 			Effect.gen(function* () {
-				const note = yield* notesRepository.find(query.id);
+				const [note] = yield* Effect.tryPromise({
+					try: () => db.select().from(notes).where(eq(notes.id, query.id)).limit(1),
+					catch: (cause) => syncError('internal', 'Note read failed.', { cause })
+				});
 				if (!note) {
 					return yield* Effect.fail(syncError('not_found', 'Note not found.'));
 				}
@@ -426,4 +430,4 @@ reconcile.defaults({
 
 Only for apps that pass their own `transport` to `createRuntime`. Implement the optional
 `holdRegistrations(): () => void` and the store calls it while a read is in flight and releases it after, so queued
-registrations go out together. Without it, nothing changes; `batchConnect` and `connectUrl` apply only to the built-in transport.
+registrations go out together. Without it, nothing changes; `connectUrl` applies only to the built-in transport.
