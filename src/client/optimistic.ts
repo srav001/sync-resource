@@ -549,8 +549,8 @@ function applyPageItems<TItem, TQuery, TMeta>(
 		lastSyncCursor: syncCursor,
 		source
 	};
-	family.ids = [...family.ids.slice(0, replaceStart), ...ids, ...family.ids.slice(replaceEnd)];
-	family.items = [...family.items.slice(0, replaceStart), ...pageValues, ...family.items.slice(replaceEnd)];
+	replaceRange(family.ids, replaceStart, replaceEnd, ids);
+	replaceRange(family.items, replaceStart, replaceEnd, pageValues);
 	if (!cursorIn) {
 		family.pages = [page];
 	} else if (found >= 0) {
@@ -568,6 +568,18 @@ function applyPageItems<TItem, TQuery, TMeta>(
 	touch(family);
 	if (activate) {
 		state.activeFamilyKey = familyKey;
+	}
+}
+
+// A page appended after the last one costs only its own size; a page replaced in the middle moves the tail.
+function replaceRange<TValue>(target: TValue[], start: number, end: number, values: readonly TValue[]): void {
+	const tail = target.splice(end);
+	target.length = start;
+	for (const value of values) {
+		target.push(value);
+	}
+	for (const value of tail) {
+		target.push(value);
 	}
 }
 
