@@ -733,49 +733,40 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private async repair(): Promise<SyncResult<void, SyncError>> {
-		try {
-			if (this.disposed) {
-				return err('disposed', 'Store is disposed.');
-			}
-
-			const plan = this.repairRequested
-				? {
-						kind: 'scope' as const,
-						stalePageCount: activePageMetas(this.state).length
-					}
-				: this.repairScheduler.plan(activePageMetas(this.state));
-			if (plan.kind === 'none') {
-				return noRepairNeeded();
-			}
-
-			return this.repairScheduler.request(async () => {
-				try {
-					this.refreshing = true;
-					this.emit('refreshing');
-					const result =
-						activePageMetas(this.state).length > 0 ||
-						this.activeQuery !== undefined ||
-						this.hasDefaultListQuery
-							? await this.refresh(this.activeQuery)
-							: await this.get();
-					this.refreshing = false;
-					this.emit('refreshing');
-					if (result.isErr()) {
-						this.lastError = result.error;
-						this.emit('error');
-						return err(result.error);
-					}
-					this.repairRequested = false;
-					return ok(undefined);
-				} catch (cause) {
-					this.refreshing = false;
-					this.emit('refreshing');
-					return err(this.recordError(toStoreSyncError(cause)));
-				}
-			});
-		} catch (cause) {
-			return err(this.recordError(toStoreSyncError(cause)));
+		if (this.disposed) {
+			return err('disposed', 'Store is disposed.');
 		}
+		const plan = this.repairRequested
+			? {
+					kind: 'scope' as const,
+					stalePageCount: activePageMetas(this.state).length
+				}
+			: this.repairScheduler.plan(activePageMetas(this.state));
+		if (plan.kind === 'none') {
+			return noRepairNeeded();
+		}
+
+		return this.repairScheduler.request(async () => {
+			try {
+				this.refreshing = true;
+				this.emit('refreshing');
+				const result =
+					activePageMetas(this.state).length > 0 || this.activeQuery !== undefined || this.hasDefaultListQuery
+						? await this.refresh(this.activeQuery)
+						: await this.get();
+				this.refreshing = false;
+				this.emit('refreshing');
+				if (result.isErr()) {
+					return err(this.recordError(result.error));
+				}
+				this.repairRequested = false;
+				return ok(undefined);
+			} catch (cause) {
+				this.refreshing = false;
+				this.emit('refreshing');
+				return err(this.recordError(toStoreSyncError(cause)));
+			}
+		});
 	}
 
 	private async write<TOutput, TArgs>(
