@@ -292,7 +292,7 @@ export function isSyncChange(value: unknown): value is SyncChange {
 }
 
 export function isSyncSignal(value: unknown): value is SyncSignal {
-	return isRecord(value) && isString(value.type) && 'payload' in value;
+	return isRecord(value) && isString(value.type);
 }
 
 export function isSyncEnvelope(value: unknown): value is SyncEnvelope {

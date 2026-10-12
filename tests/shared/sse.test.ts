@@ -27,6 +27,11 @@ describe('SSE framing', () => {
 	it('parses valid envelopes and rejects malformed shapes', () => {
 		expect(parseSyncEnvelopeJson(JSON.stringify(envelope))).toEqual(envelope);
 		expect(parseSyncEnvelopeJson('{bad')).toBeUndefined();
+		const withSignal = { ...envelope, signals: [{ type: 'refresh', payload: undefined }] };
+		expect(parseSyncEnvelopeJson(JSON.stringify(withSignal))).toEqual({
+			...envelope,
+			signals: [{ type: 'refresh' }]
+		});
 		expect(parseSyncEnvelopeJson(JSON.stringify({ ...envelope, changes: [{ type: 'bad' }] }))).toBeUndefined();
 	});
 	it('encodes small envelopes as one sync frame', () => {

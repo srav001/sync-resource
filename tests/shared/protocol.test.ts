@@ -41,7 +41,8 @@ describe('shared protocol guards', () => {
 		expect(isSyncChange({ type: 'reset', manifest })).toBe(true);
 		expect(isSyncChange({ type: 'unknown' })).toBe(false);
 		expect(isSyncSignal({ type: 'refresh', payload: { id: 'n1' } })).toBe(true);
-		expect(isSyncSignal({ type: 'refresh' })).toBe(false);
+		expect(isSyncSignal({ type: 'refresh' })).toBe(true);
+		expect(isSyncSignal({ payload: 1 })).toBe(false);
 		expect(isSyncEnvelope({ ...envelope, changes: [{ type: 'bad' }] })).toBe(false);
 		expect(isSyncEnvelope({ ...envelope, metrics: [{ name: 'db', value: Infinity, unit: 'u' }] })).toBe(false);
 	});
