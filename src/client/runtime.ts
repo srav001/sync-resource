@@ -568,7 +568,6 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 					return;
 				}
 				this.isOwner = true;
-				this.startOwnerHeartbeat();
 				this.connectOwnerStream();
 				await new Promise<void>((resolve) => {
 					this.releaseOwnerLock = resolve;

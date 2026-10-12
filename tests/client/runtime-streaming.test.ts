@@ -369,6 +369,33 @@ describe('browser runtime registration order', () => {
 		}
 	});
 
+	it('keeps refreshing the localStorage owner record while a tab without Web Locks owns the stream', async () => {
+		const setItem = vi.fn();
+		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem } });
+		vi.stubGlobal('navigator', {});
+		vi.useFakeTimers();
+		const fetchImpl: typeof fetch = async (input, init) =>
+			toRequest(input, init).url.endsWith('/api/sync-resource/stream')
+				? sseResponse()
+				: connectResponse('notes:scope');
+		const runtime = createRuntime({
+			batchConnect: false,
+			cache,
+			fetch: fetchImpl,
+			createId: (prefix) => `${prefix}-storage-owner`
+		});
+		try {
+			expect((await subscribeTo(runtime, 'notes')).isOk()).toBe(true);
+			const writes = () => setItem.mock.calls.filter(([key]) => key === 'sync-resource:owner').length;
+			expect(writes()).toBe(1);
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(writes()).toBe(2);
+		} finally {
+			runtime.dispose();
+			vi.unstubAllGlobals();
+		}
+	});
+
 	describe('with Web Locks ownership', () => {
 		afterEach(() => {
 			vi.unstubAllGlobals();
@@ -416,6 +443,30 @@ describe('browser runtime registration order', () => {
 				const subscription = await subscribeTo(runtime, 'notes');
 				expect(subscription.isOk()).toBe(true);
 				expect(order).toEqual(['stream', 'connect']);
+			} finally {
+				runtime.dispose();
+			}
+		});
+
+		it('does not write a localStorage owner record while the tab holds the Web Lock', async () => {
+			stubBrowser({ granted: true });
+			const setItem = vi.fn();
+			vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem } });
+			vi.useFakeTimers();
+			const fetchImpl: typeof fetch = async (input, init) =>
+				toRequest(input, init).url.endsWith('/api/sync-resource/stream')
+					? sseResponse()
+					: connectResponse('notes:scope');
+			const runtime = createRuntime({
+				batchConnect: false,
+				cache,
+				fetch: fetchImpl,
+				createId: (prefix) => `${prefix}-lock-owner`
+			});
+			try {
+				expect((await subscribeTo(runtime, 'notes')).isOk()).toBe(true);
+				await vi.advanceTimersByTimeAsync(30_000);
+				expect(setItem).not.toHaveBeenCalledWith('sync-resource:owner', expect.anything());
 			} finally {
 				runtime.dispose();
 			}
