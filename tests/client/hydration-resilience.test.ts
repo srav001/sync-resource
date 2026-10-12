@@ -104,7 +104,7 @@ describe('hydration resilience', () => {
 		store.dispose();
 	});
 
-	it('retries both the read and realtime subscription after connect failure', async () => {
+	it('resolves hydrate on the read, reports a connect failure as the store error and only resubscribes on the next hydrate', async () => {
 		let reads = 0;
 		let subscriptions = 0;
 		const transport: RuntimeTransport = {
@@ -123,10 +123,32 @@ describe('hydration resilience', () => {
 		});
 		const store = createHydrationStore();
 
-		expect((await store.hydrate()).isErr()).toBe(true);
 		expect((await store.hydrate()).isOk()).toBe(true);
-		expect({ reads, subscriptions }).toEqual({ reads: 2, subscriptions: 2 });
-		expect(store.items()).toEqual([{ id: 'note-1', title: 'Read 2' }]);
+		await waitFor(() => store.error() !== undefined);
+		expect(store.error()?.message).toBe('transport unavailable');
+		expect((await store.hydrate()).isOk()).toBe(true);
+		expect({ reads, subscriptions }).toEqual({ reads: 1, subscriptions: 2 });
+		expect(store.items()).toEqual([{ id: 'note-1', title: 'Read 1' }]);
+		store.dispose();
+	});
+
+	it('resolves hydrate once the read is applied while the realtime registration is still pending', async () => {
+		let subscriptions = 0;
+		configureSync({
+			cache: { adapter: emptyCache },
+			transport: {
+				subscribe() {
+					subscriptions += 1;
+					return new Promise(() => {});
+				}
+			},
+			fetch: async () => syncResponse({ items: [{ id: 'note-1', title: 'Read 1' }] })
+		});
+		const store = createHydrationStore();
+
+		expect((await store.hydrate()).isOk()).toBe(true);
+		expect(subscriptions).toBe(1);
+		expect(store.items()).toEqual([{ id: 'note-1', title: 'Read 1' }]);
 		store.dispose();
 	});
 

@@ -868,7 +868,7 @@ Rules:
 - The tab that owns the physical stream sends its first `/connect` registrations after the first stream attempt
   resolves (opened or failed), so a registration is never sent twice for one stream. Follower tabs register immediately.
   A `subscribe` call therefore resolves no earlier than the owner's first stream response.
-- A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. `hydrate()` still reports the error.
+- A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. The error surfaces as the store error, not in `hydrate()`'s result.
 - Registrations are batched by default; see [Batched registration](#batched-registration).
 - Replay/reset remains per logical scope through durable outbox cursors.
 - A read response never overwrites newer realtime state: envelopes applied while a read was in flight are re-applied over
@@ -1203,7 +1203,8 @@ if (hydrated.isErr()) {
 ```
 
 Store construction is network-free. `hydrate()` restores cached authoritative state, refreshes from the server, and
-connects realtime delivery.
+starts realtime delivery. It resolves once the read is applied; the registration continues in the background, and the
+read's replay cursor covers the time until it completes. `connect()` awaits the registration.
 
 ### Render updates with DOM APIs
 
@@ -1367,10 +1368,12 @@ Rules:
 - If no cached data exists and hydration is in flight, show loading UI in the content area.
 - If no data exists and hydration is not in flight, show empty/no-data UI.
 - Store construction is network-free.
-- `hydrate()` restores cache, reads from server, persists fresh authoritative state, and connects realtime.
+- `hydrate()` restores cache, reads from server, persists fresh authoritative state, and starts the realtime
+  registration without waiting for it. A registration failure is reported as the store error and retried by the
+  transport; `hydrate()`'s result reports only cache and read failures.
 - Public `hydrate()` is successful-once per store/scope lifetime: concurrent calls share the active attempt, later calls
-  reuse a completed success without IO, and failed attempts remain retryable. `isHydrating()` stays true through cache
-  restore, the authoritative read, and realtime connection.
+  reuse a completed success without a read (they only resubscribe a failed registration), and failed attempts remain
+  retryable. `isHydrating()` stays true through cache restore and the authoritative read.
 - Reconnect catch-up forces a new authoritative hydration even after public hydration succeeded. Explicit `refresh()`
   and repair/reset reads also remain independent of the public hydration success.
 - `restore()` only loads authoritative cache. In-memory pending commands are preserved, but pending commands are not restored from IndexedDB.

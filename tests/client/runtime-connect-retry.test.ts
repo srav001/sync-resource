@@ -106,7 +106,7 @@ describe('failed realtime registration', () => {
 		}
 	});
 
-	it('still reports the connect error from hydrate and registers on the retry', async () => {
+	it('resolves hydrate on the read, reports the connect error as the store error and registers on the retry', async () => {
 		vi.useFakeTimers();
 		let connects = 0;
 		configureSync({
@@ -136,7 +136,9 @@ describe('failed realtime registration', () => {
 		});
 		try {
 			const hydrated = await store.hydrate();
-			expect(hydrated.isErr()).toBe(true);
+			expect(hydrated.isOk()).toBe(true);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(store.error()).toBeDefined();
 			await vi.advanceTimersByTimeAsync(1300);
 			expect(connects).toBe(2);
 		} finally {

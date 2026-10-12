@@ -471,6 +471,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 		const successful = this.successfulHydrates.get(key);
 		if (successful) {
+			// Hydrated data stays current through realtime, so a repeat hydrate only resubscribes a failed registration.
+			void this.connect();
 			return Promise.resolve(successful);
 		}
 
@@ -707,7 +709,10 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			if (result.isErr()) {
 				return result;
 			}
-			return await this.ensureRealtime();
+			// The read's replay cursor covers the registration window, so data readiness does not wait for it; a failed
+			// registration surfaces as the store error and the transport retries it.
+			void this.connect();
+			return ok(undefined);
 		} finally {
 			this.endHydration();
 		}

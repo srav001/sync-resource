@@ -95,7 +95,8 @@ describe('realtime subscription follows the store scope', () => {
 			query: () => ({ limit: 10 })
 		});
 		try {
-			expect((await store.hydrate()).isErr()).toBe(true);
+			expect((await store.hydrate()).isOk()).toBe(true);
+			await vi.waitFor(() => expect(store.error()).toBeDefined());
 			workspaceId = 'w2';
 			expect((await store.hydrate()).isOk()).toBe(true);
 
