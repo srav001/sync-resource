@@ -42,6 +42,7 @@ function pathOf(input: URL | RequestInfo): string {
 function createFailingConnectRuntime(failures: number) {
 	let connects = 0;
 	const runtime = createRuntime({
+		batchConnect: false,
 		cache,
 		fetch: async (input) => {
 			if (pathOf(input).endsWith('/stream')) {

@@ -155,6 +155,7 @@ describe('browser runtime SSE transport', () => {
 			});
 		};
 		const runtime = createRuntime({
+			batchConnect: false,
 			cache,
 			fetch: fetchImpl,
 			createId: (prefix) => `${prefix}-shared`
@@ -237,6 +238,7 @@ describe('browser runtime SSE transport', () => {
 		let cursor = 'cursor-1';
 		let catchUpHydrations = 0;
 		const runtime = createRuntime({
+			batchConnect: false,
 			cache,
 			fetch: fetchImpl,
 			createId: (prefix) => `${prefix}-reconnect`
@@ -313,7 +315,12 @@ describe('browser runtime registration order', () => {
 			order.push(new URL(request.url).pathname);
 			return connectResponse(`${new URL(request.url).pathname}:scope`);
 		};
-		const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-gate` });
+		const runtime = createRuntime({
+			batchConnect: false,
+			cache,
+			fetch: fetchImpl,
+			createId: (prefix) => `${prefix}-gate`
+		});
 		try {
 			const subscriptions = Promise.all([
 				subscribeTo(runtime, 'notes', () => (hydrations += 1)),
@@ -347,7 +354,12 @@ describe('browser runtime registration order', () => {
 			connects += 1;
 			return connectResponse('notes:scope');
 		};
-		const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-failed` });
+		const runtime = createRuntime({
+			batchConnect: false,
+			cache,
+			fetch: fetchImpl,
+			createId: (prefix) => `${prefix}-failed`
+		});
 		try {
 			const subscription = await subscribeTo(runtime, 'notes', () => (hydrations += 1));
 			expect(subscription.isOk()).toBe(true);
@@ -397,7 +409,12 @@ describe('browser runtime registration order', () => {
 				order.push('connect');
 				return connectResponse('notes:scope');
 			};
-			const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-owner` });
+			const runtime = createRuntime({
+				batchConnect: false,
+				cache,
+				fetch: fetchImpl,
+				createId: (prefix) => `${prefix}-owner`
+			});
 			try {
 				const subscription = await subscribeTo(runtime, 'notes');
 				expect(subscription.isOk()).toBe(true);
@@ -420,7 +437,12 @@ describe('browser runtime registration order', () => {
 				connects += 1;
 				return connectResponse('notes:scope');
 			};
-			const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-follower` });
+			const runtime = createRuntime({
+				batchConnect: false,
+				cache,
+				fetch: fetchImpl,
+				createId: (prefix) => `${prefix}-follower`
+			});
 			try {
 				const subscription = await subscribeTo(runtime, 'notes');
 				expect(subscription.isOk()).toBe(true);
@@ -445,7 +467,12 @@ describe('browser runtime registration order', () => {
 				connects += 1;
 				return connectResponse('notes:scope');
 			};
-			const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-handover` });
+			const runtime = createRuntime({
+				batchConnect: false,
+				cache,
+				fetch: fetchImpl,
+				createId: (prefix) => `${prefix}-handover`
+			});
 			try {
 				const subscription = await subscribeTo(runtime, 'notes', () => (hydrations += 1));
 				expect(subscription.isOk()).toBe(true);

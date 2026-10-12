@@ -1,5 +1,6 @@
 import { isFiniteNumber, isRecord, isString } from '../shared/guards.ts';
 import { isSyncEnvelope, isSyncHttpResult, normalizeSyncError } from '../shared/index.ts';
+import { MAX_BATCH_CONNECTS } from '../shared/protocol.ts';
 import { err, ok } from '../shared/result.ts';
 import type { SyncResult } from '../shared/result.ts';
 import {
@@ -23,6 +24,8 @@ export interface CreateRuntimeOptions {
 	readonly fetch?: typeof fetch;
 	readonly cache: SyncRuntime['cache'];
 	readonly streamUrl?: string;
+	readonly connectUrl?: string;
+	readonly batchConnect?: boolean;
 	now?(this: void): number;
 	createId?(this: void, prefix: string): string;
 	readonly transport?: RuntimeTransport;
@@ -50,6 +53,13 @@ interface LogicalSubscription {
 	getCursor?(this: void): string | undefined;
 	promise?: Promise<SyncResult<void, SyncError>>;
 	connectAbort?: AbortController;
+}
+
+interface QueuedConnect {
+	readonly url: string;
+	readonly signal: AbortSignal;
+	resolve(this: void, response: Response): void;
+	reject(this: void, cause: unknown): void;
 }
 
 interface PendingSyncEnvelopeChunks {
@@ -98,6 +108,16 @@ function isConnectScope<TValue>(value: TValue): value is TValue & { readonly sco
 	return isRecord(value) && (value.scope === undefined || isString(value.scope));
 }
 
+function isBatchPayload<TValue>(value: TValue): value is TValue & { readonly results: readonly unknown[] } {
+	return isRecord(value) && Array.isArray(value.results);
+}
+
+function isBatchResult<TValue>(value: TValue): value is TValue & { readonly status: number; readonly body?: unknown } {
+	return (
+		isRecord(value) && Number.isInteger(value.status) && Number(value.status) >= 200 && Number(value.status) <= 599
+	);
+}
+
 function isOwnerRecord<TValue>(
 	value: TValue
 ): value is TValue & { readonly ownerId: string; readonly expires: number } {
@@ -109,9 +129,12 @@ function isOwnerRecord<TValue>(
 class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	private readonly fetchImpl: typeof fetch;
 	private readonly streamUrl: string;
+	private readonly connectUrl: string;
+	private readonly batchConnect: boolean;
 	private readonly transportId: string;
 	private readonly clientId: string;
 	private readonly subscriptions = new Map<string, LogicalSubscription>();
+	private queuedConnects: QueuedConnect[] = [];
 	private readonly tabId: string;
 	private started = false;
 	private disposed = false;
@@ -128,12 +151,16 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	constructor(
 		fetchImpl: typeof fetch,
 		streamUrl: string,
+		connectUrl: string,
+		batchConnect: boolean,
 		transportId: string,
 		clientId: string,
 		createId: (prefix: string) => string
 	) {
 		this.fetchImpl = fetchImpl;
 		this.streamUrl = streamUrl;
+		this.connectUrl = connectUrl;
+		this.batchConnect = batchConnect;
 		this.transportId = transportId;
 		this.clientId = clientId;
 		this.tabId = createId('tab');
@@ -345,15 +372,18 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			if (signal.aborted) {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
-			const response = await this.fetchImpl(urlWithCursor(entry.connectUrl, entry.getCursor?.()), {
-				method: 'POST',
-				headers: {
-					'content-type': 'application/json',
-					'x-sync-transport-id': this.transportId,
-					'x-client-id': this.clientId
-				},
-				signal
-			});
+			const url = urlWithCursor(entry.connectUrl, entry.getCursor?.());
+			const response = this.batchConnect
+				? await this.queueConnect(url, signal)
+				: await this.fetchImpl(url, {
+						method: 'POST',
+						headers: {
+							'content-type': 'application/json',
+							'x-sync-transport-id': this.transportId,
+							'x-client-id': this.clientId
+						},
+						signal
+					});
 			if (signal.aborted) {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
@@ -384,6 +414,67 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
 			return err('internal', cause instanceof Error ? cause.message : String(cause), { cause });
+		}
+	}
+
+	private queueConnect(url: string, signal: AbortSignal): Promise<Response> {
+		return new Promise((resolve, reject) => {
+			this.queuedConnects.push({ url, signal, resolve, reject });
+			if (this.queuedConnects.length === 1) {
+				queueMicrotask(() => this.flushConnects());
+			}
+		});
+	}
+
+	private flushConnects(): void {
+		const queued = this.queuedConnects;
+		this.queuedConnects = [];
+		const live: QueuedConnect[] = [];
+		for (const item of queued) {
+			if (item.signal.aborted) {
+				item.reject(new DOMException('Realtime subscription was aborted.', 'AbortError'));
+			} else {
+				live.push(item);
+			}
+		}
+		for (let start = 0; start < live.length; start += MAX_BATCH_CONNECTS) {
+			this.sendConnects(live.slice(start, start + MAX_BATCH_CONNECTS));
+		}
+	}
+
+	private async sendConnects(items: readonly QueuedConnect[]): Promise<void> {
+		try {
+			const response = await this.fetchImpl(this.connectUrl, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					'x-sync-transport-id': this.transportId,
+					'x-client-id': this.clientId
+				},
+				body: JSON.stringify({ connects: items.map((item) => item.url) }),
+				signal: AbortSignal.timeout(LOGICAL_CONNECT_TIMEOUT_MS)
+			});
+			if (!response.ok) {
+				for (const item of items) {
+					item.resolve(new Response(null, { status: response.status }));
+				}
+				return;
+			}
+			const payload: unknown = await response.json();
+			items.forEach((item, index) => {
+				const result = isBatchPayload(payload) ? payload.results[index] : undefined;
+				if (!isBatchResult(result)) {
+					item.resolve(Response.json(null));
+				} else if (result.status < 300) {
+					item.resolve(Response.json(result.body ?? null));
+				} else {
+					item.resolve(new Response(null, { status: result.status }));
+				}
+			});
+		} catch (cause) {
+			for (const item of items) {
+				item.reject(cause);
+			}
 		}
 	}
 
@@ -729,6 +820,8 @@ export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
 		new BrowserSessionRuntimeTransport(
 			fetchImpl,
 			options.streamUrl ?? '/api/sync-resource/stream',
+			options.connectUrl ?? '/api/sync-resource/connect',
+			options.batchConnect ?? true,
 			transportId,
 			clientId,
 			createId

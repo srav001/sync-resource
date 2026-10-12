@@ -657,6 +657,21 @@ export function handleSyncResourceStream(request: Request): Promise<Response> {
 }
 ```
 
+Mount the batch connect route once as well. The browser sends every registration queued in the same microtask as one
+request (see [Batched registration](#batched-registration)):
+
+```ts
+import { httpSharedSyncConnect } from 'sync-resource/server';
+
+export function handleSyncResourceConnect(request: Request): Promise<Response> {
+	return httpSharedSyncConnect(request, handleApplicationRequest);
+}
+```
+
+`handleApplicationRequest` is the application's own request handler. `httpSharedSyncConnect` calls it once per item
+with a `POST` `Request` built from the item URL, so each item runs through the manager's normal `/connect` route with
+its own params, context, and authentication.
+
 Mount manager handlers only for methods defined by that manager:
 
 ```ts
@@ -676,6 +691,8 @@ export function connectNotes(request: Request, workspaceId: string): Promise<Res
 | `/mutate`  | `POST` | update/patch write            |
 | `/delete`  | `POST` | tombstone/delete write        |
 | `/connect` | `POST` | logical realtime subscription |
+
+The batch route (`/api/sync-resource/connect` by default) is separate from the per-manager routes and is `POST` only.
 
 Do not mount manager `/events` routes for normal application synchronization. Normal realtime uses one shared SSE stream
 plus manager `/connect` routes for logical subscriptions. Manager `/events` is a direct diagnostic stream.
@@ -766,19 +783,28 @@ body, headers, and abort signal; it does not parse, authorize, or otherwise rein
 threaded to Effect resource handlers.
 
 ```ts
-import { Effect } from 'effect';
+import { Effect, Layer } from 'effect';
 import { HttpRouter } from 'effect/http';
-import { httpSharedSyncStreamRoute, managerHttpRoutes } from 'sync-resource/server/effect';
+import { httpSharedSyncConnectRoute, httpSharedSyncStreamRoute, managerHttpRoutes } from 'sync-resource/server/effect';
 
-const SyncRoutes = HttpRouter.addAll([
-	httpSharedSyncStreamRoute('/api/sync-resource/stream'),
-	...managerHttpRoutes({
-		manager: notesManager,
-		path: '/api/workspaces/:workspaceId/notes/sync',
-		params: () => Effect.map(HttpRouter.params, ({ workspaceId }) => ({ workspaceId }))
-	})
-]);
+const SyncRoutes = Layer.mergeAll(
+	HttpRouter.addAll([
+		httpSharedSyncStreamRoute('/api/sync-resource/stream'),
+		...managerHttpRoutes({
+			manager: notesManager,
+			path: '/api/workspaces/:workspaceId/notes/sync',
+			params: () => Effect.map(HttpRouter.params, ({ workspaceId }) => ({ workspaceId }))
+		})
+	]),
+	httpSharedSyncConnectRoute('/api/sync-resource/connect')
+);
 ```
+
+`httpSharedSyncConnectRoute(path)` is a Layer that requires the `HttpRouter`. It dispatches every batched connect
+through that router's full handler (`router.asHttpEffect()`), so route middleware provided to the layer and global
+middleware, such as authentication, run once per item, and `params`/`context` resolve against each item's own path.
+Provide the same route middleware to it that you provide to the manager routes. The dispatch reuses the request's
+Effect context rather than creating a runtime.
 
 `managerHttpRoutes` mounts only the manager methods that exist: `get`, `list`, `add`, `mutate`, `delete`, and `connect`.
 Pass `events: true` only when deliberately exposing its diagnostic SSE endpoint. The `params` and optional `context`
@@ -809,13 +835,14 @@ Default route shape:
 
 ```txt
 POST /api/sync-resource/stream
+POST /api/sync-resource/connect
 POST <manager-sync-route>/connect
 ```
 
 The `sync-resource` route and internal coordination namespace are compatibility-sensitive protocol state.
 Changing the default stream path, cache-key prefix, browser storage keys, broadcast channel, lock name, or server
 realtime channel prefix would disconnect existing clients and rolling server deployments. New applications can choose
-a different stream URL explicitly through `configureSync(...)`.
+a different stream or connect URL explicitly through `configureSync(...)`.
 
 The physical stream carries envelopes:
 
@@ -842,6 +869,7 @@ Rules:
   resolves (opened or failed), so a registration is never sent twice for one stream. Follower tabs register immediately.
   A `subscribe` call therefore resolves no earlier than the owner's first stream response.
 - A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. `hydrate()` still reports the error.
+- Registrations are batched by default; see [Batched registration](#batched-registration).
 - Replay/reset remains per logical scope through durable outbox cursors.
 - A read response never overwrites newer realtime state: envelopes applied while a read was in flight are re-applied over
   its output in arrival order, and the cursor stays at the last of them.
@@ -914,6 +942,44 @@ A failed shared establishment is reported once and remains retryable by the next
 reported once with method `realtimeBus.unsubscribe` and is terminally contained. A failed best-effort publish is reported
 once with method `realtimeBus.publish`; neither failure invalidates a committed write.
 
+### Batched registration
+
+By default the browser sends every registration queued in the same microtask as one
+`POST /api/sync-resource/connect` request instead of one request per store. A page boot that opens 13 stores sends one
+request. The body lists each registration's manager `/connect` URL, including its `after` replay cursor:
+
+```json
+{ "connects": ["/api/notes/sync/connect?after=cursor-1", "/api/tasks/sync/connect"] }
+```
+
+The server (`httpSharedSyncConnect` or `httpSharedSyncConnectRoute`) runs each item as a `POST` through the application's
+normal per-manager connect route, forwarding the request headers (`x-sync-transport-id`, `x-client-id`, cookies,
+authorization) minus `content-length`, `content-type`, and `transfer-encoding`. It answers `200` with one result per
+item, in request order:
+
+```json
+{
+	"results": [
+		{ "status": 200, "body": { "isOk": true, "isError": false, "value": { "scope": "..." } } },
+		{ "status": 401, "body": {} }
+	]
+}
+```
+
+Each `body` is exactly what the direct route returned, so the client applies its normal connect handling per item. A
+failed item fails and retries alone with the usual registration backoff; a failed or malformed batch response fails and
+retries every item. A dispatch that throws becomes `{ status: 500, body: <internal error> }` for that item only.
+
+Rules:
+
+- A body is rejected with `400` unless `connects` is an array of 1 to 64 relative paths that start with a single `/`,
+  stay on the request's origin, and end in `/connect`. The client sends a larger queue as several requests of at most 64.
+- An item aborted before the flush is not sent. An item aborted after the flush is still sent and its result is ignored.
+- Registrations still wait for the owner's first stream attempt, so a boot sends one batch. Reconnect re-registrations
+  batch the same way.
+- Set `batchConnect: false` in `configureSync(...)` to send one direct `POST <manager>/connect` per registration, and do
+  not mount the batch route.
+
 ## Frontend Runtime Configuration
 
 Configure sync once near app startup:
@@ -927,12 +993,20 @@ const DAY = 24 * 60 * 60 * 1000;
 configureSync({
 	fetch: globalFetch,
 	streamUrl: '/api/sync-resource/stream',
+	connectUrl: '/api/sync-resource/connect',
+	batchConnect: true,
 	cache: {
 		adapter: new IndexedDbCacheAdapter('Sync Resource V1', 'store'),
 		ttlMs: 14 * DAY
 	}
 });
 ```
+
+Runtime options:
+
+- `streamUrl` defaults to `/api/sync-resource/stream`.
+- `connectUrl` defaults to `/api/sync-resource/connect`, the batch connect route.
+- `batchConnect` defaults to `true`. `false` sends one direct `POST <manager>/connect` per registration.
 
 Rules:
 

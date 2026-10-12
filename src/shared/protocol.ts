@@ -322,6 +322,8 @@ export function isSyncEnvelope(value: unknown): value is SyncEnvelope {
 	return true;
 }
 
+export const MAX_BATCH_CONNECTS = 64;
+
 export function isSyncHttpResult<TValue = unknown>(value: unknown): value is SyncHttpResult<TValue> {
 	if (!isRecord(value)) {
 		return false;

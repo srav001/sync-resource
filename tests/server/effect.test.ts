@@ -1,8 +1,9 @@
-import { Context, Effect, Fiber } from 'effect';
-import { HttpRouter } from 'effect/http';
+import { Context, Effect, Fiber, Layer } from 'effect';
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
+	httpSharedSyncConnectRoute,
 	httpSharedSyncStreamRoute,
 	manager,
 	managerHttpRoutes,
@@ -258,6 +259,72 @@ describe('Effect server entrypoint', () => {
 		});
 		expect((await streamWeb.handler(new Request('https://sync.test/sync', { method: 'POST' }))).status).toBe(400);
 		await streamWeb.dispose();
+	});
+
+	it('runs each batched connect through the full router, including its middleware and params', async () => {
+		const notes = resource(paramsSchema, (method) => ({
+			get: method.get({
+				output: noteSchema,
+				handler: ({ params }) => Effect.succeed({ id: params.workspaceId, title: 'one' })
+			})
+		}));
+		const seen: Record<string, string[]> = { a: [], b: [] };
+		const middlewareSaw: string[] = [];
+		let rejectB = true;
+		const routesFor = async (key: 'a' | 'b') => {
+			const notesManager = await Effect.runPromise(
+				manager({
+					key: `batch-${key}`,
+					resource: notes,
+					authorize: () => Effect.succeed(true),
+					scope: (p) => p.workspaceId
+				})
+			);
+			return managerHttpRoutes<undefined, Params, never, never, never>({
+				manager: notesManager,
+				path: `/${key}`,
+				params: (request) => {
+					seen[key]!.push(request.url);
+					return Effect.succeed({ workspaceId: `w-${key}` });
+				}
+			});
+		};
+		const authentication = HttpRouter.middleware((handler) =>
+			Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) => {
+				middlewareSaw.push(request.url);
+				return rejectB && request.url.startsWith('/b/')
+					? Effect.succeed(HttpServerResponse.empty({ status: 401 }))
+					: handler;
+			})
+		).layer;
+		const app = Layer.mergeAll(
+			HttpRouter.addAll([...(await routesFor('a')), ...(await routesFor('b'))]),
+			httpSharedSyncConnectRoute('/api/connect')
+		).pipe(Layer.provide(authentication));
+		const web = HttpRouter.toWebHandler(app, { disableLogger: true });
+		const connect = async (connects: string[]) => {
+			const response = await web.handler(
+				new Request('http://sync.test/api/connect', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', 'x-sync-transport-id': 'transport-batch' },
+					body: JSON.stringify({ connects })
+				})
+			);
+			expect(response.status).toBe(200);
+			return ((await response.json()) as { results: { status: number; body: unknown }[] }).results;
+		};
+
+		const rejected = await connect(['/a/connect?after=cursor-1', '/b/connect']);
+		expect(rejected.map((result) => result.status)).toEqual([200, 401]);
+		expect(rejected[0]?.body).toMatchObject({ isOk: true, value: { subscribed: true, managerKey: 'batch-a' } });
+		expect(seen).toEqual({ a: ['/a/connect?after=cursor-1'], b: [] });
+		expect(middlewareSaw).toEqual(['/api/connect', '/a/connect?after=cursor-1', '/b/connect']);
+
+		rejectB = false;
+		const accepted = await connect(['/b/connect']);
+		expect(accepted[0]).toMatchObject({ status: 200, body: { value: { managerKey: 'batch-b' } } });
+		expect(seen.b).toEqual(['/b/connect']);
+		await web.dispose();
 	});
 
 	it('adapts every resource method, self call, batch handler, and resource hook', async () => {

@@ -1,7 +1,8 @@
-import { Cause, Context, Effect, Exit, Predicate, Scope, Tracer } from 'effect';
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http';
+import { Cause, Context, Effect, Exit, Layer, Predicate, Scope, Tracer } from 'effect';
+import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http';
 
 import { err, ok, type SyncResult } from '../shared/result.js';
+import { httpSharedSyncConnect } from './connectBatch.js';
 import { isSyncError, normalizeSyncError, type SyncError } from './errors.js';
 import { executionForCommit } from './executionState.js';
 import { manager as plainManager, type CreateManagerOptions, type Manager as PlainManager } from './manager.js';
@@ -433,6 +434,20 @@ export interface EffectManagerRoutesOptions<TContext, TParams, TError = never, R
 
 export function httpSharedSyncStreamRoute(path: `/${string}`): HttpRouter.Route<never, never> {
 	return HttpRouter.route('POST', path, (request) => webHandler(request, httpSharedSyncStream));
+}
+
+export function httpSharedSyncConnectRoute(path: `/${string}`): Layer.Layer<never, never, HttpRouter.HttpRouter> {
+	return HttpRouter.use((router) =>
+		router.add('POST', path, (request) =>
+			Effect.gen(function* () {
+				const context = yield* Effect.context();
+				const dispatch = HttpEffect.toWebHandler(router.asHttpEffect());
+				return yield* webHandler(request, (webRequest) =>
+					httpSharedSyncConnect(webRequest, (subRequest) => dispatch(subRequest, context))
+				);
+			})
+		)
+	);
 }
 
 export function managerHttpRoutes<TContext, TParams, TError = never, R = never, ManagerR = never>(

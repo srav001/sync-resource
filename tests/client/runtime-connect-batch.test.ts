@@ -1,0 +1,273 @@
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+
+import { createRuntime, type CacheAdapter, type SyncRuntime } from '../../src/client/core.ts';
+import type { SyncEnvelope } from '../../src/shared/protocol.ts';
+import { encodeSseFrame } from '../../src/shared/sse.ts';
+
+const cache: CacheAdapter = {
+	async get() {
+		return undefined;
+	},
+	async set() {},
+	async del() {}
+};
+
+interface ConnectResult {
+	readonly status: number;
+	readonly body: unknown;
+}
+
+interface ConnectRequest {
+	readonly url: string;
+	readonly headers: Headers;
+	readonly connects?: readonly string[];
+}
+
+const forbidden = {
+	isOk: false,
+	isError: true,
+	error: { code: 'forbidden', message: 'Not allowed.', retryable: false }
+};
+
+function registered(manager: string): ConnectResult {
+	return { status: 200, body: { isOk: true, isError: false, value: { scope: `confirmed:${manager}` } } };
+}
+
+function managerOf(url: string): string {
+	return new URL(url, 'http://sync.test').pathname.split('/')[1] ?? '';
+}
+
+function createHarness(resultFor: (url: string) => ConnectResult = (url) => registered(managerOf(url))) {
+	const requests: ConnectRequest[] = [];
+	let streamController!: ReadableStreamDefaultController<Uint8Array>;
+	let batchStatus = 200;
+	const fetchImpl: typeof fetch = async (input, init) => {
+		const request = new Request(typeof input === 'string' ? new URL(input, 'http://sync.test') : input, init);
+		const url = new URL(request.url);
+		const headers = request.headers;
+		if (url.pathname === '/api/sync-resource/stream') {
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						streamController = controller;
+					}
+				}),
+				{ headers: { 'content-type': 'text/event-stream' } }
+			);
+		}
+		if (url.pathname === '/api/sync-resource/connect') {
+			const { connects } = (await request.json()) as { connects: string[] };
+			requests.push({ url: url.pathname, headers, connects });
+			if (batchStatus !== 200) {
+				return new Response('unavailable', { status: batchStatus });
+			}
+			return Response.json({ results: connects.map(resultFor) });
+		}
+		requests.push({ url: url.pathname + url.search, headers });
+		const result = resultFor(url.pathname + url.search);
+		return Response.json(result.body, { status: result.status });
+	};
+	const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-batch` });
+	return {
+		runtime,
+		requests,
+		setBatchStatus(status: number) {
+			batchStatus = status;
+		},
+		push(envelope: SyncEnvelope) {
+			streamController.enqueue(encodeSseFrame('sync', envelope));
+		}
+	};
+}
+
+function register(
+	runtime: SyncRuntime,
+	manager: string,
+	signal: AbortSignal,
+	received: SyncEnvelope[] = [],
+	getCursor?: () => string | undefined
+) {
+	return runtime.transport.subscribe({
+		url: `/${manager}/events`,
+		connectUrl: `/${manager}/connect`,
+		managerKey: manager,
+		scope: `requested:${manager}`,
+		signal,
+		getCursor: getCursor ?? (() => `cursor-${manager}`),
+		onEnvelope: (envelope) => received.push(envelope)
+	});
+}
+
+function envelopeFor(manager: string): SyncEnvelope {
+	return {
+		managerKey: manager,
+		scope: `confirmed:${manager}`,
+		cursor: `next-${manager}`,
+		changes: [{ type: 'itemAdded', id: `${manager}-1`, value: { id: `${manager}-1` } }]
+	};
+}
+
+async function settle(): Promise<void> {
+	for (let attempt = 0; attempt < 20; attempt += 1) {
+		await Promise.resolve();
+	}
+}
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
+describe('batched realtime registration', () => {
+	it('sends registrations queued in one tick as one request and confirms each scope from its own result', async () => {
+		const harness = createHarness();
+		const signal = new AbortController();
+		const received: Record<string, SyncEnvelope[]> = { a: [], b: [], c: [] };
+		try {
+			const results = await Promise.all(
+				['a', 'b', 'c'].map((manager) => register(harness.runtime, manager, signal.signal, received[manager]))
+			);
+			expect(results.every((result) => result.isOk())).toBe(true);
+			expect(harness.requests).toHaveLength(1);
+			expect(harness.requests[0]?.url).toBe('/api/sync-resource/connect');
+			expect(harness.requests[0]?.connects).toEqual([
+				'/a/connect?after=cursor-a',
+				'/b/connect?after=cursor-b',
+				'/c/connect?after=cursor-c'
+			]);
+			expect(harness.requests[0]?.headers.get('x-sync-transport-id')).toMatch(/^transport-/);
+			expect(harness.requests[0]?.headers.get('x-client-id')).toBe(harness.runtime.clientId);
+
+			for (const manager of ['a', 'b', 'c']) {
+				harness.push(envelopeFor(manager));
+			}
+			await settle();
+			expect(received.a).toEqual([envelopeFor('a')]);
+			expect(received.b).toEqual([envelopeFor('b')]);
+			expect(received.c).toEqual([envelopeFor('c')]);
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+
+	it('sends one direct request per registration when batchConnect is false', async () => {
+		const harness = createHarness();
+		const direct = createRuntime({
+			cache,
+			batchConnect: false,
+			fetch: (...args) => harness.runtime.fetch(...args),
+			createId: (prefix) => `${prefix}-direct`
+		});
+		const signal = new AbortController();
+		try {
+			const results = await Promise.all(
+				['a', 'b', 'c'].map((manager) => register(direct, manager, signal.signal))
+			);
+			expect(results.every((result) => result.isOk())).toBe(true);
+			expect(harness.requests.map((request) => request.url)).toEqual([
+				'/a/connect?after=cursor-a',
+				'/b/connect?after=cursor-b',
+				'/c/connect?after=cursor-c'
+			]);
+			expect(harness.requests.every((request) => request.connects === undefined)).toBe(true);
+		} finally {
+			signal.abort();
+			direct.dispose();
+			harness.runtime.dispose();
+		}
+	});
+
+	it('fails only the item with an error result and retries it alone', async () => {
+		vi.useFakeTimers();
+		let attempts = 0;
+		const harness = createHarness((url) => {
+			if (managerOf(url) !== 'b') {
+				return registered(managerOf(url));
+			}
+			attempts += 1;
+			return attempts === 1 ? { status: 403, body: forbidden } : registered('b');
+		});
+		const signal = new AbortController();
+		try {
+			const results = await Promise.all(
+				['a', 'b', 'c'].map((manager) => register(harness.runtime, manager, signal.signal))
+			);
+			expect(results.map((result) => result.isOk())).toEqual([true, false, true]);
+			expect(harness.requests).toHaveLength(1);
+
+			await vi.advanceTimersByTimeAsync(1300);
+			expect(harness.requests).toHaveLength(2);
+			expect(harness.requests[1]?.connects).toEqual(['/b/connect?after=cursor-b']);
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(harness.requests).toHaveLength(2);
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+
+	it('fails and retries every item when the batch response is not ok', async () => {
+		vi.useFakeTimers();
+		const harness = createHarness();
+		harness.setBatchStatus(503);
+		const signal = new AbortController();
+		try {
+			const results = await Promise.all(
+				['a', 'b', 'c'].map((manager) => register(harness.runtime, manager, signal.signal))
+			);
+			expect(results.every((result) => result.isErr())).toBe(true);
+			expect(harness.requests).toHaveLength(1);
+
+			harness.setBatchStatus(200);
+			await vi.advanceTimersByTimeAsync(1300);
+			const retried = harness.requests.slice(1).flatMap((request) => request.connects ?? []);
+			expect(retried.sort()).toEqual([
+				'/a/connect?after=cursor-a',
+				'/b/connect?after=cursor-b',
+				'/c/connect?after=cursor-c'
+			]);
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(harness.requests.slice(1).flatMap((request) => request.connects ?? [])).toHaveLength(3);
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+
+	it('leaves out a registration aborted before the flush', async () => {
+		const harness = createHarness();
+		const signal = new AbortController();
+		const abortB = new AbortController();
+		try {
+			const results = await Promise.all([
+				register(harness.runtime, 'a', signal.signal),
+				register(harness.runtime, 'b', abortB.signal),
+				register(harness.runtime, 'c', signal.signal, [], () => {
+					abortB.abort();
+					return 'cursor-c';
+				})
+			]);
+			expect(results.map((result) => result.isOk())).toEqual([true, false, true]);
+			expect(harness.requests).toHaveLength(1);
+			expect(harness.requests[0]?.connects).toEqual(['/a/connect?after=cursor-a', '/c/connect?after=cursor-c']);
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+
+	it('splits more than 64 queued registrations into ceil(n / 64) requests', async () => {
+		const harness = createHarness();
+		const signal = new AbortController();
+		try {
+			const results = await Promise.all(
+				Array.from({ length: 150 }, (_, index) => register(harness.runtime, `m${index}`, signal.signal))
+			);
+			expect(results.every((result) => result.isOk())).toBe(true);
+			expect(harness.requests.map((request) => request.connects?.length)).toEqual([64, 64, 22]);
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+});

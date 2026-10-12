@@ -67,6 +67,7 @@ export {
 	type ResourceMethods,
 	type ResourceWriteMethod
 } from './resource.js';
+export { httpSharedSyncConnect } from './connectBatch.js';
 export { createPubSubManagerRealtimeBus } from './realtime.js';
 export type {
 	ManagerRealtimeBusErrorContext,

@@ -80,6 +80,7 @@ describe('client runtime configuration', () => {
 			});
 		};
 		const runtime = createRuntime({
+			batchConnect: false,
 			cache,
 			fetch: fetchImpl,
 			createId(prefix) {
