@@ -1,13 +1,7 @@
 export {
-	isResetManifest,
-	isSyncChange,
 	isSyncEnvelope,
 	isSyncError,
-	isSyncErrorCode,
-	isSyncErrorRecovery,
 	isSyncHttpResult,
-	isSyncProtocolError,
-	isSyncSignal,
 	normalizeSyncError,
 	SyncError,
 	syncError,

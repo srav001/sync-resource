@@ -1,21 +1,23 @@
 import { describe, expect, it } from 'vite-plus/test';
 
 import {
-	isResetManifest,
-	isSyncChange,
 	isSyncEnvelope,
-	isSyncErrorCode,
-	isSyncErrorRecovery,
 	isSyncHttpResult,
-	isSyncProtocolError,
-	isSyncSignal,
 	normalizeSyncError,
 	syncError,
 	syncErrorCodes,
 	syncErrorToHttpStatus,
 	toSyncProtocolError
 } from '../../src/shared/index.ts';
-import { syncErrorCodeFromHttpStatus } from '../../src/shared/protocol.ts';
+import {
+	isResetManifest,
+	isSyncChange,
+	isSyncErrorCode,
+	isSyncErrorRecovery,
+	isSyncProtocolError,
+	isSyncSignal,
+	syncErrorCodeFromHttpStatus
+} from '../../src/shared/protocol.ts';
 
 const manifest = { scope: 'notes:workspace', reason: 'retention_gap' as const, previousCursor: 'c0', nextCursor: 'c1' };
 const envelope = {
