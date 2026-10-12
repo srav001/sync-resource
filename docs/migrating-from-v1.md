@@ -282,7 +282,8 @@ Sync Resource no longer uses any of these. Remove them from your code.
 - **Store `unsubscribe(callback)`:** removed. Call the function that `subscribe(callback)` returns.
 - **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
   `stale` is the one staleness flag.
-- **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.
+- **`CacheAdapter.kind`:** removed; a class that declares `kind` keeps compiling, but an object literal typed as
+  `CacheAdapter` must drop it.
 - **`RuntimeTransport.subscribe`:** the `url` and `streamUrl` options are removed, and `connectUrl`, `managerKey` and
   `scope` are required. The direct per-manager SSE subscription they served is gone with the `/events` route. The
   `streamUrl` option of `configureSync` is unchanged.

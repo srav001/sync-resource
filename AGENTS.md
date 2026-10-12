@@ -55,7 +55,7 @@ and repair provide convergence.
 - `src/client/runtime.ts` — global configuration, transport ownership, batched registration, fetch, reconnect, and cache configuration and sweep
 - `src/client/store.ts` — hydration, reads, writes, pending commands, events, and lifecycle
 - `src/client/optimistic.ts` — entity/page state, optimistic patches, rebase, and query-family reconciliation
-- `src/client/repair.ts` — repair planning and scheduling
+- `src/client/repair.ts` — the repair-needed check and repair scheduling
 - `src/client/adapter.ts` — framework-neutral adapter event and type helpers
 - `src/client/core.ts` — intentional framework-neutral public entrypoint
 - `src/client/react.ts` — optional React external-store hooks
