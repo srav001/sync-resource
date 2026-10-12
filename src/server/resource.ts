@@ -30,6 +30,14 @@ export function methodKinds(methods: ResourceMethodMap): MethodKind[] {
 	return Object.keys(methods) as MethodKind[];
 }
 
+// Manager and self calls of a get, list or delete without a query schema take only the options argument.
+export function takesOptionsOnly(
+	kind: MethodKind,
+	definition: { readonly kind: MethodKind; readonly query?: unknown } | undefined
+): boolean {
+	return (kind === 'get' || kind === 'list' || kind === 'delete') && definition?.query === undefined;
+}
+
 type NoExtraKeys<TValue, TAllowed> = TValue & Record<Exclude<keyof TValue, keyof TAllowed>, never>;
 
 type GetHandlerArgs<TParams extends object, TQuery, TSelf> = [TQuery] extends [never]
@@ -462,34 +470,13 @@ export function resource<TParamsSchema extends AnySchema<object>, const TMethods
 	const runtimeMethods = methods as RuntimeDefinitions;
 	const calls: RuntimeResourceCalls = {};
 
-	const getDefinition = runtimeMethods.get;
-	if (getDefinition) {
-		calls.get = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
-			executeSingle(params, runtimeMethods, getDefinition, args, callOptions, options);
-	}
-
-	const listDefinition = runtimeMethods.list;
-	if (listDefinition) {
-		calls.list = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
-			executeSingle(params, runtimeMethods, listDefinition, args, callOptions, options);
-	}
-
-	const addDefinition = runtimeMethods.add;
-	if (addDefinition) {
-		calls.add = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
-			executeWrite(params, runtimeMethods, addDefinition, args, callOptions, options);
-	}
-
-	const mutateDefinition = runtimeMethods.mutate;
-	if (mutateDefinition) {
-		calls.mutate = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
-			executeWrite(params, runtimeMethods, mutateDefinition, args, callOptions, options);
-	}
-
-	const deleteDefinition = runtimeMethods.delete;
-	if (deleteDefinition) {
-		calls.delete = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
-			executeWrite(params, runtimeMethods, deleteDefinition, args, callOptions, options);
+	for (const kind of methodKinds(runtimeMethods)) {
+		const definition = runtimeMethods[kind];
+		if (definition) {
+			const execute = isWriteMethodKind(kind) ? executeWrite : executeSingle;
+			calls[kind] = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
+				execute(params, runtimeMethods, definition, args, callOptions, options);
+		}
 	}
 
 	return {
@@ -913,7 +900,7 @@ function shouldDeferSourceCommit(options: InternalOperationOptions | undefined):
 	return options?.deferSourceCommit === true;
 }
 
-function mergeMetrics(
+export function mergeMetrics(
 	first: readonly CostMetric[] | undefined,
 	second: readonly CostMetric[] | undefined
 ): readonly CostMetric[] | undefined {
@@ -1138,7 +1125,7 @@ function createResourceSelf<TParams extends object>(
 						paramsSchema,
 						methods,
 						definition,
-						mergeSelfArgs(params, undefined),
+						mergeParams(params, undefined),
 						mergeSelfOptions(exec, argsOrOptions as OperationOptions | undefined),
 						resourceOptions
 					);
@@ -1149,7 +1136,7 @@ function createResourceSelf<TParams extends object>(
 					paramsSchema,
 					methods,
 					definition,
-					mergeSelfArgs(params, args),
+					mergeParams(params, args),
 					mergeSelfOptions(exec, options),
 					resourceOptions
 				);
@@ -1163,7 +1150,7 @@ function createResourceSelf<TParams extends object>(
 				paramsSchema,
 				methods,
 				definition,
-				mergeSelfArgs(params, args),
+				mergeParams(params, args),
 				mergeSelfOptions(exec, callOptions),
 				resourceOptions
 			);
@@ -1172,7 +1159,7 @@ function createResourceSelf<TParams extends object>(
 	return self;
 }
 
-function mergeSelfArgs<TParams extends object, TArgs>(params: TParams, args: TArgs) {
+export function mergeParams<TParams extends object, TArgs>(params: TParams, args: TArgs) {
 	if (args === undefined) {
 		return { params };
 	}
@@ -1224,7 +1211,7 @@ function methodHasQuery(definition: RuntimeDefinition): boolean {
 	return 'query' in definition && definition.query !== undefined;
 }
 
-function isWriteMethodKind(kind: MethodKind): boolean {
+export function isWriteMethodKind(kind: MethodKind): boolean {
 	return kind === 'add' || kind === 'mutate' || kind === 'delete';
 }
 

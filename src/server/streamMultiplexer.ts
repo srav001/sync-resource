@@ -33,13 +33,6 @@ interface RegisteredManager {
 	): Promise<void> | void;
 }
 
-interface IdleHeapEntry {
-	readonly managerKey: string;
-	readonly scope: string;
-	readonly expiry: number;
-	readonly epoch: number;
-}
-
 interface StreamState {
 	readonly signal: AbortSignal;
 	readonly sentCursors: Set<string>;
@@ -88,16 +81,13 @@ const streamsByTransportId = new Map<string, StreamState>();
 const transportIdsByScope = new Map<string, Set<string>>();
 const scopesByTransportId = new Map<string, Set<string>>();
 const subscriptionDetails = new Map<string, SubscriptionDetail>();
-const transportExpiresAtByTransportId = new Map<string, number>();
+// One unref'd timer per transport and per idle scope; it is replaced on activity and cleared on teardown.
+const transportTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // Limit duplicate physical streams per browser transport id and IP, not all users behind one IP.
 const connectionsPerTransport = new Map<string, Map<string, number>>();
-const idleExpiryByScope = new Map<string, number>();
-const idleEpochByScope = new Map<string, number>();
-const idleExpiryHeap: IdleHeapEntry[] = [];
+const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 let cachedManagerKeys: readonly string[] | undefined;
-let transportSweepTimer: ReturnType<typeof setTimeout> | undefined;
-let idleSweepTimer: ReturnType<typeof setTimeout> | undefined;
 
 let config: SharedStreamConfig = {
 	heartbeatMs: 60_000,
@@ -259,9 +249,8 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 						clearStreamState(streamState);
 					}
 					if (ownsTransport) {
-						transportExpiresAtByTransportId.delete(resolvedTransportId);
+						clearTransportTimer(resolvedTransportId);
 						removeTransportSubscriptions(resolvedTransportId);
-						clearTransportSweepTimerIfIdle();
 					}
 					try {
 						controller.close();
@@ -370,24 +359,17 @@ export function resetSharedStreamForTests(): void {
 	for (const stream of streamsByTransportId.values()) {
 		stream.close();
 	}
-	if (transportSweepTimer) {
-		clearTimeout(transportSweepTimer);
-		transportSweepTimer = undefined;
-	}
-	if (idleSweepTimer) {
-		clearTimeout(idleSweepTimer);
-		idleSweepTimer = undefined;
+	for (const timer of [...transportTimers.values(), ...idleTimers.values()]) {
+		clearTimeout(timer);
 	}
 	registeredManagers.clear();
 	streamsByTransportId.clear();
 	transportIdsByScope.clear();
 	scopesByTransportId.clear();
 	subscriptionDetails.clear();
-	transportExpiresAtByTransportId.clear();
+	transportTimers.clear();
 	connectionsPerTransport.clear();
-	idleExpiryByScope.clear();
-	idleEpochByScope.clear();
-	idleExpiryHeap.length = 0;
+	idleTimers.clear();
 	cachedManagerKeys = undefined;
 	config = {
 		heartbeatMs: 60_000,
@@ -511,7 +493,7 @@ function clearStreamState(stream: StreamState): void {
 	stream.bufferedByScope.clear();
 }
 
-function buildResetEnvelope(
+export function buildResetEnvelope(
 	managerKey: string,
 	scope: string,
 	previousCursor: string,
@@ -566,8 +548,13 @@ function getTransportTtlMs(): number {
 }
 
 function touchTransport(transportId: string): void {
-	transportExpiresAtByTransportId.set(transportId, Date.now() + getTransportTtlMs());
-	scheduleTransportSweep();
+	clearTimeout(transportTimers.get(transportId));
+	transportTimers.set(transportId, unrefTimer(setTimeout(() => evictTransport(transportId), getTransportTtlMs())));
+}
+
+function clearTransportTimer(transportId: string): void {
+	clearTimeout(transportTimers.get(transportId));
+	transportTimers.delete(transportId);
 }
 
 function incrementIp(transportId: string, ip: string): boolean {
@@ -601,7 +588,7 @@ function decrementIp(transportId: string, ip: string): void {
 function evictTransport(transportId: string): void {
 	streamsByTransportId.get(transportId)?.close();
 	streamsByTransportId.delete(transportId);
-	transportExpiresAtByTransportId.delete(transportId);
+	clearTransportTimer(transportId);
 	removeTransportSubscriptions(transportId);
 }
 
@@ -628,53 +615,22 @@ function removeTransportSubscriptions(transportId: string): void {
 	}
 }
 
-function scheduleTransportSweep(): void {
-	if (transportSweepTimer || transportExpiresAtByTransportId.size === 0) {
-		return;
-	}
-
-	let nextExpiry = Infinity;
-	for (const expiresAt of transportExpiresAtByTransportId.values()) {
-		if (expiresAt < nextExpiry) {
-			nextExpiry = expiresAt;
-		}
-	}
-	const delay = Math.max(0, nextExpiry - Date.now());
-	transportSweepTimer = setTimeout(() => {
-		transportSweepTimer = undefined;
-		const now = Date.now();
-		for (const [transportId, expiresAt] of transportExpiresAtByTransportId) {
-			if (expiresAt <= now) {
-				evictTransport(transportId);
-			}
-		}
-		scheduleTransportSweep();
-	}, delay);
-	unrefTimer(transportSweepTimer);
-}
-
 function markIdle(managerKey: string, scope: string): void {
+	clearIdle(scope);
 	if (config.idleTtlMs <= 0) {
 		notifyScopeIdle(managerKey, scope);
 		return;
 	}
-
-	const expiry = Date.now() + config.idleTtlMs;
-	const epoch = (idleEpochByScope.get(scope) ?? 0) + 1;
-	idleEpochByScope.set(scope, epoch);
-	idleExpiryByScope.set(scope, expiry);
-	pushIdleEntry({ managerKey, scope, expiry, epoch });
-	scheduleIdleSweep();
+	idleTimers.set(scope, unrefTimer(setTimeout(() => notifyScopeIdle(managerKey, scope), config.idleTtlMs)));
 }
 
 function clearIdle(scope: string): void {
-	idleExpiryByScope.delete(scope);
-	idleEpochByScope.delete(scope);
+	clearTimeout(idleTimers.get(scope));
+	idleTimers.delete(scope);
 }
 
 function notifyScopeIdle(managerKey: string, scope: string): void {
-	idleExpiryByScope.delete(scope);
-	idleEpochByScope.delete(scope);
+	idleTimers.delete(scope);
 	registeredManagers.get(managerKey)?.onScopeIdle?.(scope);
 }
 
@@ -698,123 +654,14 @@ async function reportSharedStreamError(
 	}
 }
 
-function scheduleIdleSweep(): void {
-	if (idleSweepTimer || idleExpiryByScope.size === 0) {
-		return;
-	}
-
-	const next = peekActiveIdleEntry();
-	if (!next) {
-		return;
-	}
-
-	idleSweepTimer = setTimeout(
-		() => {
-			idleSweepTimer = undefined;
-			const now = Date.now();
-			while (true) {
-				const entry = peekActiveIdleEntry();
-				if (!entry || entry.expiry > now) {
-					break;
-				}
-				popIdleEntry();
-				if ((transportIdsByScope.get(entry.scope)?.size ?? 0) > 0) {
-					clearIdle(entry.scope);
-					continue;
-				}
-				notifyScopeIdle(entry.managerKey, entry.scope);
-			}
-			scheduleIdleSweep();
-		},
-		Math.max(0, next.expiry - Date.now())
-	);
-	unrefTimer(idleSweepTimer);
-}
-
-function clearTransportSweepTimerIfIdle(): void {
-	if (transportExpiresAtByTransportId.size > 0 || !transportSweepTimer) {
-		return;
-	}
-	clearTimeout(transportSweepTimer);
-	transportSweepTimer = undefined;
-}
-
-function unrefTimer(timer: ReturnType<typeof setTimeout> | undefined): void {
-	if (timer && isUnrefableTimer(timer)) {
+function unrefTimer<TTimer extends ReturnType<typeof setTimeout>>(timer: TTimer): TTimer {
+	if (isUnrefableTimer(timer)) {
 		timer.unref();
 	}
+	return timer;
 }
 
-function pushIdleEntry(entry: IdleHeapEntry): void {
-	idleExpiryHeap.push(entry);
-	let current = idleExpiryHeap.length - 1;
-	while (current > 0) {
-		const parent = Math.floor((current - 1) / 2);
-		const parentEntry = idleExpiryHeap[parent];
-		if (parentEntry === undefined || parentEntry.expiry <= entry.expiry) {
-			return;
-		}
-		idleExpiryHeap[current] = parentEntry;
-		current = parent;
-	}
-	idleExpiryHeap[current] = entry;
-}
-
-function popIdleEntry(): IdleHeapEntry | undefined {
-	if (idleExpiryHeap.length === 0) {
-		return undefined;
-	}
-	const first = idleExpiryHeap[0];
-	if (first === undefined) {
-		return undefined;
-	}
-	const last = idleExpiryHeap.pop();
-	if (last !== undefined && idleExpiryHeap.length > 0) {
-		let current = 0;
-		while (true) {
-			const left = current * 2 + 1;
-			const right = left + 1;
-			let next = current;
-			const currentEntry = idleExpiryHeap[next];
-			const leftEntry = idleExpiryHeap[left];
-			if (currentEntry !== undefined && leftEntry !== undefined && leftEntry.expiry < currentEntry.expiry) {
-				next = left;
-			}
-			const nextEntry = idleExpiryHeap[next];
-			const rightEntry = idleExpiryHeap[right];
-			if (nextEntry !== undefined && rightEntry !== undefined && rightEntry.expiry < nextEntry.expiry) {
-				next = right;
-			}
-			if (next === current) {
-				break;
-			}
-			const selectedEntry = idleExpiryHeap[next];
-			if (selectedEntry === undefined) {
-				break;
-			}
-			idleExpiryHeap[current] = selectedEntry;
-			current = next;
-		}
-		idleExpiryHeap[current] = last;
-	}
-	return first;
-}
-
-function peekActiveIdleEntry(): IdleHeapEntry | undefined {
-	while (idleExpiryHeap.length > 0) {
-		const entry = idleExpiryHeap[0];
-		if (entry === undefined) {
-			return undefined;
-		}
-		if (idleExpiryByScope.get(entry.scope) === entry.expiry && idleEpochByScope.get(entry.scope) === entry.epoch) {
-			return entry;
-		}
-		popIdleEntry();
-	}
-	return undefined;
-}
-
-function jsonResponse<TBody>(body: TBody, status = 200): Response {
+export function jsonResponse<TBody>(body: TBody, status = 200): Response {
 	return new Response(JSON.stringify(body), {
 		status,
 		headers: JSON_HEADERS

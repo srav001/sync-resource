@@ -9,6 +9,7 @@ import { manager as plainManager, type CreateManagerOptions, type Manager as Pla
 import {
 	resource as plainResource,
 	methodKinds,
+	takesOptionsOnly,
 	type MethodKind,
 	type Resource as PlainResource,
 	type ResourceMethodMap
@@ -671,10 +672,7 @@ function wrapManager<TKey extends string, TResource extends EffectResourceLike, 
 					continue;
 				}
 				const runtimeCall = call as (...args: readonly unknown[]) => Promise<SyncResult<unknown, SyncError>>;
-				const definition = resourceValue.definition.methods[kind] as { readonly query?: unknown };
-				const optionOnly =
-					(kind === 'get' || kind === 'list' || kind === 'delete') && definition.query === undefined;
-				wrapped[kind] = optionOnly
+				wrapped[kind] = takesOptionsOnly(kind, resourceValue.definition.methods[kind])
 					? (options?: EffectOperationOptions) =>
 							liftKernel((signal, caller) =>
 								runtimeCall(operationOptions(options, signal, withBase(caller)))
@@ -696,8 +694,7 @@ function wrapSelf(self: ResourceCallMap, methods: EffectResourceMethodMap): Effe
 		if (!call) {
 			continue;
 		}
-		const definition = methods[kind] as { readonly query?: unknown };
-		const optionOnly = (kind === 'get' || kind === 'list' || kind === 'delete') && definition.query === undefined;
+		const optionOnly = takesOptionsOnly(kind, methods[kind]);
 		const runtimeCall = (...args: readonly unknown[]) =>
 			liftKernel((signal, context) =>
 				optionOnly

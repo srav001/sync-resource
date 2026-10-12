@@ -5,8 +5,18 @@ import { stableStringify } from '../shared/stableJson.ts';
 import { normalizeSyncError, syncError, syncErrorToHttpStatus, toSyncProtocolError, type SyncError } from './errors.js';
 import { withCommitExecution } from './executionState.js';
 import { callHook } from './hook.js';
-import { combineAbortSignals, type MethodKind } from './resource.js';
 import {
+	combineAbortSignals,
+	isWriteMethodKind,
+	mergeMetrics,
+	mergeParams,
+	methodKinds,
+	takesOptionsOnly,
+	type MethodKind
+} from './resource.js';
+import {
+	buildResetEnvelope,
+	jsonResponse,
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
 	registerSharedStreamSubscription
@@ -29,7 +39,6 @@ import type {
 	OperationOptions,
 	ResourceCommitContext,
 	ResourceHandlerOk,
-	ResetManifest,
 	ScopeValue,
 	SyncBatchOutput,
 	SyncChange,
@@ -38,10 +47,6 @@ import type {
 	SyncHttpResult
 } from './types.js';
 
-const JSON_HEADERS = {
-	'content-type': 'application/json; charset=utf-8',
-	'cache-control': 'no-store'
-};
 // Body decoding never uses streaming state, so one decoder safely avoids per-request allocation.
 const textDecoder = new TextDecoder();
 const MAX_STREAM_BACKPRESSURE_QUEUE = 4096;
@@ -262,86 +267,20 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	): BoundManager<TKey, TResource> {
 		const scope = encodeScope(options.key, options.scope(params));
 		const methods: Partial<Record<MethodKind, BoundRuntimeMethod>> = {};
-
-		if (runtimeMethods.get) {
-			methods.get = <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) => {
-				const hasQuery = methodHasQuery(runtimeMethods.get);
-				return executeManagerMethod(
-					managerOptions,
-					runtimeResource,
-					'get',
-					params,
-					context,
-					hasQuery ? argsOrOptions : undefined,
-					hasQuery ? callOptions : (argsOrOptions as OperationOptions | undefined),
-					nextCursor,
-					recordAndPublish
-				);
-			};
-		}
-
-		if (runtimeMethods.list) {
-			methods.list = <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) => {
-				const hasQuery = methodHasQuery(runtimeMethods.list);
-				return executeManagerMethod(
-					managerOptions,
-					runtimeResource,
-					'list',
-					params,
-					context,
-					hasQuery ? argsOrOptions : undefined,
-					hasQuery ? callOptions : (argsOrOptions as OperationOptions | undefined),
-					nextCursor,
-					recordAndPublish
-				);
-			};
-		}
-
-		if (runtimeMethods.add) {
-			methods.add = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
+		for (const kind of methodKinds(runtimeMethods)) {
+			const optionsOnly = takesOptionsOnly(kind, runtimeMethods[kind]);
+			methods[kind] = <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) =>
 				executeManagerMethod(
 					managerOptions,
 					runtimeResource,
-					'add',
+					kind,
 					params,
 					context,
-					args,
-					callOptions,
+					optionsOnly ? undefined : argsOrOptions,
+					optionsOnly ? (argsOrOptions as OperationOptions | undefined) : callOptions,
 					nextCursor,
 					recordAndPublish
 				);
-		}
-
-		if (runtimeMethods.mutate) {
-			methods.mutate = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
-				executeManagerMethod(
-					managerOptions,
-					runtimeResource,
-					'mutate',
-					params,
-					context,
-					args,
-					callOptions,
-					nextCursor,
-					recordAndPublish
-				);
-		}
-
-		if (runtimeMethods.delete) {
-			methods.delete = <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) => {
-				const hasQuery = methodHasQuery(runtimeMethods.delete);
-				return executeManagerMethod(
-					managerOptions,
-					runtimeResource,
-					'delete',
-					params,
-					context,
-					hasQuery ? argsOrOptions : undefined,
-					hasQuery ? callOptions : (argsOrOptions as OperationOptions | undefined),
-					nextCursor,
-					recordAndPublish
-				);
-			};
 		}
 
 		return {
@@ -359,29 +298,9 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	): ManagerHttpHandlers<TContext, ResourceParams<TResource>> {
 		const handlers: ManagerHttpHandlers<TContext, ResourceParams<TResource>> = {};
 
-		if (runtimeMethods.get) {
-			handlers.get = (args) =>
-				executeHttpMethod(managerOptions, runtimeResource, 'get', args, nextCursor, recordAndPublish);
-		}
-
-		if (runtimeMethods.list) {
-			handlers.list = (args) =>
-				executeHttpMethod(managerOptions, runtimeResource, 'list', args, nextCursor, recordAndPublish);
-		}
-
-		if (runtimeMethods.add) {
-			handlers.add = (args) =>
-				executeHttpMethod(managerOptions, runtimeResource, 'add', args, nextCursor, recordAndPublish);
-		}
-
-		if (runtimeMethods.mutate) {
-			handlers.mutate = (args) =>
-				executeHttpMethod(managerOptions, runtimeResource, 'mutate', args, nextCursor, recordAndPublish);
-		}
-
-		if (runtimeMethods.delete) {
-			handlers.delete = (args) =>
-				executeHttpMethod(managerOptions, runtimeResource, 'delete', args, nextCursor, recordAndPublish);
+		for (const kind of methodKinds(runtimeMethods)) {
+			handlers[kind] = (args) =>
+				executeHttpMethod(managerOptions, runtimeResource, kind, args, nextCursor, recordAndPublish);
 		}
 
 		handlers.connect = async (args) => {
@@ -1045,7 +964,7 @@ function withGeneratedMutationId(
 	method: MethodKind,
 	options: OperationOptions | undefined
 ): OperationOptions | undefined {
-	if (!isWriteMethod(method)) {
+	if (!isWriteMethodKind(method)) {
 		return options;
 	}
 	if (options?.mutationId) {
@@ -1116,16 +1035,10 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 	}
 
 	try {
-		const resourceMethod = resource[method];
-		if (!resourceMethod) {
-			const errorValue = syncError('bad_request', `Sync manager method is not defined: ${method}.`);
-			await reportManagerError(options, telemetryContext, errorValue);
-			return err(errorValue);
-		}
-		const executeResource = resourceMethod;
+		const executeResource = resource[method]!;
 
 		const mutationIdentity =
-			isWriteMethod(method) && effectiveCallOptions?.mutationId
+			isWriteMethodKind(method) && effectiveCallOptions?.mutationId
 				? {
 						id: effectiveCallOptions.mutationId,
 						argsHash: callOptions?.mutationId ? stableStringify(args) : ''
@@ -1211,7 +1124,7 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 
 		async function executeResourceAndPersist(): Promise<SyncResult<ManagerExecutionSuccess, SyncError>> {
 			// Captured before the read so replay from it covers every commit that lands while the read runs.
-			const readCursor = isWriteMethod(method)
+			const readCursor = isWriteMethodKind(method)
 				? undefined
 				: await options.persistence.latestCursor?.(scope, execution);
 			const resourceArgs = mergeParams(params, args);
@@ -1252,7 +1165,7 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 			if (mutationRecord && !commitResult.value.syncPersisted) {
 				await options.persistence.recordMutation({ ...mutationRecord, metrics }, execution);
 			}
-			if (envelope && isWriteMethod(method)) {
+			if (envelope && isWriteMethodKind(method)) {
 				await publish(envelope);
 			}
 
@@ -1534,35 +1447,6 @@ async function authorize<TContext, TParams extends object>(
 	}
 }
 
-function mergeParams<TParams extends object, TArgs>(params: TParams, args: TArgs) {
-	if (args === undefined) {
-		return {
-			params
-		};
-	}
-
-	if (Array.isArray(args)) {
-		return args.map((item) => {
-			if (!isRecord(item)) {
-				return item;
-			}
-			return {
-				...item,
-				params
-			};
-		});
-	}
-
-	if (!isRecord(args)) {
-		return args;
-	}
-
-	return {
-		...args,
-		params
-	};
-}
-
 function unwrapResourceValue<TValue>(value: ResourceHandlerOk<TValue> | SyncBatchOutput<ResourceHandlerOk<TValue>>) {
 	if (!isBatchOutput(value)) {
 		return 'output' in value ? value.output : undefined;
@@ -1645,7 +1529,7 @@ function withDeferredSourceCommit(
 	method: MethodKind,
 	options: OperationOptions | undefined
 ): InternalOperationOptions | undefined {
-	if (!isWriteMethod(method)) {
+	if (!isWriteMethodKind(method)) {
 		return options;
 	}
 
@@ -1696,23 +1580,10 @@ function batchHasSourceCommit(value: SyncBatchOutput<ResourceHandlerOk<unknown>>
 	return false;
 }
 
-function mergeMetrics(
-	first: readonly CostMetric[] | undefined,
-	second: readonly CostMetric[] | undefined
-): readonly CostMetric[] | undefined {
-	if (!first || first.length === 0) {
-		return second;
-	}
-	if (!second || second.length === 0) {
-		return first;
-	}
-	return [...first, ...second];
-}
-
 function buildEnvelope<TArgs>(
 	managerKey: string,
 	scope: string,
-	method: string,
+	method: MethodKind,
 	args: TArgs,
 	options: OperationOptions | undefined,
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>,
@@ -1725,7 +1596,7 @@ function buildEnvelope<TArgs>(
 	}
 
 	const replayCursor = getSyncCursor(value) ?? getChangesSyncCursor(changes) ?? readCursor;
-	if (!replayCursor && !isWriteMethod(method)) {
+	if (!replayCursor && !isWriteMethodKind(method)) {
 		return undefined;
 	}
 	const cursor = replayCursor ?? nextCursor();
@@ -1918,31 +1789,6 @@ function getResetManifest(changes: readonly SyncChange[]): SyncEnvelope['reset']
 	return undefined;
 }
 
-function buildResetEnvelope(managerKey: string, scope: string, previousCursor: string, cursor: string): SyncEnvelope {
-	const manifest: ResetManifest = {
-		scope,
-		reason: 'retention_gap',
-		previousCursor,
-		nextCursor: cursor
-	};
-	return {
-		managerKey,
-		scope,
-		cursor,
-		changes: [
-			{
-				type: 'reset',
-				manifest
-			}
-		],
-		reset: manifest
-	};
-}
-
-function isWriteMethod(method: string): boolean {
-	return method === 'add' || method === 'mutate' || method === 'delete';
-}
-
 function methodHasQuery(method: RuntimeMethodDefinition | undefined): boolean {
 	return method?.query !== undefined;
 }
@@ -1990,13 +1836,6 @@ function prunePersistenceScope(persistence: ManagerSyncPersistence, scope: strin
 	if ('pruneScope' in persistence && isCallable(persistence.pruneScope)) {
 		persistence.pruneScope(scope);
 	}
-}
-
-function jsonResponse<TBody>(body: TBody, status = 200): Response {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: JSON_HEADERS
-	});
 }
 
 function syncHttpError(errorValue: SyncError): SyncHttpResult<unknown> {
