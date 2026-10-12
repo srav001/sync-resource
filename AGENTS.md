@@ -44,6 +44,7 @@ and repair provide convergence.
 - `src/server/manager.ts` — authorization, scope, HTTP methods, idempotency, persistence, replay, and finality
 - `src/server/effect.ts` — optional Effect resource/manager boundary, context and cancellation bridging, and HTTP routes
 - `src/server/connectBatch.ts` — batch connect route that dispatches each registration through the application's router
+- `src/server/hook.ts` — sync-first caller for optional telemetry and error hooks
 - `src/server/streamMultiplexer.ts` — one physical SSE stream with logical manager/scope subscriptions
 - `src/server/realtime.ts` — optional cross-process realtime bus
 - `src/server/changes.ts` — change constructors
@@ -143,7 +144,7 @@ and matching declarations under `dist`. The npm package also includes `README.md
 ## Tests And Behavioral Changes
 
 The repository has maintained black-box characterization suites for the shared protocol, resources, managers,
-persistence, direct and shared SSE, the framework-neutral client, framework adapters, and end-to-end synchronization.
+persistence, shared SSE, the framework-neutral client, framework adapters, and end-to-end synchronization.
 Do not infer behavioral safety from typechecking or coverage percentages alone. When changing protocol, resource,
 manager, store, replay, repair, cache, finality, or adapter behavior, add or update the smallest public-API test that
 proves the affected contract.

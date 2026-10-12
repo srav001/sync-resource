@@ -1,8 +1,9 @@
 # Migrating From v1 To v2
 
-v2 keeps the v1 resource, manager, and store APIs. The client and server protocol changed in three ways that need
-action: the browser now registers realtime subscriptions through a batch route, `hydrate()` resolves earlier, and
-`resetSharedStreamForTests` is no longer exported. Everything else is additive or automatic.
+v2 keeps the v1 resource, manager, and store APIs. The client and server protocol changed in these ways that can need
+action: the browser now registers realtime subscriptions through a batch route, `hydrate()` resolves earlier,
+`resetSharedStreamForTests` is no longer exported, the per-manager `/events` route is gone, list read envelopes no longer
+carry the page, and an idle scope keeps only its newest outbox envelope. Everything else is additive or automatic.
 
 ## Checklist
 
@@ -11,7 +12,10 @@ action: the browser now registers realtime subscriptions through a batch route, 
 3. Check code that relied on `hydrate()` also meaning "realtime is registered". [Details](#2-hydrate-resolves-when-the-read-is-applied)
 4. Remove `resetSharedStreamForTests` imports. [Details](#3-resetsharedstreamfortests-is-no-longer-exported)
 5. Only if you wrote your own outbox, persistence, or realtime bus: review [custom persistence](#4-custom-outbox-persistence-or-realtime-bus).
-6. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
+6. Only if you used `events: true`, `http.events`, or a `/events` URL: [use the shared stream](#5-replace-the-direct-events-route-with-the-shared-stream).
+7. Only if code reads raw `list` responses: [read the page from `value`](#6-list-read-envelopes-no-longer-carry-pageloaded).
+8. Only if you rely on replay for clients that were offline longer than the idle TTL: [review idle scopes](#7-idle-scopes-keep-only-their-newest-envelope).
+9. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
    `sync-resource/server/effect` ([requirements](#requirements)).
 
 Then adopt what you want from [Optional additions](#optional-additions). Automatic behavior changes need no code and
@@ -169,6 +173,15 @@ const outbox: ManagerOutbox = {
 };
 ```
 
+**Generated mutation ids.** A write whose mutation id was not supplied (no `x-mutation-id`, no `mutationId` option) gets a
+generated id that cannot match an earlier record, so the manager skips the duplicate lookup and no longer hashes its
+arguments. The record passed to `recordMutation` has `argsHash: ''` for those writes. If your persistence stores or
+indexes `argsHash`, accept the empty string. A supplied id keeps its stable arguments hash and duplicate checks.
+
+**Realtime bus callback.** The `onEnvelope` callback the manager passes to `realtimeBus.subscribe` is a no-op. Keep
+implementing `subscribe` (the manager calls it when a client connects and releases it when the scope is idle), but do not
+rely on the callback receiving envelopes.
+
 **Optional `execution` argument.** `append`, `readAfter`, `readMutation`, `recordMutation`, `latestCursor`, the
 `authorize` hook (third argument), and `realtimeBus.subscribe` / pub-sub `subscribe` now receive
 `execution: { signal: AbortSignal }`. Existing two-argument implementations keep compiling and running. Observe the signal
@@ -180,6 +193,72 @@ authorize: (context, params) => canRead(context, params);
 // After (v2), optional
 authorize: (context, params, { signal }) => canRead(context, params, signal);
 ```
+
+### 5. Replace the direct `/events` route with the shared stream
+
+**What changed.** The per-manager direct SSE route is removed: the `events: true` option of `managerHttpRoutes`, the
+`http.events` handler, and `GET <manager>/events` no longer exist. The browser runtime never used it; it was a
+diagnostic stream. Realtime uses the shared stream plus each manager's `/connect` route. Error-hook method labels
+changed with it: a failed bus subscribe is reported as `realtimeBus.subscribe` and a failed shared-stream replay as
+`stream.replay` (both were `events`).
+
+**Before.**
+
+```ts
+managerHttpRoutes({ manager: notes, path: '/api/notes', params, events: true }); // also mounted GET /api/notes/events
+const response = await notes.http.events!({ request, params });
+```
+
+**After.** Remove `events: true` and the `http.events` call. To read envelopes outside the browser runtime, open the
+shared stream and register the scope through `connect`; `after` replays from a cursor:
+
+```ts
+const headers = { 'x-sync-transport-id': transportId };
+const stream = await httpSharedSyncStream(new Request(streamUrl, { method: 'POST', headers }));
+await notes.http.connect!({
+	request: new Request(`${connectUrl}?after=${cursor}`, { method: 'POST', headers }),
+	params
+});
+// stream.body now carries hello, ping, sync, and sync-chunk events
+```
+
+`connect` still acquires `realtimeBus.subscribe` for the scope and holds it until the scope is idle. The manager passes
+the bus a no-op envelope callback, so bus envelopes are not forwarded to the shared stream; run one server instance.
+
+### 6. List read envelopes no longer carry `pageLoaded`
+
+**What changed.** The `envelope` of a `list` read response is `{ managerKey, scope, cursor, changes: [] }`, like a `get`
+read. It used to repeat the page as a `pageLoaded` change next to `value`, which doubled the response size. The cursor
+is unchanged (the resource's `syncCursor`, then `output.syncCursor`, then the outbox's latest cursor), and the store only
+reads `envelope.cursor` from a read. List read envelopes no longer include `sourceClientId` or `metrics`. A `list` handler
+that returns explicit `changes` still gets them in its envelope. This only matters to code that reads raw responses.
+
+**Before.**
+
+```ts
+const body = await response.json();
+const items = body.envelope.changes[0].items;
+```
+
+**After.**
+
+```ts
+const body = await response.json();
+const items = body.value.items;
+```
+
+### 7. Idle scopes keep only their newest envelope
+
+**What changed.** When a scope has had no connected stream for `stream.idleTtlMs` (5 minutes by default),
+`MemoryManagerOutbox` now keeps only that scope's newest envelope, on top of the mutation records it already dropped. A
+manager without an `outbox` option uses a `MemoryManagerOutbox`, so it behaves the same. A client reconnecting with
+exactly that cursor resumes without a reset; every older cursor, and the scope's origin cursor, reset and repair.
+
+**Why it matters.** Memory per idle scope is bounded to one envelope. A client that was offline longer than the idle TTL
+repairs through a reset instead of replaying.
+
+**Action.** None for the browser client, which repairs automatically. If you need replay for longer-offline clients,
+raise `stream.idleTtlMs` or use a durable outbox; custom outboxes are not pruned by the manager.
 
 ## Requirements
 
@@ -202,6 +281,8 @@ authorize: (context, params, { signal }) => canRead(context, params, signal);
   `hydrate()` or `connect()`.
 - Live envelopes for a scope are sent after its replayed envelopes, in order.
 - The client discards malformed SSE chunk frames and counts SSE size limits in UTF-8 bytes.
+- Effect manager routes answer JSON responses as buffered bodies with the same status and headers; only the shared stream
+  stays a stream.
 - Adapters (`sync-resource/client/react`, `solid`, `vue`) are unchanged.
 - TypeScript signatures that only widened (`Validator.parse`, `OperationMeta`, telemetry contexts now extend
   `OperationExecution`) need no change.

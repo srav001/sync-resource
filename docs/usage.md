@@ -315,9 +315,8 @@ The common handler return is the domain output:
 return ctx.ok(note);
 ```
 
-The manager can infer normal sync changes from method shape and ids:
+The manager can infer normal sync changes for writes from method shape and ids:
 
-- `list` output with `items` becomes `pageLoaded`.
 - `add` output with `id` becomes `itemAdded`.
 - `mutate` query/output with `id` becomes `itemUpdated`.
 - `delete` query/output with `id` becomes `itemDeleted`.
@@ -337,7 +336,7 @@ return ok({
 Use explicit `changes` only when default inference is not enough. Use `metrics` for generic adapter cost reporting.
 Core sync does not attach database-specific meaning to those metrics.
 
-Read responses do not get synthetic replay cursors. A `list` or `get` read without a `syncCursor` gets the scope's latest outbox cursor when the outbox implements `latestCursor` (captured before the read handler runs); a `get` read then returns an envelope with that cursor and no changes. With an outbox without `latestCursor`, a read returns no cursor. A resource can also return a real persisted cursor through `syncCursor` or explicit changes that include it. Writes with state changes get manager-generated cursors and are persisted through the outbox/finality path.
+Read responses do not get synthetic replay cursors. A `list` or `get` read without a `syncCursor` gets the scope's latest outbox cursor when the outbox implements `latestCursor` (captured before the read handler runs); a `list` or `get` read then returns an envelope with that cursor and no changes: the page itself travels once, in the response value. A `list` read that returns explicit `changes` keeps them in its envelope. With an outbox without `latestCursor`, a read returns no cursor. A resource can also return a real persisted cursor through `syncCursor` or explicit changes that include it. Writes with state changes get manager-generated cursors and are persisted through the outbox/finality path.
 
 The client store's cursor is the one its latest read returned, or the newest live envelope applied after that read started. A read without a cursor clears it, so a cursor restored from cache or set by a reset is never sent once a read has replaced the data it described.
 
@@ -454,6 +453,7 @@ Manager behavior:
 - each duplicate caller can cancel its own wait without cancelling or delaying the caller that owns the shared execution
 - successful writes with authoritative changes are recorded as `finalized`
 - successful writes without an envelope are recorded as `acknowledged`
+- a write whose mutation id the store or caller did not supply gets a generated id; it can never match a stored or in-flight record, so the manager skips the duplicate lookup and the arguments hash, and stores `argsHash: ''` in its record
 
 Production persistence should enforce durable uniqueness for `(scope, mutationId)` and should write source data, mutation record, and outbox envelope atomically where possible.
 
@@ -500,7 +500,7 @@ Cursor contract:
 - Cursors are opaque replay tokens scoped to one manager scope.
 - `readAfter(scope, cursor, limit)` must return envelopes strictly after that cursor when it is retained.
 - If the cursor is not retained, return `cursorFound: false` and the retained count; the stream always emits a reset for an unknown cursor, including when nothing is retained. The stream reads up to `replayLimit + 1` envelopes (manager option `replayLimit`, default 1000) and emits a reset instead of a partial replay when more than `replayLimit` are pending.
-- `latestCursor(scope)` is optional and returns the cursor of the newest retained envelope of the scope. For a scope with no retained envelope it returns an origin cursor that `readAfter` accepts as the start of the scope's history until trimming may have dropped an envelope (`MemoryManagerOutbox` uses one origin per instance, so an origin from another process is unknown and resets). Return `undefined` only when the outbox cannot name a position. Every returned cursor must be one `readAfter` can find. Effect outboxes and persistence take the same optional `latestCursor(scope)` returning an Effect.
+- `latestCursor(scope)` is optional and returns the cursor of the newest retained envelope of the scope. For a scope with no retained envelope it returns an origin cursor that `readAfter` accepts as the start of the scope's history until trimming may have dropped an envelope (`MemoryManagerOutbox` uses one origin per instance, so an origin from another process is unknown and resets; it also resets once the scope went idle and was pruned to its newest envelope). Return `undefined` only when the outbox cannot name a position. Every returned cursor must be one `readAfter` can find. Effect outboxes and persistence take the same optional `latestCursor(scope)` returning an Effect.
 - Manager-generated cursors include process entropy to avoid cross-process token collisions, but they are not a durable ordered sequence by themselves.
 - Durable persistence should make replay ordering stable across processes. If the backing store owns sequence numbers, the resource/commit path should return that persisted cursor through `syncCursor`.
 - Read/list responses must not invent replay cursors that are not present in durable persistence. When a `list` or `get` read returns no `syncCursor` and the outbox implements `latestCursor`, the manager attaches the scope's latest outbox cursor, captured before the read handler runs, so replay covers commits that land between the read and the stream registration.
@@ -697,8 +697,8 @@ export function connectNotes(request: Request, workspaceId: string): Promise<Res
 
 The batch route (`/api/sync-resource/connect` by default) is separate from the per-manager routes and is `POST` only.
 
-Do not mount manager `/events` routes for normal application synchronization. Normal realtime uses one shared SSE stream
-plus manager `/connect` routes for logical subscriptions. Manager `/events` is a direct diagnostic stream.
+Realtime uses one shared SSE stream plus manager `/connect` routes for logical subscriptions. There is no per-manager
+SSE route.
 
 Transport details:
 
@@ -813,9 +813,8 @@ Provide the same route middleware to it that you provide to the manager routes. 
 Effect context rather than creating a runtime.
 
 `managerHttpRoutes` mounts only the manager methods that exist: `get`, `list`, `add`, `mutate`, `delete`, and `connect`.
-Pass `events: true` only when deliberately exposing its diagnostic SSE endpoint. The `params` and optional `context`
-resolvers are Effect values, so application authentication and path decoding remain in the host router rather than being
-duplicated by Sync Resource.
+The `params` and optional `context` resolvers are Effect values, so application authentication and path decoding
+remain in the host router rather than being duplicated by Sync Resource.
 
 The adapter does not create a `ManagedRuntime`, accept a `Layer`, or own another runtime lifecycle. For Web-native request
 sources, Effect returns the original `Request`; server-side route interruption therefore cannot replace its signal, though
@@ -888,10 +887,14 @@ Rules:
 - Each pending `/connect` wait is independently abortable; cancelling one waiter does not cancel establishment while
   another consumer still owns it.
 - Manager `stream.onScopeIdle` is only for releasing manager-owned ephemeral per-scope memory. Idle cleanup is routed
-  only to the manager that owns that encoded scope.
-- Shared-stream replay failure reports through the manager error hook, emits a `replay_failed` reset when possible, and
-  closes the stream so reconnect/repair owns recovery. Physical disconnect cancels pending replay through the physical
-  response stream's owned signal, clears replay buffers, and is normal termination rather than a reported failure.
+  only to the manager that owns that encoded scope. When a scope goes idle, the manager also drops its mutation records
+  from memory persistence and releases the scope's realtime bus subscription; `MemoryManagerOutbox` keeps only the
+  scope's newest envelope. A client exactly at that cursor replays nothing, while any older cursor and the scope origin
+  reset and repair.
+- Shared-stream replay failure reports through the manager error hook with method `stream.replay`, emits a
+  `replay_failed` reset when possible, and closes the stream so reconnect/repair owns recovery. Physical disconnect
+  cancels pending replay through the physical response stream's owned signal, clears replay buffers, and is normal
+  termination rather than a reported failure.
 - Ping events are ignored on the client hot path before JSON parsing.
 - Malformed chunk frames—including fractional indexes/counts—broadcast payloads, and non-finite owner-lock expiries are
   discarded before they affect client state.
@@ -899,18 +902,14 @@ Rules:
   Request abort, reader cancellation, oversize, backpressure, and enqueue failure all perform the same idempotent cleanup.
 - Client SSE limits count UTF-8 bytes, each concurrently read stream owns its stateful decoder, and terminal protocol
   rejection aborts the old fetch owner before reconnect.
-- Diagnostic stream startup uses that same cleanup boundary. A replay/persistence failure is reported once through the
-  manager error hook and remains a stream error; cancellation is normal termination and is not reported as a failure.
-  Diagnostic reader cancellation and physical shared-stream disconnect each own their in-flight replay signal, so pending
-  Effect replay work finalizes before its stream is released.
 - The connection cap is per browser transport id plus IP. This limits duplicate streams from one browser session without punishing many real users behind one NAT. It is not a standalone per-IP abuse ceiling.
-- Stream close/cancel clears per-stream cursor replay buffers immediately, so high-fanout connections do not retain cursor bookkeeping after disconnect while waiting for GC.
+- Stream close/cancel clears per-stream cursor replay buffers immediately, so high-fanout connections do not retain cursor bookkeeping after disconnect while waiting for GC. The per-stream cursor window holds only replayed cursors, so live sends add no retained memory per stream.
 
 Realtime is required, but correctness comes from cursor replay and repair. A missed SSE event is not data loss if the outbox can replay or trigger reset.
 
 ## Cross-Process Realtime
 
-Use a manager realtime bus when multiple API processes can serve sync streams:
+Use a manager realtime bus to publish committed envelopes to other API processes:
 
 ```ts
 import { createPubSubManagerRealtimeBus } from 'sync-resource/server';
@@ -938,18 +937,21 @@ export const notesManager = manager({
 The transport wrapper can be Redis, NATS, Azure Service Bus, or another pub/sub system. Bus failures must not invalidate
 committed writes; durable outbox replay is still the correctness backstop.
 
-One manager-owned entry coordinates each scope. Every diagnostic `/events` stream holds its own lease, while successful
-shared-stream `/connect` calls retain one deduplicated lease until that scope becomes idle. Concurrent consumers share one
-subscription establishment. Each waiter can cancel independently; only the last lease leaving aborts a pending
-establishment or runs the acquired unsubscribe function. This prevents diagnostic and shared-stream consumers from
-releasing each other's subscription.
+One manager-owned entry coordinates each scope. Successful shared-stream `/connect` calls retain one deduplicated lease
+until that scope becomes idle. Concurrent consumers share one subscription establishment. Each waiter can cancel
+independently; only the last lease leaving aborts a pending establishment or runs the acquired unsubscribe function.
+
+The manager publishes every committed envelope to the bus and holds the subscription for connected scopes, but it passes
+the bus a no-op envelope callback. A shared stream delivers the envelopes this process commits; envelopes that arrive
+from the bus are not forwarded to it. Sync Resource targets a single server instance, and a client reconnecting after a
+gap recovers through outbox replay and reset.
 
 `ManagerRealtimeBus.subscribe` and `ManagerRealtimePubSubTransport.subscribe` receive an optional third
 `OperationExecution` argument. Implementations must observe `execution.signal` while acquiring the subscription and stop
 the underlying work when it aborts. The Effect adapter uses that signal to interrupt the acquisition fiber and close its
 Scope, so even a never-settling Effect runs its finalizers when the last lease leaves.
 
-A failed shared establishment is reported once and remains retryable by the next consumer. A failed unsubscribe is
+A failed shared establishment is reported once with method `realtimeBus.subscribe` and remains retryable by the next consumer. A failed unsubscribe is
 reported once with method `realtimeBus.unsubscribe` and is terminally contained. A failed best-effort publish is reported
 once with method `realtimeBus.publish`; neither failure invalidates a committed write.
 
