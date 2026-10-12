@@ -657,16 +657,11 @@ function wrapManager<TKey extends string, TResource extends EffectResourceLike, 
 				if (!Predicate.isFunction(call)) {
 					continue;
 				}
-				const runtimeCall = call as (...args: readonly unknown[]) => Promise<SyncResult<unknown, SyncError>>;
-				wrapped[kind] = takesOptionsOnly(kind, resourceValue.definition.methods[kind])
-					? (options?: EffectOperationOptions) =>
-							liftKernel((signal, caller) =>
-								runtimeCall(operationOptions(options, signal, withBase(caller)))
-							)
-					: <TArgs>(args: TArgs, options?: EffectOperationOptions) =>
-							liftKernel((signal, caller) =>
-								runtimeCall(args, operationOptions(options, signal, withBase(caller)))
-							);
+				wrapped[kind] = liftCall(
+					call as ResourceCallMap[MethodKind] & {},
+					takesOptionsOnly(kind, resourceValue.definition.methods[kind]),
+					withBase
+				);
 			}
 			return wrapped as EffectBoundManager<TKey, TResource>;
 		}
@@ -680,14 +675,7 @@ function wrapSelf(self: ResourceCallMap, methods: EffectResourceMethodMap): Effe
 		if (!call) {
 			continue;
 		}
-		const optionOnly = takesOptionsOnly(kind, methods[kind]);
-		const runtimeCall = (...args: readonly unknown[]) =>
-			liftKernel((signal, context) =>
-				optionOnly
-					? call(operationOptions(args[0] as EffectOperationOptions | undefined, signal, context))
-					: call(args[0], operationOptions(args[1] as EffectOperationOptions | undefined, signal, context))
-			);
-		wrapped[kind] = runtimeCall as never;
+		wrapped[kind] = liftCall(call, takesOptionsOnly(kind, methods[kind]), (context) => context) as never;
 	}
 	return wrapped;
 }
@@ -742,6 +730,23 @@ async function lowerEffect<A>(
 		return err(failure);
 	}
 	throw new EffectHandlerDefect(exit.cause);
+}
+
+// A method that takes only options is called with them alone; every other method takes its arguments first.
+function liftCall(
+	call: (...args: readonly unknown[]) => Promise<SyncResult<unknown, SyncError>>,
+	optionsOnly: boolean,
+	contextOf: (caller: Context.Context<unknown>) => Context.Context<unknown>
+): (...args: readonly unknown[]) => Effect.Effect<unknown, SyncError, unknown> {
+	return (...args) =>
+		liftKernel((signal, caller) => {
+			const options = operationOptions(
+				args[optionsOnly ? 0 : 1] as EffectOperationOptions | undefined,
+				signal,
+				contextOf(caller)
+			);
+			return optionsOnly ? call(options) : call(args[0], options);
+		});
 }
 
 function liftKernel<A>(
