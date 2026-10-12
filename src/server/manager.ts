@@ -124,21 +124,6 @@ interface RuntimeMethodDefinition {
 	readonly query?: object;
 }
 
-interface RuntimeResource {
-	readonly definition: {
-		readonly methods: Partial<Record<MethodKind, RuntimeMethodDefinition>>;
-	};
-	readonly type: {
-		readonly params: object;
-		readonly methods: object;
-	};
-	readonly get?: RuntimeResourceMethod;
-	readonly list?: RuntimeResourceMethod;
-	readonly add?: RuntimeResourceMethod;
-	readonly mutate?: RuntimeResourceMethod;
-	readonly delete?: RuntimeResourceMethod;
-}
-
 interface ResourceLike {
 	readonly definition: {
 		readonly methods: Partial<Record<MethodKind, RuntimeMethodDefinition>>;
@@ -147,6 +132,14 @@ interface ResourceLike {
 		readonly params: object;
 		readonly methods: object;
 	};
+}
+
+interface RuntimeResource extends ResourceLike {
+	readonly get?: RuntimeResourceMethod;
+	readonly list?: RuntimeResourceMethod;
+	readonly add?: RuntimeResourceMethod;
+	readonly mutate?: RuntimeResourceMethod;
+	readonly delete?: RuntimeResourceMethod;
 }
 
 type RuntimeResourceMethod = <TArgs>(
@@ -181,24 +174,12 @@ interface BusSubscriptionEntry {
 	closing?: Promise<void>;
 }
 
-interface RuntimeManagerOptions<TContext, TParams extends object> {
-	readonly key: string;
-	readonly authorize: AuthorizeHook<TContext | undefined, TParams>;
-	scope(params: TParams): ScopeValue;
-	readonly replayLimit?: number;
-	readonly outbox?: ManagerOutbox;
+interface RuntimeManagerOptions<TContext, TParams extends object> extends Omit<
+	CreateManagerOptions<string, TParams, unknown, TContext>,
+	'persistence'
+> {
 	readonly persistence: ManagerSyncPersistence;
 	readonly inFlightMutations: Map<string, InFlightManagerMutation>;
-	readonly realtimeBus?: ManagerRealtimeBus;
-	readonly telemetry?: ManagerTelemetry;
-	readonly stream?: {
-		readonly heartbeatMs?: number;
-		readonly idleTtlMs?: number;
-		readonly maxConnectionsPerIp?: number;
-		readonly maxEventBytes?: number;
-		onScopeIdle?(scope: string): void;
-	};
-	handleError?(error: SyncError, context: ManagerTelemetryContext): Promise<void> | void;
 }
 
 export function manager<TKey extends string, TResource extends ResourceLike, TContext = undefined>(
@@ -283,9 +264,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	}
 
 	function createHttpHandlers(
-		managerOptions: RuntimeManagerOptions<TContext, ResourceParams<TResource>> & {
-			readonly maxPayloadBytes?: number;
-		}
+		managerOptions: RuntimeManagerOptions<TContext, ResourceParams<TResource>>
 	): Manager<TKey, TResource, TContext>['http'] {
 		const handlers: Partial<ManagerHttpHandlers<TContext, ResourceParams<TResource>>> = {};
 
@@ -916,7 +895,7 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 }
 
 async function executeHttpMethod<TContext, TParams extends object>(
-	options: RuntimeManagerOptions<TContext, TParams> & { readonly maxPayloadBytes?: number },
+	options: RuntimeManagerOptions<TContext, TParams>,
 	resource: RuntimeResource,
 	method: MethodKind,
 	args: {
