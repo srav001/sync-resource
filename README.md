@@ -111,6 +111,7 @@ into Effect in one line.
 
 ```ts
 import { configureSync, createStore } from 'sync-resource/client/core';
+
 import type { NotesManager } from './notesManager.js';
 
 configureSync({ cache: { adapter: cacheAdapter } });

@@ -10,6 +10,7 @@ Create the store at a stable application or provider boundary, not during compon
 
 ```ts
 import { createReactStore } from 'sync-resource/client/react';
+
 import type { NotesManager } from './notesManager.js';
 
 const notes = createReactStore<NotesManager>(config);

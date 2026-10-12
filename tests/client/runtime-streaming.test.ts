@@ -580,21 +580,18 @@ describe('browser runtime registration order', () => {
 				expect((await subscribe(follower, followerReceived)).isOk()).toBe(true);
 				expect(streams).toHaveLength(1);
 
-				const sent = Array.from(
-					{ length: 4 },
-					(_, index): SyncEnvelope => ({
-						managerKey: 'notes',
-						scope: 'notes:scope',
-						cursor: `cursor-${index}`,
-						changes: [
-							{
-								type: 'itemAdded',
-								id: `note-${index}`,
-								value: { id: `note-${index}`, title: 'é😀'.repeat(index === 3 ? 50_000 : 1) }
-							}
-						]
-					})
-				);
+				const sent = Array.from({ length: 4 }, (_, index): SyncEnvelope => ({
+					managerKey: 'notes',
+					scope: 'notes:scope',
+					cursor: `cursor-${index}`,
+					changes: [
+						{
+							type: 'itemAdded',
+							id: `note-${index}`,
+							value: { id: `note-${index}`, title: 'é😀'.repeat(index === 3 ? 50_000 : 1) }
+						}
+					]
+				}));
 				const chunked = encodeSyncEnvelopeSseFrames(sent[3] as SyncEnvelope, MAX_CHUNKED_SYNC_BYTES);
 				expect(chunked?.length).toBeGreaterThan(1);
 				for (const envelope of sent.slice(0, 3)) {

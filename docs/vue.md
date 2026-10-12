@@ -10,6 +10,7 @@ Create the store synchronously inside `setup()` or a composable called by `setup
 
 ```ts
 import { createVueStore } from 'sync-resource/client/vue';
+
 import type { NotesManager } from './notesManager.js';
 
 const notes = createVueStore<NotesManager>(config);

@@ -8,6 +8,7 @@ translates reactive reads into Solid accessors and attaches disposal to the Soli
 
 ```ts
 import { createSolidStore } from 'sync-resource/client/solid';
+
 import type { NotesManager } from './notesManager.js';
 
 const notes = createSolidStore<NotesManager>(config);

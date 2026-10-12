@@ -1004,6 +1004,7 @@ Configure sync once near app startup:
 
 ```ts
 import { configureSync } from 'sync-resource/client/core';
+
 import { IndexedDbCacheAdapter } from './syncResourceIndexedDbCache.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -1198,6 +1199,7 @@ through `configureSync(...)`.
 
 ```js
 import { configureSync, createStore } from 'sync-resource/client/core';
+
 import { cacheAdapter } from './cache.js';
 
 configureSync({

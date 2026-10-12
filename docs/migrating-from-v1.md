@@ -377,8 +377,8 @@ an Effect; `manager(...)` is itself an Effect:
 
 ```ts
 import { Effect } from 'effect';
-import { manager, resource } from 'sync-resource/server/effect';
 import { syncError } from 'sync-resource/server';
+import { manager, resource } from 'sync-resource/server/effect';
 
 const notesResource = resource(paramsSchema, (method) => ({
 	mutate: method.mutate({
