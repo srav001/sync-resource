@@ -22,7 +22,7 @@ Upgrading from v1? See [docs/migrating-from-v1.md](./docs/migrating-from-v1.md).
 
 ```bash
 npm install sync-resource            # Promise API, client core
-npm install sync-resource effect     # plus the Effect server API (effect >=4.0.3 <5)
+npm install sync-resource effect     # plus the Effect server API (effect >=4.0.0 <5)
 npm install sync-resource react      # or vue, or solid-js, for a framework adapter
 ```
 
