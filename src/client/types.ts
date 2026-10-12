@@ -29,10 +29,7 @@ export interface CacheItem<TValue> {
 	readonly expiry: number;
 }
 
-export type CacheRecoverySource = 'memory' | 'idb';
-
 export interface CacheAdapter {
-	readonly kind?: CacheRecoverySource;
 	get<TValue>(key: string): Promise<CacheItem<TValue> | undefined>;
 	set<TValue>(key: string, value: CacheItem<TValue>): Promise<void>;
 	del(key: string): Promise<void>;

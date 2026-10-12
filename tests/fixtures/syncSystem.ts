@@ -229,7 +229,6 @@ export class InMemorySyncPersistence implements ManagerSyncPersistence {
 }
 
 export class InMemoryCache implements CacheAdapter {
-	readonly kind = 'idb' as const;
 	readonly reads: string[] = [];
 	readonly writes: string[] = [];
 	readonly deletes: string[] = [];

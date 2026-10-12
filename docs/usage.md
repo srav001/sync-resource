@@ -1001,7 +1001,6 @@ Cache adapter shape (the application implements it, typically over IndexedDB):
 
 ```ts
 interface CacheAdapter {
-	readonly kind?: 'memory' | 'idb';
 	get<TValue>(key: string): Promise<CacheItem<TValue> | undefined>; // CacheItem is { value, expiry }
 	set<TValue>(key: string, value: CacheItem<TValue>): Promise<void>;
 	del(key: string): Promise<void>;

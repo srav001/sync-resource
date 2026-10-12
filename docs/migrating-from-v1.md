@@ -280,6 +280,7 @@ Sync Resource no longer uses any of these. Remove them from your code.
   repairs itself after a reset or a stale page, and `repair()` is the manual call.
 - **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
   `stale` is the one staleness flag.
+- **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.
 - **Store `unsubscribe(callback)`:** removed. Call the function that `subscribe(callback)` returns.
 
 ## Requirements
