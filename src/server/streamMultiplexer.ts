@@ -178,7 +178,7 @@ export function publishSharedStreamEnvelope(envelope: SyncEnvelope): void {
 	}
 
 	// Encode once per committed envelope. Fanout can be very hot when many tabs/stores watch the same scope.
-	const frames = encodeSyncEnvelopeSseFrames(envelope, { maxEnvelopeBytes: config.maxEventBytes });
+	const frames = encodeSyncEnvelopeSseFrames(envelope, config.maxEventBytes);
 	for (const transportId of transportIds) {
 		const stream = streamsByTransportId.get(transportId);
 		if (!stream) {
@@ -297,10 +297,7 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 					safeEnqueue,
 					sendEnvelope(envelope) {
 						if (rememberSentCursor(this, envelope.cursor)) {
-							sendFrames(
-								this,
-								encodeSyncEnvelopeSseFrames(envelope, { maxEnvelopeBytes: config.maxEventBytes })
-							);
+							sendFrames(this, encodeSyncEnvelopeSseFrames(envelope, config.maxEventBytes));
 						}
 					},
 					close

@@ -6,8 +6,9 @@ const textEncoder = new TextEncoder();
 export const MAX_SSE_FRAME_BYTES = 256 * 1024;
 export const MAX_CHUNKED_SYNC_BYTES = 1024 * 1024;
 
+// A chunk of at most 64K JSON characters encodes to at most 3 bytes each, which stays under MAX_SSE_FRAME_BYTES.
 const SYNC_CHUNK_CHARS = 64 * 1024;
-const MIN_SYNC_CHUNK_CHARS = 1024;
+const SYNC_FRAME_OVERHEAD_BYTES = 'event: sync\ndata: \n\n'.length;
 
 export interface ParsedSseEvent {
 	readonly eventName: string;
@@ -53,23 +54,30 @@ export function encodeSseFrame<TPayload>(eventName: string, payload: TPayload): 
 
 export function encodeSyncEnvelopeSseFrames(
 	envelope: SyncEnvelope,
-	options: {
-		readonly maxEnvelopeBytes: number;
-		readonly maxFrameBytes?: number;
-	}
+	maxEnvelopeBytes: number
 ): readonly Uint8Array[] | undefined {
-	const maxFrameBytes = options.maxFrameBytes ?? MAX_SSE_FRAME_BYTES;
 	const serialized = JSON.stringify(envelope);
 	const fullFrame = encodeSseFrameJson('sync', serialized);
-	if (fullFrame.byteLength > options.maxEnvelopeBytes) {
+	if (fullFrame.byteLength > maxEnvelopeBytes) {
 		return undefined;
 	}
-	if (fullFrame.byteLength <= maxFrameBytes) {
+	if (fullFrame.byteLength <= MAX_SSE_FRAME_BYTES) {
 		return [fullFrame];
 	}
 
-	const serializedBytes = textEncoder.encode(serialized).byteLength;
-	return encodeChunkedSyncEnvelopeFrames(envelope, serialized, serializedBytes, maxFrameBytes);
+	const id = `${envelope.managerKey}:${envelope.scope}:${envelope.cursor}`;
+	const totalBytes = fullFrame.byteLength - SYNC_FRAME_OVERHEAD_BYTES;
+	const total = Math.ceil(serialized.length / SYNC_CHUNK_CHARS);
+	return Array.from({ length: total }, (_, index) =>
+		encodeSseFrame('sync-chunk', {
+			type: 'sync-chunk',
+			id,
+			index,
+			total,
+			totalBytes,
+			data: serialized.slice(index * SYNC_CHUNK_CHARS, (index + 1) * SYNC_CHUNK_CHARS)
+		})
+	);
 }
 
 export function parseSseEvent(eventText: string): ParsedSseEvent {
@@ -96,57 +104,6 @@ export function parseSyncEnvelopeJson(value: string): SyncEnvelope | undefined {
 	}
 }
 
-function encodeChunkedSyncEnvelopeFrames(
-	envelope: SyncEnvelope,
-	serialized: string,
-	totalBytes: number,
-	maxFrameBytes: number
-): readonly Uint8Array[] | undefined {
-	let chunkChars = Math.min(SYNC_CHUNK_CHARS, Math.max(serialized.length, 1));
-	while (chunkChars >= MIN_SYNC_CHUNK_CHARS) {
-		const chunks = splitString(serialized, chunkChars);
-		const frames: Uint8Array[] = [];
-		let oversized = false;
-		for (let index = 0; index < chunks.length; index += 1) {
-			const chunk = chunks[index];
-			if (chunk === undefined) {
-				oversized = true;
-				break;
-			}
-			const frame = encodeSseFrame('sync-chunk', {
-				type: 'sync-chunk',
-				id: syncChunkId(envelope),
-				index,
-				total: chunks.length,
-				totalBytes,
-				data: chunk
-			});
-			if (frame.byteLength > maxFrameBytes) {
-				oversized = true;
-				break;
-			}
-			frames.push(frame);
-		}
-		if (!oversized) {
-			return frames;
-		}
-		chunkChars = Math.floor(chunkChars / 2);
-	}
-	return undefined;
-}
-
 function encodeSseFrameJson(eventName: string, json: string): Uint8Array {
 	return textEncoder.encode(`event: ${eventName}\ndata: ${json}\n\n`);
-}
-
-function splitString(value: string, chunkChars: number): string[] {
-	const chunks: string[] = [];
-	for (let index = 0; index < value.length; index += chunkChars) {
-		chunks.push(value.slice(index, index + chunkChars));
-	}
-	return chunks;
-}
-
-function syncChunkId(envelope: SyncEnvelope): string {
-	return `${envelope.managerKey}:${envelope.scope}:${envelope.cursor}`;
 }

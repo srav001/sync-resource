@@ -102,12 +102,9 @@ describe('browser runtime SSE transport', () => {
 				managerKey: 'notes',
 				scope: 'notes:workspace-1',
 				cursor: 'cursor-large',
-				changes: [{ type: 'itemAdded', id: 'large', value: { text: 'x'.repeat(20_000) } }]
+				changes: [{ type: 'itemAdded', id: 'large', value: { text: 'x'.repeat(300_000) } }]
 			};
-			const frames = encodeSyncEnvelopeSseFrames(envelope, {
-				maxEnvelopeBytes: MAX_CHUNKED_SYNC_BYTES,
-				maxFrameBytes: 2_048
-			});
+			const frames = encodeSyncEnvelopeSseFrames(envelope, MAX_CHUNKED_SYNC_BYTES);
 			expect(frames?.length).toBeGreaterThan(2);
 			const reversed = [...(frames ?? [])].reverse();
 			controller?.enqueue(reversed[0]!);

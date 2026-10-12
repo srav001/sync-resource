@@ -518,7 +518,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 							if (closed) {
 								return;
 							}
-							const frames = encodeSyncEnvelopeSseFrames(envelope, { maxEnvelopeBytes: maxEventBytes });
+							const frames = encodeSyncEnvelopeSseFrames(envelope, maxEventBytes);
 							if (!frames) {
 								close();
 								return;

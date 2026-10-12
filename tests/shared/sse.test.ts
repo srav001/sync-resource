@@ -30,7 +30,7 @@ describe('SSE framing', () => {
 		expect(parseSyncEnvelopeJson(JSON.stringify({ ...envelope, changes: [{ type: 'bad' }] }))).toBeUndefined();
 	});
 	it('encodes small envelopes as one sync frame', () => {
-		const frames = encodeSyncEnvelopeSseFrames(envelope, { maxEnvelopeBytes: MAX_CHUNKED_SYNC_BYTES });
+		const frames = encodeSyncEnvelopeSseFrames(envelope, MAX_CHUNKED_SYNC_BYTES);
 		expect(frames).toHaveLength(1);
 		expect(parseSseEvent(decode.decode(frames![0])).eventName).toBe('sync');
 	});
@@ -39,14 +39,26 @@ describe('SSE framing', () => {
 			...envelope,
 			changes: [{ type: 'itemAdded' as const, id: 'n1', value: { text: 'x'.repeat(300_000) } }]
 		};
-		const frames = encodeSyncEnvelopeSseFrames(large, { maxEnvelopeBytes: MAX_CHUNKED_SYNC_BYTES });
+		const frames = encodeSyncEnvelopeSseFrames(large, MAX_CHUNKED_SYNC_BYTES);
 		expect(frames).toBeDefined();
 		expect(frames!.length).toBeGreaterThan(1);
 		const chunks = frames!.map((frame) => parseSyncEnvelopeChunkJson(parseSseEvent(decode.decode(frame)).data));
 		expect(chunks.every(Boolean)).toBe(true);
 		const ordered = chunks.sort((a, b) => a!.index - b!.index);
-		expect(JSON.parse(ordered.map((chunk) => chunk!.data).join(''))).toEqual(large);
-		expect(ordered[0]!.totalBytes).toBeGreaterThan(0);
+		const serialized = ordered.map((chunk) => chunk!.data).join('');
+		expect(JSON.parse(serialized)).toEqual(large);
+		expect(ordered.every((chunk) => chunk!.totalBytes === new TextEncoder().encode(serialized).byteLength)).toBe(
+			true
+		);
+	});
+	it.each([
+		['three-byte characters', '\u20ac'.repeat(150_000)],
+		['escaped quotes', '"'.repeat(300_000)]
+	])('keeps every chunk frame within the frame limit for %s', (_name, text) => {
+		const large = { ...envelope, changes: [{ type: 'itemAdded' as const, id: 'n1', value: { text } }] };
+		const frames = encodeSyncEnvelopeSseFrames(large, MAX_CHUNKED_SYNC_BYTES * 4);
+		expect(frames!.length).toBeGreaterThan(1);
+		expect(frames!.every((frame) => frame.byteLength <= MAX_SSE_FRAME_BYTES)).toBe(true);
 	});
 	it('rejects fractional and non-finite chunk indexes, counts, and byte lengths', () => {
 		const base = { type: 'sync-chunk', id: 'chunk', index: 0, total: 1, totalBytes: 1, data: 'x' };
@@ -66,8 +78,8 @@ describe('SSE framing', () => {
 			...envelope,
 			changes: [{ type: 'itemAdded' as const, id: 'n1', value: { text: 'x'.repeat(4_000) } }]
 		};
-		expect(encodeSyncEnvelopeSseFrames(large, { maxEnvelopeBytes: 100 })).toBeUndefined();
-		const frames = encodeSyncEnvelopeSseFrames(envelope, { maxEnvelopeBytes: MAX_CHUNKED_SYNC_BYTES });
+		expect(encodeSyncEnvelopeSseFrames(large, 100)).toBeUndefined();
+		const frames = encodeSyncEnvelopeSseFrames(envelope, MAX_CHUNKED_SYNC_BYTES);
 		expect(frames!.every((frame) => frame.byteLength <= MAX_SSE_FRAME_BYTES)).toBe(true);
 	});
 });
