@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
+import { type ManagerOutboxRead } from '../../src/server/index.ts';
 import {
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
-	type ManagerOutboxRead
-} from '../../src/server/index.ts';
-import { resetSharedStreamForTests, sharedStreamSentCursorCount } from '../../src/server/streamMultiplexer.ts';
+	resetSharedStreamForTests,
+	sharedStreamSentCursorCount
+} from '../../src/server/streamMultiplexer.ts';
 import { nextMacrotask } from '../fixtures/async.ts';
 import {
 	openStream,

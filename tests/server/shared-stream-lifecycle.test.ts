@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
+import { httpSharedSyncStream } from '../../src/server/index.ts';
 import {
-	httpSharedSyncStream,
 	publishSharedStreamEnvelope,
-	registerSharedStreamManager
-} from '../../src/server/index.ts';
-import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+	registerSharedStreamManager,
+	resetSharedStreamForTests
+} from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 import {
 	outboxReading,

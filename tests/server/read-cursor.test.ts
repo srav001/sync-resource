@@ -4,15 +4,17 @@ import {
 	httpSharedSyncStream,
 	manager,
 	MemoryManagerOutbox,
-	registerSharedStreamManager,
-	registerSharedStreamSubscription,
 	resource,
 	type ManagerOutbox,
 	type ManagerOutboxRead,
 	type OperationExecution,
 	type SyncEnvelope
 } from '../../src/server/index.ts';
-import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import {
+	registerSharedStreamManager,
+	registerSharedStreamSubscription,
+	resetSharedStreamForTests
+} from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 import { openSharedStream } from '../fixtures/sharedStream.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';

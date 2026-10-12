@@ -341,7 +341,7 @@ export function getSharedStreamConfig(): SharedStreamConfig {
 	return config;
 }
 
-export function getRegisteredSharedStreamManagerKeys(): readonly string[] {
+function getRegisteredSharedStreamManagerKeys(): readonly string[] {
 	if (!cachedManagerKeys) {
 		cachedManagerKeys = [...registeredManagers.keys()];
 	}

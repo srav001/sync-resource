@@ -1,10 +1,10 @@
 import {
 	httpSharedSyncStream,
-	registerSharedStreamSubscription,
 	type ManagerHttpHandlers,
 	type ManagerSyncPersistence,
 	type SyncEnvelope
 } from '../../src/server/index.ts';
+import { registerSharedStreamSubscription } from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 
 const decoder = new TextDecoder();
