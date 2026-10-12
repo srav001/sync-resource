@@ -23,3 +23,7 @@ export function isCallable<TValue>(value: TValue): value is TValue & Function {
 export function isUnrefableTimer(value: unknown): value is UnrefableTimer {
 	return isRecord(value) && isCallable(value.unref);
 }
+
+export function isThenable(value: unknown): value is PromiseLike<unknown> {
+	return isRecord(value) && isCallable(value.then);
+}

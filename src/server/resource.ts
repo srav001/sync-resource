@@ -3,6 +3,7 @@ import { isSyncSignal } from '../shared/index.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { normalizeSyncError, syncError, type SyncError } from './errors.js';
 import { withCommitExecution } from './executionState.js';
+import { callHook } from './hook.js';
 import type {
 	AnySchema,
 	Awaitable,
@@ -1289,13 +1290,4 @@ async function reportResourceError(
 ): Promise<void> {
 	await callHook(() => options?.telemetry?.error?.(context, errorValue));
 	await callHook(() => options?.handleError?.(errorValue, context));
-}
-
-async function callHook<TValue>(run: () => TValue): Promise<SyncResult<void, SyncError>> {
-	try {
-		await run();
-		return ok();
-	} catch (cause) {
-		return err(normalizeSyncError(cause));
-	}
 }

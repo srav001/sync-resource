@@ -4,6 +4,7 @@ import { encodeSseFrame, encodeSyncEnvelopeSseFrames, MAX_SSE_FRAME_BYTES } from
 import { stableStringify } from '../shared/stableJson.ts';
 import { normalizeSyncError, syncError, syncErrorToHttpStatus, toSyncProtocolError, type SyncError } from './errors.js';
 import { withCommitExecution } from './executionState.js';
+import { callHook } from './hook.js';
 import { combineAbortSignals, type MethodKind } from './resource.js';
 import {
 	publishSharedStreamEnvelope,
@@ -1982,15 +1983,6 @@ function waitForInFlight<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
 		signal.addEventListener('abort', onAbort, { once: true });
 	});
 	return Promise.race([promise, aborted]).finally(() => signal.removeEventListener('abort', onAbort));
-}
-
-async function callHook<TValue>(run: () => TValue): Promise<SyncResult<void, SyncError>> {
-	try {
-		await run();
-		return ok();
-	} catch (cause) {
-		return err(normalizeSyncError(cause));
-	}
 }
 
 function prunePersistenceScope(persistence: ManagerSyncPersistence, scope: string): void {
