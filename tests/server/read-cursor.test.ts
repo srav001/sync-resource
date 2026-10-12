@@ -121,13 +121,12 @@ describe('read sync cursor', () => {
 		expect(body.envelope).toMatchObject({ cursor: 'c1', changes: [] });
 	});
 
-	it('attaches the latest outbox cursor to a read without a resource cursor', async () => {
+	it('attaches the latest outbox cursor to a list read without a resource cursor', async () => {
 		const outbox = new MemoryManagerOutbox();
 		outbox.append(env('c1'));
 		outbox.append(env('c2'));
 		const body = await list(outbox);
-		expect(body.envelope?.cursor).toBe('c2');
-		expect(body.envelope?.changes[0]).toMatchObject({ type: 'pageLoaded', syncCursor: 'c2' });
+		expect(body.envelope).toEqual({ managerKey: 'notes', scope: 'notes:ws', cursor: 'c2', changes: [] });
 	});
 
 	it('captures the cursor before the read so replay covers a commit during the read', async () => {
@@ -172,9 +171,62 @@ describe('custom outbox read cursor', () => {
 		const notes = plainManager({ append: () => {}, readAfter: () => emptyRead, latestCursor: () => 'custom:7' });
 		const response = await notes.http.list!({ request: new Request('http://sync.test/list'), params });
 		const { envelope } = (await response.json()) as { envelope?: SyncEnvelope };
+		expect(envelope).toEqual({ managerKey: 'notes', scope: 'notes:ws', cursor: 'custom:7', changes: [] });
+	});
+
+	it('keeps the cursor a list resource returns over the outbox cursor, with no page in the envelope', async () => {
+		const outbox = new MemoryManagerOutbox();
+		outbox.append(env('c1'));
+		const pageManager = (output: { items: readonly { id: string }[]; syncCursor?: string }, syncCursor?: string) =>
+			manager({
+				key: 'notes',
+				resource: resource({ parse: (value: unknown) => value as { workspaceId: string } }, (method) => ({
+					list: method.list({
+						output: { parse: (value: unknown) => value as typeof output },
+						handler: ({ ctx }) => ctx.ok({ output, syncCursor })
+					})
+				})),
+				authorize: () => true,
+				scope: (scopeParams) => scopeParams.workspaceId,
+				outbox
+			});
+		const read = async (notes: ReturnType<typeof pageManager>) => {
+			const response = await notes.http.list!({ request: new Request('http://sync.test/list'), params });
+			return ((await response.json()) as { envelope?: SyncEnvelope }).envelope;
+		};
+		const items = [{ id: 'n1' }];
+		expect(await read(pageManager({ items }, 'resource:1'))).toEqual({
+			managerKey: 'notes',
+			scope: 'notes:ws',
+			cursor: 'resource:1',
+			changes: []
+		});
+		expect((await read(pageManager({ items, syncCursor: 'page:2' })))?.cursor).toBe('page:2');
+		expect((await read(pageManager({ items })))?.cursor).toBe('c1');
+	});
+
+	it('keeps explicit changes of a list read in its envelope', async () => {
+		const notes = manager({
+			key: 'notes',
+			resource: resource({ parse: (value: unknown) => value as { workspaceId: string } }, (method) => ({
+				list: method.list({
+					output: { parse: (value: unknown) => value as { items: readonly { id: string }[] } },
+					handler: ({ ctx }) =>
+						ctx.ok({
+							output: { items: [{ id: 'n1' }] },
+							changes: [{ type: 'pageLoaded', items: [{ id: 'n1' }], syncCursor: 'explicit:1' }]
+						})
+				})
+			})),
+			authorize: () => true,
+			scope: (scopeParams) => scopeParams.workspaceId,
+			outbox: new MemoryManagerOutbox()
+		});
+		const response = await notes.http.list!({ request: new Request('http://sync.test/list'), params });
+		const { envelope } = (await response.json()) as { envelope?: SyncEnvelope };
 		expect(envelope).toMatchObject({
-			cursor: 'custom:7',
-			changes: [{ type: 'pageLoaded', syncCursor: 'custom:7' }]
+			cursor: 'explicit:1',
+			changes: [{ type: 'pageLoaded', items: [{ id: 'n1' }] }]
 		});
 	});
 

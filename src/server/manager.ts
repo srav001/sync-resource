@@ -1349,7 +1349,9 @@ function buildEnvelope<TArgs>(
 ): SyncEnvelope | undefined {
 	const changes = collectChanges(method, args, value);
 	if (changes.length === 0) {
-		return readCursor ? { managerKey, scope, cursor: readCursor, changes } : undefined;
+		// A read envelope only carries its replay cursor; the page itself travels in the response value.
+		const cursor = method === 'list' ? listReadCursor(value, readCursor) : readCursor;
+		return cursor ? { managerKey, scope, cursor, changes } : undefined;
 	}
 
 	const replayCursor = getSyncCursor(value) ?? getChangesSyncCursor(changes) ?? readCursor;
@@ -1420,19 +1422,6 @@ function collectChanges<TArgs>(
 
 function inferChanges<TArgs, TOutput>(method: string, args: TArgs, output: TOutput): readonly SyncChange[] {
 	switch (method) {
-		case 'list': {
-			if (isRecord(output) && Array.isArray(output.items)) {
-				return [
-					{
-						type: 'pageLoaded',
-						items: output.items,
-						pageCursor: readString(output.pageCursor),
-						syncCursor: readString(output.syncCursor)
-					}
-				];
-			}
-			return [];
-		}
 		case 'add': {
 			const id = readStringField(output, 'id');
 			if (!id) {
@@ -1488,6 +1477,13 @@ function readStringField<TValue>(value: TValue, key: string): string | undefined
 
 function readString<TValue>(value: TValue): string | undefined {
 	return isString(value) ? value : undefined;
+}
+
+function listReadCursor(
+	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>,
+	readCursor: string | undefined
+): string | undefined {
+	return getSyncCursor(value) ?? (readStringField(unwrapResourceValue(value), 'syncCursor') || readCursor);
 }
 
 function getSyncCursor(
