@@ -151,7 +151,7 @@ describe('shared stream replay and framing', () => {
 		await reader.cancel();
 	});
 
-	it('characterizes live delivery racing deferred replay for an already-open stream', async () => {
+	it('replays before delivering a live envelope published during the deferred replay', async () => {
 		vi.useFakeTimers();
 		let replayReads = 0;
 		const replayed = envelope('cursor-replayed', 'replayed');
@@ -187,10 +187,9 @@ describe('shared stream replay and framing', () => {
 
 		const first = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
 		const second = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
-		// DIVERGENCE: live delivery can overtake deferred cursor replay after logical registration on an open stream.
 		expect([JSON.parse(first.data).cursor, JSON.parse(second.data).cursor]).toEqual([
-			'cursor-live',
-			'cursor-replayed'
+			'cursor-replayed',
+			'cursor-live'
 		]);
 		await reader.cancel();
 	});

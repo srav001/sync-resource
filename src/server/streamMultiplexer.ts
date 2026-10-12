@@ -45,7 +45,7 @@ interface StreamState {
 	readonly sentCursors: Set<string>;
 	readonly sentCursorOrder: string[];
 	sentCursorStart: number;
-	readonly replayingScopes: Set<string>;
+	readonly replayingScopes: Map<string, number>;
 	readonly bufferedByScope: Map<string, SyncEnvelope[]>;
 	safeEnqueue(chunk: Uint8Array): void;
 	sendEnvelope(envelope: SyncEnvelope): void;
@@ -165,7 +165,7 @@ export async function registerSharedStreamSubscription(
 	if (stream) {
 		// Replays are per logical scope even though the physical stream is shared by the whole browser session.
 		// Defer replay until after /connect can return the authoritative scope, otherwise the SSE event can race the client response.
-		scheduleReplaySubscription(stream, detail);
+		startReplay(stream, detail, true);
 	}
 
 	return ok();
@@ -292,7 +292,7 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 					sentCursors: new Set(),
 					sentCursorOrder: [],
 					sentCursorStart: 0,
-					replayingScopes: new Set(),
+					replayingScopes: new Map(),
 					bufferedByScope: new Map(),
 					safeEnqueue,
 					sendEnvelope(envelope) {
@@ -336,9 +336,7 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 				for (const scope of scopesByTransportId.get(resolvedTransportId) ?? []) {
 					const detail = subscriptionDetails.get(subscriptionKey(resolvedTransportId, scope));
 					if (detail) {
-						replaySubscription(activeStream, detail).catch((cause) =>
-							handleReplayFailure(activeStream, detail, cause)
-						);
+						startReplay(activeStream, detail, false);
 					}
 				}
 			},
@@ -412,39 +410,47 @@ function sendFrames(stream: StreamState, frames: readonly Uint8Array[] | undefin
 	}
 }
 
-async function replaySubscription(stream: StreamState, detail: SubscriptionDetail): Promise<void> {
-	if (!detail.afterCursor || stream.signal.aborted) {
+function startReplay(stream: StreamState, detail: SubscriptionDetail, deferred: boolean): void {
+	const { afterCursor } = detail;
+	if (!afterCursor || stream.signal.aborted) {
 		return;
 	}
 
-	stream.replayingScopes.add(detail.scope);
+	// Count the replay now so live publishes buffer from registration, and overlapping replays of one scope keep buffering until the last ends.
+	stream.replayingScopes.set(detail.scope, (stream.replayingScopes.get(detail.scope) ?? 0) + 1);
+	const run = () =>
+		replaySubscription(stream, detail, afterCursor).catch((cause) => handleReplayFailure(stream, detail, cause));
+	if (deferred) {
+		unrefTimer(setTimeout(run, 0));
+	} else {
+		run();
+	}
+}
+
+async function replaySubscription(stream: StreamState, detail: SubscriptionDetail, afterCursor: string): Promise<void> {
 	let replaySucceeded = false;
 	try {
-		const replay = await detail.persistence.readAfter(detail.scope, detail.afterCursor, detail.replayLimit, {
+		const replay = await detail.persistence.readAfter(detail.scope, afterCursor, detail.replayLimit, {
 			signal: stream.signal
 		});
 		if (!replay.cursorFound && replay.retainedEnvelopeCount > 0) {
-			stream.sendEnvelope(
-				buildResetEnvelope(detail.managerKey, detail.scope, detail.afterCursor, detail.nextCursor())
-			);
+			stream.sendEnvelope(buildResetEnvelope(detail.managerKey, detail.scope, afterCursor, detail.nextCursor()));
 		}
 		for (const envelope of replay.envelopes) {
 			stream.sendEnvelope(envelope);
 		}
 		replaySucceeded = true;
 	} finally {
-		stream.replayingScopes.delete(detail.scope);
-		if (replaySucceeded) {
-			flushBufferedScope(stream, detail.scope);
+		const remaining = (stream.replayingScopes.get(detail.scope) ?? 1) - 1;
+		if (remaining > 0) {
+			stream.replayingScopes.set(detail.scope, remaining);
+		} else {
+			stream.replayingScopes.delete(detail.scope);
+			if (replaySucceeded) {
+				flushBufferedScope(stream, detail.scope);
+			}
 		}
 	}
-}
-
-function scheduleReplaySubscription(stream: StreamState, detail: SubscriptionDetail): void {
-	const timer = setTimeout(() => {
-		replaySubscription(stream, detail).catch((cause) => handleReplayFailure(stream, detail, cause));
-	}, 0);
-	unrefTimer(timer);
 }
 
 async function handleReplayFailure(stream: StreamState, detail: SubscriptionDetail, cause: unknown): Promise<void> {
