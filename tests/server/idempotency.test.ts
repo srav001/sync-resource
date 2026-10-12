@@ -57,10 +57,9 @@ describe('manager mutation idempotency', () => {
 		const gate = system.database.pauseNextCommit();
 		const bound = system.manager.bind({ workspaceId: 'workspace-1' });
 		const args = { input: { id: 'n1', title: 'one' } };
-		// Assumes both calls take the same pre-registration await path, so the second observes the first in flight.
 		const first = bound.add(args, { mutationId: 'same' });
+		await gate.reached.promise;
 		const second = bound.add(args, { mutationId: 'same' });
-		await Promise.resolve();
 		gate.resolve();
 		const results = await Promise.all([first, second]);
 		expect(results.every((result) => result.isOk())).toBe(true);
@@ -77,9 +76,7 @@ describe('manager mutation idempotency', () => {
 			ownerSettled = true;
 			return result;
 		});
-		for (let index = 0; index < 10; index += 1) {
-			await Promise.resolve();
-		}
+		await gate.reached.promise;
 
 		const abort = new AbortController();
 		abort.abort();

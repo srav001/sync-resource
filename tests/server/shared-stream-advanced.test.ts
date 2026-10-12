@@ -4,13 +4,11 @@ import {
 	httpSharedSyncStream,
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
-	registerSharedStreamSubscription,
-	type ManagerOutboxRead,
-	type ManagerSyncPersistence,
 	type SyncEnvelope
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { MAX_CHUNKED_SYNC_BYTES, parseSseEvent, parseSyncEnvelopeChunkJson } from '../../src/shared/sse.ts';
+import { outboxReading, registerStreamSubscription, streamRequest } from '../fixtures/sharedStream.ts';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -23,22 +21,14 @@ describe('shared stream replay and framing', () => {
 			key: 'notes',
 			maxEventBytes: MAX_CHUNKED_SYNC_BYTES
 		});
-		const persistence = createPersistence();
-		await registerSharedStreamSubscription({
-			request: connectRequest('transport-chunks'),
-			managerKey: 'notes',
-			scope: 'notes:workspace-1',
-			replayLimit: 100,
-			persistence,
-			nextCursor: () => 'reset-cursor'
-		});
+		await registerStreamSubscription('transport-chunks', outboxReading());
 		const response = await httpSharedSyncStream(streamRequest('transport-chunks'));
 		const reader = response.body!.getReader();
 		await reader.read();
 
 		const envelope: SyncEnvelope = {
 			managerKey: 'notes',
-			scope: 'notes:workspace-1',
+			scope: 'notes:ws',
 			cursor: 'cursor-large',
 			changes: [{ type: 'itemAdded', id: 'large', value: { text: 'x'.repeat(300_000) } }]
 		};
@@ -77,18 +67,13 @@ describe('shared stream replay and framing', () => {
 				errors.push(`${context.method}:${error.message}`);
 			}
 		});
-		const persistence = createPersistence(async () => {
-			throw new Error('outbox unavailable');
-		});
-		await registerSharedStreamSubscription({
-			request: connectRequest('transport-failure'),
-			managerKey: 'notes',
-			scope: 'notes:workspace-1',
-			afterCursor: 'cursor-before',
-			replayLimit: 100,
-			persistence,
-			nextCursor: () => 'cursor-reset'
-		});
+		await registerStreamSubscription(
+			'transport-failure',
+			outboxReading(async () => {
+				throw new Error('outbox unavailable');
+			}),
+			'cursor-before'
+		);
 		const response = await httpSharedSyncStream(streamRequest('transport-failure'));
 		const reader = response.body!.getReader();
 		await reader.read();
@@ -96,102 +81,15 @@ describe('shared stream replay and framing', () => {
 		const resetEvent = parseSseEvent(new TextDecoder().decode(resetFrame.value));
 		expect(resetEvent.eventName).toBe('sync');
 		expect(JSON.parse(resetEvent.data)).toMatchObject({
-			cursor: 'cursor-reset',
+			cursor: 'reset',
 			reset: {
 				reason: 'replay_failed',
 				previousCursor: 'cursor-before',
-				nextCursor: 'cursor-reset'
+				nextCursor: 'reset'
 			}
 		});
 		expect(errors).toEqual(['stream.replay:outbox unavailable']);
 		expect((await reader.read()).done).toBe(true);
-	});
-
-	it('delivers replay before live envelopes committed while replay is in flight', async () => {
-		let resolveReplay!: (value: ManagerOutboxRead) => void;
-		const replayStarted = new Promise<void>((resolve) => {
-			const persistence = createPersistence(
-				() =>
-					new Promise<ManagerOutboxRead>((resolveRead) => {
-						resolveReplay = resolveRead;
-						resolve();
-					})
-			);
-			registerSharedStreamManager({ key: 'notes' });
-			registerSharedStreamSubscription({
-				request: connectRequest('transport-order'),
-				managerKey: 'notes',
-				scope: 'notes:workspace-1',
-				afterCursor: 'cursor-before',
-				replayLimit: 100,
-				persistence,
-				nextCursor: () => 'cursor-reset'
-			});
-		});
-		const response = await httpSharedSyncStream(streamRequest('transport-order'));
-		const reader = response.body!.getReader();
-		await reader.read();
-		await replayStarted;
-
-		const replayed = envelope('cursor-replayed', 'replayed');
-		const live = envelope('cursor-live', 'live');
-		publishSharedStreamEnvelope(live);
-		resolveReplay({
-			cursorFound: true,
-			retainedEnvelopeCount: 1,
-			envelopes: [replayed]
-		});
-
-		const first = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
-		const second = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
-		expect([JSON.parse(first.data).cursor, JSON.parse(second.data).cursor]).toEqual([
-			'cursor-replayed',
-			'cursor-live'
-		]);
-		await reader.cancel();
-	});
-
-	it('replays before delivering a live envelope published during the deferred replay', async () => {
-		vi.useFakeTimers();
-		let replayReads = 0;
-		const replayed = envelope('cursor-replayed', 'replayed');
-		const live = envelope('cursor-live', 'live');
-		const persistence = createPersistence(() => {
-			replayReads += 1;
-			return {
-				cursorFound: true,
-				retainedEnvelopeCount: 1,
-				envelopes: [replayed]
-			};
-		});
-		registerSharedStreamManager({ key: 'notes' });
-		const response = await httpSharedSyncStream(streamRequest('transport-deferred-order'));
-		const reader = response.body!.getReader();
-		await reader.read();
-
-		const registered = await registerSharedStreamSubscription({
-			request: connectRequest('transport-deferred-order'),
-			managerKey: 'notes',
-			scope: 'notes:workspace-1',
-			afterCursor: 'cursor-before',
-			replayLimit: 100,
-			persistence,
-			nextCursor: () => 'cursor-reset'
-		});
-		expect(registered.isOk()).toBe(true);
-		expect(replayReads).toBe(0);
-
-		publishSharedStreamEnvelope(live);
-		await vi.advanceTimersByTimeAsync(0);
-		expect(replayReads).toBe(1);
-
-		const first = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
-		const second = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
-		expect([JSON.parse(first.data).cursor, JSON.parse(second.data).cursor]).toEqual([
-			'cursor-replayed',
-			'cursor-live'
-		]);
-		await reader.cancel();
 	});
 
 	it('emits heartbeats at the smallest registered manager interval', async () => {
@@ -211,50 +109,3 @@ describe('shared stream replay and framing', () => {
 		await reader.cancel();
 	});
 });
-
-function createPersistence(
-	readAfter: (
-		scope: string,
-		cursor: string,
-		limit: number
-	) => ManagerOutboxRead | Promise<ManagerOutboxRead> = () => ({
-		cursorFound: true,
-		retainedEnvelopeCount: 0,
-		envelopes: []
-	})
-): ManagerSyncPersistence {
-	return {
-		async append() {},
-		readAfter,
-		async readMutation() {
-			return undefined;
-		},
-		async recordMutation() {}
-	};
-}
-
-function connectRequest(transportId: string): Request {
-	return new Request('http://sync.test/connect', {
-		method: 'POST',
-		headers: { 'x-sync-transport-id': transportId }
-	});
-}
-
-function streamRequest(transportId: string): Request {
-	return new Request('http://sync.test/stream', {
-		method: 'POST',
-		headers: {
-			'x-sync-transport-id': transportId,
-			'x-forwarded-for': '203.0.113.1'
-		}
-	});
-}
-
-function envelope(cursor: string, id: string): SyncEnvelope {
-	return {
-		managerKey: 'notes',
-		scope: 'notes:workspace-1',
-		cursor,
-		changes: [{ type: 'itemAdded', id, value: { id } }]
-	};
-}

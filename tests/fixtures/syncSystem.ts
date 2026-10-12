@@ -85,10 +85,14 @@ export class Deferred<TValue = void> {
 	}
 }
 
+export class CommitGate extends Deferred {
+	readonly reached = new Deferred();
+}
+
 export class InMemoryNotesDatabase {
 	readonly operations: string[] = [];
 	private readonly scopes = new Map<string, Map<string, Note>>();
-	private commitGate: Promise<void> | undefined;
+	private commitGate: CommitGate | undefined;
 	private nextCommitError: Error | undefined;
 
 	seed(workspaceId: string, notes: readonly Note[]): void {
@@ -104,10 +108,9 @@ export class InMemoryNotesDatabase {
 		return this.scope(workspaceId).get(id);
 	}
 
-	pauseNextCommit(): Deferred {
-		const deferred = new Deferred();
-		this.commitGate = deferred.promise;
-		return deferred;
+	pauseNextCommit(): CommitGate {
+		this.commitGate = new CommitGate();
+		return this.commitGate;
 	}
 
 	failNextCommit(message: string): void {
@@ -145,7 +148,8 @@ export class InMemoryNotesDatabase {
 		const gate = this.commitGate;
 		this.commitGate = undefined;
 		if (gate) {
-			await gate;
+			gate.reached.resolve();
+			await gate.promise;
 		}
 		const error = this.nextCommitError;
 		this.nextCommitError = undefined;
@@ -296,22 +300,13 @@ export class SharedStreamTransport implements RuntimeTransport {
 		if (this.received.length >= count) {
 			return;
 		}
-		await new Promise<void>((resolve, reject) => {
+		await new Promise<void>((resolve) => {
 			const notify = () => {
 				if (this.received.length >= count) {
 					this.envelopeWaiters.delete(notify);
-					clearTimeout(timeout);
 					resolve();
 				}
 			};
-			const timeout = setTimeout(() => {
-				this.envelopeWaiters.delete(notify);
-				reject(
-					new Error(
-						`Timed out after 3000ms waiting for ${count} SSE envelopes; received ${this.received.length}.`
-					)
-				);
-			}, 3000);
 			this.envelopeWaiters.add(notify);
 		});
 	}

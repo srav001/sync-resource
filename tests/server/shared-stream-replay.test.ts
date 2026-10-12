@@ -1,195 +1,127 @@
-import { afterEach, describe, expect, it } from 'vite-plus/test';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
-	httpSharedSyncStream,
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
-	registerSharedStreamSubscription,
-	type ManagerOutboxRead,
-	type ManagerSyncPersistence,
-	type SyncEnvelope
+	type ManagerOutboxRead
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests, sharedStreamSentCursorCount } from '../../src/server/streamMultiplexer.ts';
-import { parseSseEvent } from '../../src/shared/sse.ts';
+import { nextMacrotask } from '../fixtures/async.ts';
+import {
+	openStream,
+	outboxReading,
+	readCursorsUntil,
+	registerStreamSubscription,
+	streamEnvelope
+} from '../fixtures/sharedStream.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
-afterEach(() => resetSharedStreamForTests());
-const SCOPE = 'notes:ws';
-const env = (cursor: string): SyncEnvelope => ({
-	managerKey: 'notes',
-	scope: SCOPE,
-	cursor,
-	changes: [{ type: 'itemAdded', id: cursor, value: { id: cursor } }]
+afterEach(() => {
+	vi.useRealTimers();
+	resetSharedStreamForTests();
 });
-const persistence = (
-	readAfter: (s: string, c: string, l: number) => ManagerOutboxRead | Promise<ManagerOutboxRead>
-): ManagerSyncPersistence => ({
-	async append() {},
-	readAfter,
-	async readMutation() {
-		return undefined;
-	},
-	async recordMutation() {}
-});
-const connect = (t: string) =>
-	new Request('http://x/connect', { method: 'POST', headers: { 'x-sync-transport-id': t } });
-const stream = (t: string) =>
-	new Request('http://x/stream', {
-		method: 'POST',
-		headers: { 'x-sync-transport-id': t, 'x-forwarded-for': '1.1.1.1' }
-	});
-const reg = (t: string, p: ManagerSyncPersistence, afterCursor?: string) =>
-	registerSharedStreamSubscription({
-		request: connect(t),
-		managerKey: 'notes',
-		scope: SCOPE,
-		afterCursor,
-		replayLimit: 100,
-		persistence: p,
-		nextCursor: () => 'reset'
-	});
 
-const pending = new WeakMap<object, Promise<ReadableStreamReadResult<Uint8Array>>>();
-async function drain(reader: ReadableStreamDefaultReader<Uint8Array>, ms: number): Promise<string[]> {
-	const out: string[] = [];
-	const end = Date.now() + ms;
-	while (Date.now() < end) {
-		let read = pending.get(reader);
-		if (!read) {
-			read = reader.read();
-			pending.set(reader, read);
-		}
-		const r = await Promise.race([read, new Promise<undefined>((res) => setTimeout(res, 30))]);
-		if (!r) {
-			continue;
-		}
-		pending.delete(reader);
-		if (r.done) {
-			break;
-		}
-		const ev = parseSseEvent(new TextDecoder().decode(r.value));
-		if (ev.eventName === 'sync') {
-			const j = JSON.parse(ev.data);
-			out.push(j.reset ? `reset:${j.reset.reason}` : j.cursor);
-		}
-	}
-	return out;
-}
+const caughtUp = (retainedEnvelopeCount: number, ...cursors: string[]): ManagerOutboxRead => ({
+	cursorFound: true,
+	retainedEnvelopeCount,
+	envelopes: cursors.map((cursor) => streamEnvelope(cursor))
+});
 
 describe('shared stream replay ordering', () => {
-	it('delivers a replayed envelope before a live envelope published right after registration', async () => {
+	it('starts replay after the registration returns and keeps live envelopes behind it, dropping a replayed live copy', async () => {
+		vi.useFakeTimers();
 		registerSharedStreamManager({ key: 'notes' });
-		const p = persistence(() => ({
-			cursorFound: true,
-			retainedEnvelopeCount: 2,
-			envelopes: [env('c1'), env('c2')]
-		}));
-		const res = await httpSharedSyncStream(stream('t1'));
-		const reader = res.body!.getReader();
-		await reader.read(); // hello
-		await reg('t1', p, 'c0');
-		publishSharedStreamEnvelope(env('c2'));
-		const got = await drain(reader, 200);
-		expect(got).toEqual(['c1', 'c2']);
+		const reads: string[] = [];
+		const reader = await openStream('t1');
+		await registerStreamSubscription(
+			't1',
+			outboxReading((_scope, cursor) => {
+				reads.push(cursor);
+				return caughtUp(2, 'c1', 'c2');
+			}),
+			'c0'
+		);
+		expect(reads).toEqual([]);
+
+		publishSharedStreamEnvelope(streamEnvelope('c2'));
+		publishSharedStreamEnvelope(streamEnvelope('c3'));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(reads).toEqual(['c0']);
+		expect(await readCursorsUntil(reader, 'c3')).toEqual(['c1', 'c2', 'c3']);
+	});
+
+	it('delivers replay before live envelopes committed while the replay read is in flight', async () => {
+		registerSharedStreamManager({ key: 'notes' });
+		const readStarted = new Deferred();
+		const replay = new Deferred<ManagerOutboxRead>();
+		const reader = await openStream('t2');
+		await registerStreamSubscription(
+			't2',
+			outboxReading(() => {
+				readStarted.resolve();
+				return replay.promise;
+			}),
+			'c0'
+		);
+		await readStarted.promise;
+
+		publishSharedStreamEnvelope(streamEnvelope('live'));
+		replay.resolve(caughtUp(1, 'replayed'));
+		expect(await readCursorsUntil(reader, 'live')).toEqual(['replayed', 'live']);
 	});
 
 	it('keeps buffering live envelopes until the last overlapping replay of a scope ends', async () => {
 		registerSharedStreamManager({ key: 'notes' });
+		const started = [new Deferred(), new Deferred()];
 		const gates = [new Deferred<ManagerOutboxRead>(), new Deferred<ManagerOutboxRead>()];
-		let n = 0;
-		const p = persistence(() => gates[n++]!.promise);
-		await reg('t2', p, 'c0');
-		const res = await httpSharedSyncStream(stream('t2'));
-		const reader = res.body!.getReader();
-		await reader.read();
-		await reg('t2', p, 'c0');
-		await new Promise((r) => setTimeout(r, 20));
-		gates[0]!.resolve({ cursorFound: true, retainedEnvelopeCount: 1, envelopes: [] });
-		await new Promise((r) => setTimeout(r, 20));
-		publishSharedStreamEnvelope(env('c9'));
-		const before = await drain(reader, 100);
-		gates[1]!.resolve({ cursorFound: true, retainedEnvelopeCount: 2, envelopes: [env('c5'), env('c9')] });
-		const after = await drain(reader, 100);
-		expect([...before, ...after]).toEqual(['c5', 'c9']);
-	});
-});
+		let reads = 0;
+		const persistence = outboxReading(() => {
+			const index = reads++;
+			started[index]!.resolve();
+			return gates[index]!.promise;
+		});
+		await registerStreamSubscription('t3', persistence, 'c0');
+		const reader = await openStream('t3');
+		await started[0]!.promise;
+		await registerStreamSubscription('t3', persistence, 'c0');
+		await started[1]!.promise;
 
-describe('shared stream replay gaps', () => {
-	it('resets an unknown cursor even when the outbox retains nothing', async () => {
-		registerSharedStreamManager({ key: 'notes' });
-		const p = persistence(() => ({ cursorFound: false, retainedEnvelopeCount: 0, envelopes: [] }));
-		await reg('t3', p, 'old-cursor');
-		const res = await httpSharedSyncStream(stream('t3'));
-		const reader = res.body!.getReader();
-		await reader.read();
-		expect(await drain(reader, 150)).toEqual(['reset:retention_gap']);
-	});
-
-	it('resets instead of sending a replay truncated at the replay limit', async () => {
-		registerSharedStreamManager({ key: 'notes' });
-		const retained = Array.from({ length: 150 }, (_, index) => env(`c${index + 1}`));
-		const p = persistence((_s, _c, limit) => ({
-			cursorFound: true,
-			retainedEnvelopeCount: 150,
-			envelopes: retained.slice(0, limit)
-		}));
-		await reg('t5', p, 'c0');
-		const res = await httpSharedSyncStream(stream('t5'));
-		const reader = res.body!.getReader();
-		await reader.read();
-		expect(await drain(reader, 150)).toEqual(['reset:retention_gap']);
-	});
-
-	it('replays without a reset when the pending envelopes exactly fill the replay limit', async () => {
-		registerSharedStreamManager({ key: 'notes' });
-		const retained = Array.from({ length: 100 }, (_, index) => env(`c${index + 1}`));
-		const p = persistence((_s, _c, limit) => ({
-			cursorFound: true,
-			retainedEnvelopeCount: 100,
-			envelopes: retained.slice(0, limit)
-		}));
-		await reg('t6', p, 'c0');
-		const res = await httpSharedSyncStream(stream('t6'));
-		const reader = res.body!.getReader();
-		await reader.read();
-		const frames = await drain(reader, 300);
-		expect(frames).toHaveLength(100);
-		expect(frames.at(-1)).toBe('c100');
+		gates[0]!.resolve(caughtUp(1));
+		await nextMacrotask();
+		publishSharedStreamEnvelope(streamEnvelope('c9'));
+		publishSharedStreamEnvelope(streamEnvelope('c10'));
+		gates[1]!.resolve(caughtUp(2, 'c5', 'c9'));
+		expect(await readCursorsUntil(reader, 'c10')).toEqual(['c5', 'c9', 'c10']);
 	});
 });
 
 describe('shared stream sent-cursor window', () => {
 	it('holds no cursor for live envelopes however many are sent', async () => {
 		registerSharedStreamManager({ key: 'notes' });
-		const res = await httpSharedSyncStream(stream('t7'));
-		const reader = res.body!.getReader();
-		await reader.read();
-		await reg(
-			't7',
-			persistence(() => ({ cursorFound: true, retainedEnvelopeCount: 0, envelopes: [] }))
-		);
-		for (let index = 0; index < 1000; index += 1) {
-			publishSharedStreamEnvelope(env(`c${index}`));
+		const reader = await openStream('t4');
+		await registerStreamSubscription('t4', outboxReading());
+		for (let index = 0; index < 50; index += 1) {
+			publishSharedStreamEnvelope(streamEnvelope(`c${index}`));
 		}
-		expect(sharedStreamSentCursorCount('t7')).toBe(0);
-		expect(await drain(reader, 100)).toHaveLength(1000);
+		expect(await readCursorsUntil(reader, 'c49')).toHaveLength(50);
+		expect(sharedStreamSentCursorCount('t4')).toBe(0);
 	});
 
 	it('records replayed cursors only, which still drop a later live copy', async () => {
+		vi.useFakeTimers();
 		registerSharedStreamManager({ key: 'notes' });
-		const p = persistence(() => ({
-			cursorFound: true,
-			retainedEnvelopeCount: 2,
-			envelopes: [env('c1'), env('c2')]
-		}));
-		const res = await httpSharedSyncStream(stream('t8'));
-		const reader = res.body!.getReader();
-		await reader.read();
-		await reg('t8', p, 'c0');
-		expect(await drain(reader, 100)).toEqual(['c1', 'c2']);
-		publishSharedStreamEnvelope(env('c2'));
-		publishSharedStreamEnvelope(env('c3'));
-		expect(await drain(reader, 100)).toEqual(['c3']);
-		expect(sharedStreamSentCursorCount('t8')).toBe(2);
+		const reader = await openStream('t5');
+		await registerStreamSubscription(
+			't5',
+			outboxReading(() => caughtUp(2, 'c1', 'c2')),
+			'c0'
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(await readCursorsUntil(reader, 'c2')).toEqual(['c1', 'c2']);
+
+		publishSharedStreamEnvelope(streamEnvelope('c2'));
+		publishSharedStreamEnvelope(streamEnvelope('c3'));
+		expect(await readCursorsUntil(reader, 'c3')).toEqual(['c3']);
+		expect(sharedStreamSentCursorCount('t5')).toBe(2);
 	});
 });

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 
 import { manager, resource, type ManagerTelemetry } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { nextMacrotask } from '../fixtures/async.ts';
 
 const schema = { parse: (value: unknown) => value as { id: string } };
 
@@ -52,7 +53,7 @@ describe('manager hooks', () => {
 				order.push('success');
 			}
 		}).add({ input: { id: 'n1' } });
-		await new Promise((resolve) => setTimeout(resolve, 5));
+		await nextMacrotask();
 		expect(order).toEqual([]);
 		finish();
 		await write;

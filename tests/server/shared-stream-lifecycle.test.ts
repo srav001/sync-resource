@@ -3,13 +3,18 @@ import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 import {
 	httpSharedSyncStream,
 	publishSharedStreamEnvelope,
-	registerSharedStreamManager,
-	registerSharedStreamSubscription,
-	type ManagerSyncPersistence
+	registerSharedStreamManager
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
-import type { SyncEnvelope } from '../../src/shared/protocol.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
+import {
+	outboxReading,
+	readSyncEnvelope,
+	registerStreamSubscription,
+	streamEnvelope,
+	streamRequest
+} from '../fixtures/sharedStream.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 const FIVE_MINUTES_MS = 5 * 60_000;
 
@@ -115,26 +120,22 @@ describe('shared stream lifecycle', () => {
 			return reader;
 		}
 
-		async function receivesLiveEnvelope(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<boolean> {
-			const envelope: SyncEnvelope = {
-				managerKey: 'notes',
-				scope,
-				cursor: `cursor-${Math.random()}`,
-				changes: []
-			};
-			publishSharedStreamEnvelope(envelope);
-			const next = await Promise.race([
-				reader.read(),
-				new Promise<undefined>((resolve) => setTimeout(resolve, 20))
-			]);
-			return next !== undefined && !next.done;
+		// The sentinel scope is registered on the transport last, so the probe can only come first if its registration survived.
+		async function receivesLiveEnvelope(
+			transportId: string,
+			reader: ReadableStreamDefaultReader<Uint8Array>
+		): Promise<boolean> {
+			await registerSubscription(transportId, 'notes:sentinel');
+			publishSharedStreamEnvelope(streamEnvelope('probe', scope));
+			publishSharedStreamEnvelope(streamEnvelope('sentinel', 'notes:sentinel'));
+			return (await readSyncEnvelope(reader)).cursor === 'probe';
 		}
 
 		it('attaches a registration made before the stream opens', async () => {
 			registerSharedStreamManager({ key: 'notes' });
 			await registerSubscription('transport-pre-stream', scope);
 			const reader = await openStream('transport-pre-stream');
-			expect(await receivesLiveEnvelope(reader)).toBe(true);
+			expect(await receivesLiveEnvelope('transport-pre-stream', reader)).toBe(true);
 			await reader.cancel();
 		});
 
@@ -143,7 +144,7 @@ describe('shared stream lifecycle', () => {
 			const older = await openStream('transport-replace-drop');
 			await registerSubscription('transport-replace-drop', scope);
 			const replacement = await openStream('transport-replace-drop');
-			expect(await receivesLiveEnvelope(replacement)).toBe(false);
+			expect(await receivesLiveEnvelope('transport-replace-drop', replacement)).toBe(false);
 			await older.cancel();
 			await replacement.cancel();
 		});
@@ -154,105 +155,55 @@ describe('shared stream lifecycle', () => {
 			const replacement = await openStream('transport-replace-keep');
 			await registerSubscription('transport-replace-keep', scope);
 			await older.cancel();
-			expect(await receivesLiveEnvelope(replacement)).toBe(true);
+			expect(await receivesLiveEnvelope('transport-replace-keep', replacement)).toBe(true);
 			await replacement.cancel();
 		});
 	});
 
 	it('cancels pending replay with the physical stream and treats disconnect as normal termination', async () => {
-		let replayStarted!: () => void;
-		const didStartReplay = new Promise<void>((resolve) => {
-			replayStarted = resolve;
-		});
-		let replayFinalized = false;
+		const replayStarted = new Deferred();
+		const replayAborted = new Deferred();
 		const errors: string[] = [];
-		const replayPersistence: ManagerSyncPersistence = {
-			...persistence,
-			readAfter(_scope, _cursor, _limit, execution) {
-				return new Promise((resolve) => {
-					replayStarted();
-					execution?.signal.addEventListener(
-						'abort',
-						() => {
-							replayFinalized = true;
-							resolve({ cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 });
-						},
-						{ once: true }
-					);
-				});
-			}
-		};
 		registerSharedStreamManager({
 			key: 'notes',
 			handleError(error) {
 				errors.push(error.message);
 			}
 		});
-		const registered = await registerSharedStreamSubscription({
-			request: new Request('http://sync.test/connect', {
-				method: 'POST',
-				headers: { 'x-sync-transport-id': 'transport-replay-cancel' }
-			}),
-			managerKey: 'notes',
-			scope: 'notes:workspace-1',
-			afterCursor: 'cursor-before',
-			replayLimit: 100,
-			persistence: replayPersistence,
-			nextCursor: () => 'cursor-reset'
-		});
+		const registered = await registerStreamSubscription(
+			'transport-replay-cancel',
+			outboxReading(
+				(_scope, _cursor, _limit, execution) =>
+					new Promise((resolve) => {
+						replayStarted.resolve();
+						execution?.signal.addEventListener(
+							'abort',
+							() => {
+								replayAborted.resolve();
+								resolve({ cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 });
+							},
+							{ once: true }
+						);
+					})
+			),
+			'cursor-before',
+			'notes:workspace-1'
+		);
 		expect(registered.isOk()).toBe(true);
 		const response = await httpSharedSyncStream(streamRequest('transport-replay-cancel'));
 		const reader = response.body!.getReader();
 		await reader.read();
-		await didStartReplay;
+		await replayStarted.promise;
 		await reader.cancel();
-		for (let index = 0; index < 10 && !replayFinalized; index += 1) {
-			await Promise.resolve();
-		}
+		await replayAborted.promise;
 
-		expect(replayFinalized).toBe(true);
 		expect(errors).toEqual([]);
 	});
 });
 
-const persistence: ManagerSyncPersistence = {
-	async append() {},
-	async readAfter() {
-		return {
-			cursorFound: true,
-			retainedEnvelopeCount: 0,
-			envelopes: []
-		};
-	},
-	async readMutation() {
-		return undefined;
-	},
-	async recordMutation() {}
-};
-
 async function registerSubscription(transportId: string, scope: string): Promise<void> {
-	const result = await registerSharedStreamSubscription({
-		request: new Request('http://sync.test/connect', {
-			method: 'POST',
-			headers: { 'x-sync-transport-id': transportId }
-		}),
-		managerKey: 'notes',
-		scope,
-		replayLimit: 100,
-		persistence,
-		nextCursor: () => 'cursor-reset'
-	});
+	const result = await registerStreamSubscription(transportId, outboxReading(), undefined, scope);
 	expect(result.isOk()).toBe(true);
-}
-
-function streamRequest(transportId: string): Request {
-	return new Request('http://sync.test/stream', {
-		method: 'POST',
-		headers: {
-			'x-sync-transport-id': transportId,
-			'x-forwarded-for': '203.0.113.1'
-		}
-	});
 }
 
 function decode(value: Uint8Array | undefined): string {

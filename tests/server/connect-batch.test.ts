@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vite-plus/test';
 
 import { httpSharedSyncConnect } from '../../src/server/index.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 function batchRequest(
 	body: unknown,
@@ -22,13 +23,15 @@ function batchRequest(
 describe('httpSharedSyncConnect', () => {
 	it('dispatches each connect as a header-forwarding POST and returns results in request order', async () => {
 		const seen: Request[] = [];
+		const bAnswered = new Deferred();
 		const dispatch = vi.fn(async (request: Request) => {
 			seen.push(request);
 			const path = new URL(request.url).pathname;
 			if (path === '/a/connect') {
-				await new Promise((resolve) => setTimeout(resolve, 20));
+				await bAnswered.promise;
 				return Response.json({ isOk: true, isError: false, value: { scope: 'a' } });
 			}
+			bAnswered.resolve();
 			return Response.json({ isOk: false, isError: true, error: { code: 'forbidden' } }, { status: 403 });
 		});
 

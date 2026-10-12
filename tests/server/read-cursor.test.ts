@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
 
 import {
 	httpSharedSyncStream,
@@ -15,6 +15,7 @@ import {
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 import { openSharedStream } from '../fixtures/sharedStream.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 afterEach(() => resetSharedStreamForTests());
 
@@ -244,12 +245,14 @@ describe('custom outbox read cursor', () => {
 
 describe('operation execution', () => {
 	const calls: Record<string, OperationExecution | undefined> = {};
+	const replayRead = new Deferred();
 	const recordingOutbox: ManagerOutbox = {
 		append: (_envelope, execution) => {
 			calls.append = execution;
 		},
 		readAfter: (_scope, _cursor, _limit, execution) => {
 			calls.readAfter = execution;
+			replayRead.resolve();
 			return emptyRead;
 		},
 		latestCursor: (_scope, execution) => {
@@ -280,7 +283,7 @@ describe('operation execution', () => {
 		const added = await notes.http.add!({ request: addRequest, params });
 		expect(added.status).toBe(200);
 		const reader = await openSharedStream(notes.http, params, { afterCursor: 'c1', signal: abort.signal });
-		await vi.waitFor(() => expect(calls).toHaveProperty('readAfter'));
+		await replayRead.promise;
 		await reader.cancel();
 
 		const signals = [authorized, calls.latestCursor, calls.append, calls.readAfter].map(signalOf);

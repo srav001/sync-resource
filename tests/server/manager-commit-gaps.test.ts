@@ -14,6 +14,7 @@ import {
 	type SyncEnvelope
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 const paramsSchema = {
 	parse(value: unknown): { workspaceId: string } {
@@ -255,9 +256,8 @@ describe('manager deferred source commits', () => {
 		const persistence = new TrackingPersistence();
 		const committedIds: string[] = [];
 		const publicationModes: string[] = [];
-		const slowPublication = deferred<void>();
+		const slowPublication = new Deferred();
 		let mode: 'throw' | 'reject' | 'slow' = 'throw';
-		let slowPublicationStarted = false;
 		const bus: ManagerRealtimeBus = {
 			publish() {
 				publicationModes.push(mode);
@@ -267,7 +267,6 @@ describe('manager deferred source commits', () => {
 				if (mode === 'reject') {
 					return Promise.reject(new Error('asynchronous bus failure'));
 				}
-				slowPublicationStarted = true;
 				return slowPublication.promise;
 			},
 			subscribe() {
@@ -302,13 +301,7 @@ describe('manager deferred source commits', () => {
 		expect(rejected.isOk() && rejected.value).toEqual({ id: 'reject' });
 
 		mode = 'slow';
-		let slowWriteSettled = false;
-		const slowWrite = bound.add({ input: { id: 'slow' } }, { mutationId: 'slow' }).then((result) => {
-			slowWriteSettled = true;
-			return result;
-		});
-		await waitFor(() => slowPublicationStarted && slowWriteSettled);
-		const slow = await slowWrite;
+		const slow = await bound.add({ input: { id: 'slow' } }, { mutationId: 'slow' });
 		expect(slow.isOk() && slow.value).toEqual({ id: 'slow' });
 
 		expect(committedIds).toEqual(['throw', 'reject', 'slow']);
@@ -319,7 +312,7 @@ describe('manager deferred source commits', () => {
 		]);
 		expect(publicationModes).toEqual(['throw', 'reject', 'slow']);
 
-		slowPublication.resolve();
+		slowPublication.resolve(undefined);
 	});
 
 	it('commits a resource-level atomic batch once with the commit context and merges commit metrics', async () => {
@@ -417,24 +410,3 @@ describe('manager deferred source commits', () => {
 		expect(persistence.appended).toEqual([]);
 	});
 });
-
-function deferred<TValue>() {
-	let resolvePromise!: (value: TValue | PromiseLike<TValue>) => void;
-	const promise = new Promise<TValue>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return {
-		promise,
-		resolve: resolvePromise
-	};
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
-}

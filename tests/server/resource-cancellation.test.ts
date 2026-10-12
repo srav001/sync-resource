@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { ok, resource } from '../../src/server/index.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 const params = {
 	parse(value: unknown) {
@@ -50,12 +51,12 @@ describe('resource operation cancellation', () => {
 
 	it('maps caller cancellation during an abort-aware handler to aborted', async () => {
 		const caller = new AbortController();
-		let handlerStarted = false;
+		const handlerStarted = new Deferred();
 		const notes = resource(params, (method) => ({
 			get: method.get({
 				output,
 				handler({ ctx }) {
-					handlerStarted = true;
+					handlerStarted.resolve();
 					return new Promise((_, reject) => {
 						ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true });
 					});
@@ -64,7 +65,7 @@ describe('resource operation cancellation', () => {
 		}));
 
 		const operation = notes.get({ params: { scope: 'scope-1' } }, { signal: caller.signal });
-		await waitFor(() => handlerStarted);
+		await handlerStarted.promise;
 		caller.abort('caller stopped');
 		const result = await operation;
 
@@ -77,12 +78,12 @@ describe('resource operation cancellation', () => {
 	it('exposes an absolute deadline and distinguishes timeout from caller cancellation', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-23T00:00:00.000Z'));
-		let deadline: number | undefined;
+		const deadline = new Deferred<number | undefined>();
 		const notes = resource(params, (method) => ({
 			get: method.get({
 				output,
 				handler({ ctx }) {
-					deadline = ctx.deadline;
+					deadline.resolve(ctx.deadline);
 					return new Promise((_, reject) => {
 						ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true });
 					});
@@ -91,8 +92,7 @@ describe('resource operation cancellation', () => {
 		}));
 
 		const operation = notes.get({ params: { scope: 'scope-1' } }, { timeoutMs: 25 });
-		await waitFor(() => deadline !== undefined);
-		expect(deadline).toBe(Date.now() + 25);
+		expect(await deadline.promise).toBe(Date.now() + 25);
 		await vi.advanceTimersByTimeAsync(25);
 		const result = await operation;
 
@@ -104,24 +104,22 @@ describe('resource operation cancellation', () => {
 
 	it('characterizes a handler output that resolves after caller cancellation', async () => {
 		const caller = new AbortController();
-		const handlerOutput = deferred<ReturnType<typeof ok<{ readonly id: string }>>>();
-		let handlerStarted = false;
-		let handlerSignal: AbortSignal | undefined;
+		const handlerOutput = new Deferred<ReturnType<typeof ok<{ readonly id: string }>>>();
+		const handlerSignal = new Deferred<AbortSignal>();
 		const notes = resource(params, (method) => ({
 			get: method.get({
 				output,
 				handler({ ctx }) {
-					handlerStarted = true;
-					handlerSignal = ctx.signal;
+					handlerSignal.resolve(ctx.signal);
 					return handlerOutput.promise;
 				}
 			})
 		}));
 
 		const operation = notes.get({ params: { scope: 'scope-1' } }, { signal: caller.signal });
-		await waitFor(() => handlerStarted);
+		const signal = await handlerSignal.promise;
 		caller.abort('caller stopped');
-		expect(handlerSignal?.aborted).toBe(true);
+		expect(signal.aborted).toBe(true);
 		handlerOutput.resolve(ok({ id: 'late' }));
 		const result = await operation;
 
@@ -132,24 +130,3 @@ describe('resource operation cancellation', () => {
 		}
 	});
 });
-
-function deferred<TValue>() {
-	let resolvePromise!: (value: TValue | PromiseLike<TValue>) => void;
-	const promise = new Promise<TValue>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return {
-		promise,
-		resolve: resolvePromise
-	};
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
-}

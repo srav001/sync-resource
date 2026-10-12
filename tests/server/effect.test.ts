@@ -18,6 +18,7 @@ import {
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { openSharedStream } from '../fixtures/sharedStream.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface Params {
 	readonly workspaceId: string;
@@ -533,6 +534,7 @@ describe('Effect server entrypoint', () => {
 		const envelopes: SyncEnvelope[] = [];
 		const mutations = new Map<string, ManagerMutationRecord>();
 		let realtimeFinalized = false;
+		const realtimeClosed = new Deferred();
 		const notes = resource(paramsSchema, (method) => ({
 			add: method.add({
 				input: noteSchema,
@@ -574,6 +576,7 @@ describe('Effect server entrypoint', () => {
 							Effect.addFinalizer(() =>
 								Effect.sync(() => {
 									realtimeFinalized = true;
+									realtimeClosed.resolve();
 								})
 							),
 							Effect.sync(() => events.push('subscribe'))
@@ -618,7 +621,7 @@ describe('Effect server entrypoint', () => {
 		expect(events).toContain('subscribe');
 		expect(realtimeFinalized).toBe(false);
 		await vi.advanceTimersByTimeAsync(5 * 60_000);
-		await vi.waitFor(() => expect(realtimeFinalized).toBe(true));
+		await realtimeClosed.promise;
 	});
 
 	it('forwards the persistence latest cursor to list reads', async () => {
@@ -685,7 +688,7 @@ describe('Effect server entrypoint', () => {
 	});
 
 	it('closes the scope of a realtime subscription that fails after acquiring a resource', async () => {
-		let finalized = false;
+		const finalized = new Deferred();
 		const notes = resource(paramsSchema, (method) => ({
 			get: method.get({
 				output: noteSchema,
@@ -704,7 +707,7 @@ describe('Effect server entrypoint', () => {
 						Effect.andThen(
 							Effect.addFinalizer(() =>
 								Effect.sync(() => {
-									finalized = true;
+									finalized.resolve();
 								})
 							),
 							Effect.fail(syncError('internal', 'subscribe failed'))
@@ -714,7 +717,7 @@ describe('Effect server entrypoint', () => {
 		);
 		const reader = await openSharedStream(notesManager.http, { workspaceId: 'w1' });
 		await reader.cancel();
-		await vi.waitFor(() => expect(finalized).toBe(true));
+		await finalized.promise;
 	});
 
 	it('adapts the standalone outbox and shared-stream idle hook', async () => {
