@@ -84,7 +84,6 @@ describe('client runtime configuration', () => {
 		const envelopes: unknown[] = [];
 		const abort = new AbortController();
 		const subscription = await runtime.transport.subscribe({
-			url: 'http://sync.test/notes/events',
 			connectUrl: 'http://sync.test/notes/connect',
 			managerKey: 'notes',
 			scope: 'sync-resource:notes:{"workspaceId":"workspace-1"}',

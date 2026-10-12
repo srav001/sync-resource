@@ -876,7 +876,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const params = this.config.getParams();
 		const baseUrl = this.config.getUrl(params).replace(/\/$/, '');
 		const result = await this.runtime.transport.subscribe({
-			url: urlWithCursor(`${baseUrl}/events`, this.state.cursor),
 			connectUrl: urlWithCursor(`${baseUrl}/connect`, this.state.cursor),
 			managerKey: this.config.key,
 			scope: realtime.scope,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test';
 
-import { createRuntime } from '../../src/client/core.ts';
+import { readSseStream } from '../../src/client/runtime.ts';
 import type { SyncEnvelope } from '../../src/shared/protocol.ts';
 import {
 	encodeSseFrame,
@@ -9,303 +9,167 @@ import {
 	type SyncEnvelopeChunk
 } from '../../src/shared/sse.ts';
 import { waitFor } from '../fixtures/async.ts';
-import { noopCache } from '../fixtures/clientRuntime.ts';
 
 const textEncoder = new TextEncoder();
 
 describe('browser runtime SSE safety', () => {
-	it('rejects a pre-aborted direct subscription without starting fetch', async () => {
-		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({
-			cache: noopCache,
-			fetch: harness.fetch,
-			createId: (prefix) => `${prefix}-pre-aborted`
-		});
-		const abort = new AbortController();
-		abort.abort();
-		try {
-			const result = await runtime.transport.subscribe({ url: '/events', signal: abort.signal, onEnvelope() {} });
-			expect(result.isErr() && result.error.code).toBe('aborted');
-			expect(harness.controllers).toHaveLength(0);
-		} finally {
-			runtime.dispose();
-		}
-	});
-
 	it('ignores malformed and out-of-range chunk metadata, then delivers a valid envelope', async () => {
-		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({
-			cache: noopCache,
-			fetch: harness.fetch,
-			createId: (prefix) => `${prefix}-invalid-chunks`
-		});
-		const received: SyncEnvelope[] = [];
-		const abort = new AbortController();
-		try {
-			const subscription = await runtime.transport.subscribe({
-				url: '/events',
-				signal: abort.signal,
-				onEnvelope: (envelope) => received.push(envelope)
-			});
-			expect(subscription.isOk()).toBe(true);
-			const controller = harness.controllers[0];
-			expect(controller).toBeDefined();
+		const stream = startStream();
+		stream.enqueue(textEncoder.encode('event: sync-chunk\ndata: {\n\n'));
+		stream.enqueue(
+			encodeSseFrame('sync-chunk', {
+				type: 'not-a-sync-chunk',
+				id: 'wrong-type',
+				index: 0,
+				total: 1,
+				totalBytes: 1,
+				data: 'x'
+			})
+		);
+		stream.enqueue(chunkFrame({ type: 'sync-chunk', id: 'empty', index: 0, total: 0, totalBytes: 1, data: 'x' }));
+		stream.enqueue(
+			chunkFrame({ type: 'sync-chunk', id: 'bad-index', index: 2, total: 2, totalBytes: 1, data: 'x' })
+		);
+		stream.enqueue(
+			chunkFrame({
+				type: 'sync-chunk',
+				id: 'too-large',
+				index: 0,
+				total: 1,
+				totalBytes: MAX_CHUNKED_SYNC_BYTES + 1,
+				data: 'x'
+			})
+		);
 
-			controller?.enqueue(textEncoder.encode('event: sync-chunk\ndata: {\n\n'));
-			controller?.enqueue(
-				encodeSseFrame('sync-chunk', {
-					type: 'not-a-sync-chunk',
-					id: 'wrong-type',
-					index: 0,
-					total: 1,
-					totalBytes: 1,
-					data: 'x'
-				})
-			);
-			controller?.enqueue(
-				chunkFrame({
-					type: 'sync-chunk',
-					id: 'empty',
-					index: 0,
-					total: 0,
-					totalBytes: 1,
-					data: 'x'
-				})
-			);
-			controller?.enqueue(
-				chunkFrame({
-					type: 'sync-chunk',
-					id: 'bad-index',
-					index: 2,
-					total: 2,
-					totalBytes: 1,
-					data: 'x'
-				})
-			);
-			controller?.enqueue(
-				chunkFrame({
-					type: 'sync-chunk',
-					id: 'too-large',
-					index: 0,
-					total: 1,
-					totalBytes: MAX_CHUNKED_SYNC_BYTES + 1,
-					data: 'x'
-				})
-			);
-
-			const valid = envelope('cursor-valid', 'valid');
-			controller?.enqueue(encodeSseFrame('sync', valid));
-			await waitFor(() => received.length === 1);
-			expect(received).toEqual([valid]);
-
-			if (subscription.isOk()) {
-				subscription.value();
-			}
-		} finally {
-			runtime.dispose();
-		}
+		const valid = envelope('cursor-valid', 'valid');
+		stream.enqueue(encodeSseFrame('sync', valid));
+		await waitFor(() => stream.received.length === 1);
+		expect(stream.received).toEqual([valid]);
+		await stream.stop();
 	});
 
 	it('drops chunk groups with inconsistent metadata or byte totals and recovers for a valid group', async () => {
-		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({
-			cache: noopCache,
-			fetch: harness.fetch,
-			createId: (prefix) => `${prefix}-chunk-integrity`
-		});
-		const received: SyncEnvelope[] = [];
-		const abort = new AbortController();
-		try {
-			const subscription = await runtime.transport.subscribe({
-				url: '/events',
-				signal: abort.signal,
-				onEnvelope: (envelopeValue) => received.push(envelopeValue)
-			});
-			expect(subscription.isOk()).toBe(true);
-			const controller = harness.controllers[0];
+		const stream = startStream();
+		const mismatched = splitEnvelope(envelope('cursor-mismatch', 'mismatch'), 'mismatched');
+		stream.enqueue(chunkFrame(mismatched[0]));
+		stream.enqueue(chunkFrame({ ...mismatched[1], total: 3 }));
 
-			const mismatched = splitEnvelope(envelope('cursor-mismatch', 'mismatch'), 'mismatched');
-			controller?.enqueue(chunkFrame(mismatched[0]));
-			controller?.enqueue(chunkFrame({ ...mismatched[1], total: 3 }));
+		const wrongBytes = splitEnvelope(envelope('cursor-wrong-bytes', 'wrong-bytes'), 'wrong-bytes');
+		stream.enqueue(chunkFrame({ ...wrongBytes[0], totalBytes: wrongBytes[0].totalBytes + 1 }));
+		stream.enqueue(chunkFrame({ ...wrongBytes[1], totalBytes: wrongBytes[1].totalBytes + 1 }));
 
-			const wrongBytes = splitEnvelope(envelope('cursor-wrong-bytes', 'wrong-bytes'), 'wrong-bytes');
-			controller?.enqueue(chunkFrame({ ...wrongBytes[0], totalBytes: wrongBytes[0].totalBytes + 1 }));
-			controller?.enqueue(chunkFrame({ ...wrongBytes[1], totalBytes: wrongBytes[1].totalBytes + 1 }));
+		const validEnvelope = envelope('cursor-valid-chunks', 'valid-chunks');
+		const valid = splitEnvelope(validEnvelope, 'valid');
+		stream.enqueue(chunkFrame(valid[1]));
+		stream.enqueue(chunkFrame(valid[0]));
 
-			const validEnvelope = envelope('cursor-valid-chunks', 'valid-chunks');
-			const valid = splitEnvelope(validEnvelope, 'valid');
-			controller?.enqueue(chunkFrame(valid[1]));
-			controller?.enqueue(chunkFrame(valid[0]));
-
-			await waitFor(() => received.length === 1);
-			expect(received).toEqual([validEnvelope]);
-
-			if (subscription.isOk()) {
-				subscription.value();
-			}
-		} finally {
-			runtime.dispose();
-		}
+		await waitFor(() => stream.received.length === 1);
+		expect(stream.received).toEqual([validEnvelope]);
+		await stream.stop();
 	});
 
 	it('bounds incomplete chunk groups by pruning the oldest of more than 32 ids', async () => {
-		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({
-			cache: noopCache,
-			fetch: harness.fetch,
-			createId: (prefix) => `${prefix}-chunk-pruning`
+		const stream = startStream();
+		const groups = Array.from({ length: 33 }, (_, index) => {
+			const id = `group-${index}`;
+			return splitEnvelope(envelope(`cursor-${index}`, id), id);
 		});
-		const received: SyncEnvelope[] = [];
-		const abort = new AbortController();
-		try {
-			const subscription = await runtime.transport.subscribe({
-				url: '/events',
-				signal: abort.signal,
-				onEnvelope: (envelopeValue) => received.push(envelopeValue)
-			});
-			expect(subscription.isOk()).toBe(true);
-			const controller = harness.controllers[0];
-			const groups = Array.from({ length: 33 }, (_, index) => {
-				const id = `group-${index}`;
-				return splitEnvelope(envelope(`cursor-${index}`, id), id);
-			});
 
-			for (const group of groups) {
-				controller?.enqueue(chunkFrame(group[0]));
-			}
-			controller?.enqueue(chunkFrame(groups[0]![1]));
-			controller?.enqueue(chunkFrame(groups[32]![1]));
-
-			await waitFor(() => received.length === 1);
-			expect(received).toEqual([envelope('cursor-32', 'group-32')]);
-
-			if (subscription.isOk()) {
-				subscription.value();
-			}
-		} finally {
-			runtime.dispose();
+		for (const group of groups) {
+			stream.enqueue(chunkFrame(group[0]));
 		}
+		stream.enqueue(chunkFrame(groups[0]![1]));
+		stream.enqueue(chunkFrame(groups[32]![1]));
+
+		await waitFor(() => stream.received.length === 1);
+		expect(stream.received).toEqual([envelope('cursor-32', 'group-32')]);
+		await stream.stop();
 	});
 
-	it('stops reading an oversized complete frame and a new subscription can recover', async () => {
-		await expectBoundedStreamRecovery(
-			`event: sync\ndata: ${'x'.repeat(MAX_SSE_FRAME_BYTES + 1)}\n\n`,
-			'oversized-frame'
-		);
+	it('stops reading an oversized complete frame and a new stream can recover', async () => {
+		await expectBoundedStreamRecovery(`event: sync\ndata: ${'x'.repeat(MAX_SSE_FRAME_BYTES + 1)}\n\n`);
 	});
 
 	it('stops reading a complete frame that is within the bound by characters but above it by UTF-8 bytes', async () => {
 		await expectBoundedStreamRecovery(
-			`event: sync\ndata: ${'\u20ac'.repeat(Math.ceil(MAX_SSE_FRAME_BYTES / 3))}\n\n`,
-			'multibyte-frame'
+			`event: sync\ndata: ${'\u20ac'.repeat(Math.ceil(MAX_SSE_FRAME_BYTES / 3))}\n\n`
 		);
 	});
 
 	it('delivers a complete frame above a third of the bound by characters but within it by bytes', async () => {
-		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({
-			cache: noopCache,
-			fetch: harness.fetch,
-			createId: (prefix) => `${prefix}-large-frame`
-		});
-		const received: SyncEnvelope[] = [];
-		const abort = new AbortController();
-		try {
-			const subscription = await runtime.transport.subscribe({
-				url: '/events',
-				signal: abort.signal,
-				onEnvelope: (value) => received.push(value)
-			});
-			const large = envelope('cursor-large', 'x'.repeat(MAX_SSE_FRAME_BYTES / 4));
-			harness.controllers[0]?.enqueue(encodeSseFrame('sync', large));
-			await waitFor(() => received.length === 1);
-			expect(received).toEqual([large]);
-			if (subscription.isOk()) {
-				subscription.value();
-			}
-		} finally {
-			runtime.dispose();
-		}
+		const stream = startStream();
+		const large = envelope('cursor-large', 'x'.repeat(MAX_SSE_FRAME_BYTES / 4));
+		stream.enqueue(encodeSseFrame('sync', large));
+		await waitFor(() => stream.received.length === 1);
+		expect(stream.received).toEqual([large]);
+		await stream.stop();
 	});
 
-	it('stops reading an unterminated buffer above the frame bound and a new subscription can recover', async () => {
-		await expectBoundedStreamRecovery('x'.repeat(MAX_SSE_FRAME_BYTES + 1), 'stalled-buffer');
+	it('stops reading an unterminated buffer above the frame bound and a new stream can recover', async () => {
+		await expectBoundedStreamRecovery('x'.repeat(MAX_SSE_FRAME_BYTES + 1));
 	});
 
 	it('counts unterminated SSE buffers by UTF-8 bytes', async () => {
-		await expectBoundedStreamRecovery(
-			'😀'.repeat(Math.floor(MAX_SSE_FRAME_BYTES / 4) + 1),
-			'unicode-stalled-buffer'
-		);
+		await expectBoundedStreamRecovery('😀'.repeat(Math.floor(MAX_SSE_FRAME_BYTES / 4) + 1));
 	});
 
 	it('keeps stateful UTF-8 decoder state local to each concurrent stream', async () => {
-		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({
-			cache: noopCache,
-			fetch: harness.fetch,
-			createId: (prefix) => `${prefix}-local-decoder`
-		});
-		const firstReceived: SyncEnvelope[] = [];
-		const secondReceived: SyncEnvelope[] = [];
-		const firstAbort = new AbortController();
-		const secondAbort = new AbortController();
-		try {
-			const first = await runtime.transport.subscribe({
-				url: '/first',
-				signal: firstAbort.signal,
-				onEnvelope: (value) => firstReceived.push(value)
-			});
-			const second = await runtime.transport.subscribe({
-				url: '/second',
-				signal: secondAbort.signal,
-				onEnvelope: (value) => secondReceived.push(value)
-			});
-			const firstEnvelope = envelope('cursor-first', 'first-😀');
-			const secondEnvelope = envelope('cursor-second', 'second-😀');
-			const firstFrame = encodeSseFrame('sync', firstEnvelope);
-			const secondFrame = encodeSseFrame('sync', secondEnvelope);
-			const firstSplit = firstFrame.indexOf(0xf0) + 2;
-			const secondSplit = secondFrame.indexOf(0xf0) + 2;
+		const first = startStream();
+		const second = startStream();
+		const firstEnvelope = envelope('cursor-first', 'first-😀');
+		const secondEnvelope = envelope('cursor-second', 'second-😀');
+		const firstFrame = encodeSseFrame('sync', firstEnvelope);
+		const secondFrame = encodeSseFrame('sync', secondEnvelope);
+		const firstSplit = firstFrame.indexOf(0xf0) + 2;
+		const secondSplit = secondFrame.indexOf(0xf0) + 2;
 
-			harness.controllers[0]?.enqueue(firstFrame.slice(0, firstSplit));
-			harness.controllers[1]?.enqueue(secondFrame.slice(0, secondSplit));
-			harness.controllers[0]?.enqueue(firstFrame.slice(firstSplit));
-			harness.controllers[1]?.enqueue(secondFrame.slice(secondSplit));
-			await waitFor(() => firstReceived.length === 1 && secondReceived.length === 1);
-			expect(firstReceived).toEqual([firstEnvelope]);
-			expect(secondReceived).toEqual([secondEnvelope]);
-
-			if (first.isOk()) {
-				first.value();
-			}
-			if (second.isOk()) {
-				second.value();
-			}
-		} finally {
-			runtime.dispose();
-		}
+		first.enqueue(firstFrame.slice(0, firstSplit));
+		second.enqueue(secondFrame.slice(0, secondSplit));
+		first.enqueue(firstFrame.slice(firstSplit));
+		second.enqueue(secondFrame.slice(secondSplit));
+		await waitFor(() => first.received.length === 1 && second.received.length === 1);
+		expect(first.received).toEqual([firstEnvelope]);
+		expect(second.received).toEqual([secondEnvelope]);
+		await first.stop();
+		await second.stop();
 	});
 });
 
-interface DirectStreamHarness {
-	readonly controllers: ReadableStreamDefaultController<Uint8Array>[];
-	readonly fetch: typeof fetch;
+interface TestStream {
+	readonly received: SyncEnvelope[];
+	readonly terminalFailures: () => number;
+	enqueue(chunk: Uint8Array): void;
+	finished(): Promise<void>;
+	stop(): Promise<void>;
 }
 
-function createDirectStreamHarness(): DirectStreamHarness {
-	const controllers: ReadableStreamDefaultController<Uint8Array>[] = [];
+function startStream(): TestStream {
+	let controller!: ReadableStreamDefaultController<Uint8Array>;
+	const reader = new ReadableStream<Uint8Array>({
+		start(nextController) {
+			controller = nextController;
+		}
+	}).getReader();
+	const received: SyncEnvelope[] = [];
+	const abort = new AbortController();
+	let terminalFailures = 0;
+	const finished = readSseStream(
+		reader,
+		abort.signal,
+		(value) => received.push(value),
+		() => {
+			terminalFailures += 1;
+		}
+	);
 	return {
-		controllers,
-		fetch: async () =>
-			new Response(
-				new ReadableStream<Uint8Array>({
-					start(controller) {
-						controllers.push(controller);
-					}
-				}),
-				{ headers: { 'content-type': 'text/event-stream' } }
-			)
+		received,
+		terminalFailures: () => terminalFailures,
+		enqueue: (chunk) => controller.enqueue(chunk),
+		finished: () => finished,
+		async stop() {
+			abort.abort();
+			await finished;
+		}
 	};
 }
 
@@ -347,49 +211,22 @@ function envelope(cursor: string, id: string): SyncEnvelope {
 	};
 }
 
-async function expectBoundedStreamRecovery(malformedInput: string, suffix: string): Promise<void> {
-	const harness = createDirectStreamHarness();
-	const runtime = createRuntime({
-		cache: noopCache,
-		fetch: harness.fetch,
-		createId: (prefix) => `${prefix}-${suffix}`
-	});
-	const received: SyncEnvelope[] = [];
-	const firstAbort = new AbortController();
-	const secondAbort = new AbortController();
-	try {
-		const first = await runtime.transport.subscribe({
-			url: '/events',
-			signal: firstAbort.signal,
-			onEnvelope: (envelopeValue) => received.push(envelopeValue)
-		});
-		expect(first.isOk()).toBe(true);
-		harness.controllers[0]?.enqueue(textEncoder.encode(malformedInput));
-		await flushMicrotasks();
-		harness.controllers[0]?.enqueue(encodeSseFrame('sync', envelope('cursor-ignored', 'ignored')));
-		await flushMicrotasks();
-		expect(received).toEqual([]);
+async function expectBoundedStreamRecovery(malformedInput: string): Promise<void> {
+	const first = startStream();
+	first.enqueue(textEncoder.encode(malformedInput));
+	await first.finished();
+	expect(first.terminalFailures()).toBe(1);
+	first.enqueue(encodeSseFrame('sync', envelope('cursor-ignored', 'ignored')));
+	await flushMicrotasks();
+	expect(first.received).toEqual([]);
 
-		const second = await runtime.transport.subscribe({
-			url: '/events',
-			signal: secondAbort.signal,
-			onEnvelope: (envelopeValue) => received.push(envelopeValue)
-		});
-		expect(second.isOk()).toBe(true);
-		const valid = envelope('cursor-recovered', 'recovered');
-		harness.controllers[1]?.enqueue(encodeSseFrame('sync', valid));
-		await waitFor(() => received.length === 1);
-		expect(received).toEqual([valid]);
-
-		if (first.isOk()) {
-			first.value();
-		}
-		if (second.isOk()) {
-			second.value();
-		}
-	} finally {
-		runtime.dispose();
-	}
+	const second = startStream();
+	const valid = envelope('cursor-recovered', 'recovered');
+	second.enqueue(encodeSseFrame('sync', valid));
+	await waitFor(() => second.received.length === 1);
+	expect(second.received).toEqual([valid]);
+	expect(second.terminalFailures()).toBe(0);
+	await second.stop();
 }
 
 async function flushMicrotasks(): Promise<void> {

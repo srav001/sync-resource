@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createRuntime } from '../../src/client/core.ts';
+import { readSseStream } from '../../src/client/runtime.ts';
 import type { SyncEnvelope } from '../../src/shared/protocol.ts';
 import { MAX_CHUNKED_SYNC_BYTES, encodeSseFrame, encodeSyncEnvelopeSseFrames } from '../../src/shared/sse.ts';
 import { waitFor } from '../fixtures/async.ts';
@@ -13,109 +14,78 @@ afterEach(() => {
 });
 
 describe('browser runtime SSE transport', () => {
-	it('adds a replay cursor and reads ping plus fragmented direct SSE frames', async () => {
-		let request: Request | undefined;
+	it('reads ping plus fragmented SSE frames and cancels the stream on abort', async () => {
 		let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
 		let cancelled = 0;
-		const runtime = createRuntime({
-			cache: noopCache,
-			fetch: async (input, init) => {
-				request = toRequest(input, init);
-				return new Response(
-					new ReadableStream<Uint8Array>({
-						start(nextController) {
-							controller = nextController;
-						},
-						cancel() {
-							cancelled += 1;
-						}
-					}),
-					{ headers: { 'content-type': 'text/event-stream' } }
-				);
+		const reader = new ReadableStream<Uint8Array>({
+			start(nextController) {
+				controller = nextController;
 			},
-			createId: (prefix) => `${prefix}-direct`
-		});
+			cancel() {
+				cancelled += 1;
+			}
+		}).getReader();
 		const received: SyncEnvelope[] = [];
 		const signal = new AbortController();
-		try {
-			const subscription = await runtime.transport.subscribe({
-				url: '/events?existing=1',
-				signal: signal.signal,
-				getCursor: () => 'cursor one',
-				onEnvelope: (envelope) => received.push(envelope)
-			});
-			expect(subscription.isOk()).toBe(true);
-			expect(new URL(request?.url ?? '').searchParams.get('after')).toBe('cursor one');
+		const finished = readSseStream(
+			reader,
+			signal.signal,
+			(envelope) => received.push(envelope),
+			() => {}
+		);
 
-			controller?.enqueue(encodeSseFrame('ping', { now: 1 }));
-			const envelope: SyncEnvelope = {
-				managerKey: 'notes',
-				scope: 'notes:workspace-1',
-				cursor: 'cursor-2',
-				changes: [{ type: 'itemAdded', id: 'note-1', value: { id: 'note-1' } }]
-			};
-			const frame = encodeSseFrame('sync', envelope);
-			controller?.enqueue(frame.slice(0, 11));
-			controller?.enqueue(frame.slice(11));
-			await waitFor(() => received.length === 1);
-			expect(received).toEqual([envelope]);
+		controller?.enqueue(encodeSseFrame('ping', { now: 1 }));
+		const envelope: SyncEnvelope = {
+			managerKey: 'notes',
+			scope: 'notes:workspace-1',
+			cursor: 'cursor-2',
+			changes: [{ type: 'itemAdded', id: 'note-1', value: { id: 'note-1' } }]
+		};
+		const frame = encodeSseFrame('sync', envelope);
+		controller?.enqueue(frame.slice(0, 11));
+		controller?.enqueue(frame.slice(11));
+		await waitFor(() => received.length === 1);
+		expect(received).toEqual([envelope]);
 
-			if (subscription.isOk()) {
-				subscription.value();
-			}
-			await waitFor(() => cancelled === 1);
-		} finally {
-			runtime.dispose();
-		}
+		signal.abort();
+		await finished;
+		expect(cancelled).toBe(1);
 	});
 
 	it('reassembles duplicate out-of-order sync chunks exactly once', async () => {
 		let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-		const runtime = createRuntime({
-			cache: noopCache,
-			fetch: async () =>
-				new Response(
-					new ReadableStream<Uint8Array>({
-						start(nextController) {
-							controller = nextController;
-						}
-					}),
-					{ headers: { 'content-type': 'text/event-stream' } }
-				),
-			createId: (prefix) => `${prefix}-chunks`
-		});
+		const reader = new ReadableStream<Uint8Array>({
+			start(nextController) {
+				controller = nextController;
+			}
+		}).getReader();
 		const received: SyncEnvelope[] = [];
 		const signal = new AbortController();
-		try {
-			const subscription = await runtime.transport.subscribe({
-				url: 'http://sync.test/events',
-				signal: signal.signal,
-				onEnvelope: (envelope) => received.push(envelope)
-			});
-			expect(subscription.isOk()).toBe(true);
-			const envelope: SyncEnvelope = {
-				managerKey: 'notes',
-				scope: 'notes:workspace-1',
-				cursor: 'cursor-large',
-				changes: [{ type: 'itemAdded', id: 'large', value: { text: 'x'.repeat(300_000) } }]
-			};
-			const frames = encodeSyncEnvelopeSseFrames(envelope, MAX_CHUNKED_SYNC_BYTES);
-			expect(frames?.length).toBeGreaterThan(2);
-			const reversed = [...(frames ?? [])].reverse();
-			controller?.enqueue(reversed[0]!);
-			controller?.enqueue(reversed[0]!);
-			for (const frame of reversed.slice(1)) {
-				controller?.enqueue(frame);
-			}
-			await waitFor(() => received.length === 1);
-			expect(received).toEqual([envelope]);
-
-			if (subscription.isOk()) {
-				subscription.value();
-			}
-		} finally {
-			runtime.dispose();
+		const finished = readSseStream(
+			reader,
+			signal.signal,
+			(envelope) => received.push(envelope),
+			() => {}
+		);
+		const envelope: SyncEnvelope = {
+			managerKey: 'notes',
+			scope: 'notes:workspace-1',
+			cursor: 'cursor-large',
+			changes: [{ type: 'itemAdded', id: 'large', value: { text: 'x'.repeat(300_000) } }]
+		};
+		const frames = encodeSyncEnvelopeSseFrames(envelope, MAX_CHUNKED_SYNC_BYTES);
+		expect(frames?.length).toBeGreaterThan(2);
+		const reversed = [...(frames ?? [])].reverse();
+		controller?.enqueue(reversed[0]!);
+		controller?.enqueue(reversed[0]!);
+		for (const frame of reversed.slice(1)) {
+			controller?.enqueue(frame);
 		}
+		await waitFor(() => received.length === 1);
+		expect(received).toEqual([envelope]);
+
+		signal.abort();
+		await finished;
 	});
 
 	it('shares one physical stream and logical registration between duplicate stores', async () => {
@@ -158,7 +128,6 @@ describe('browser runtime SSE transport', () => {
 		const secondAbort = new AbortController();
 		try {
 			const firstSubscription = await runtime.transport.subscribe({
-				url: '/notes/events',
 				connectUrl: '/notes/connect',
 				managerKey: 'notes',
 				scope: 'client-scope',
@@ -167,7 +136,6 @@ describe('browser runtime SSE transport', () => {
 			});
 			const registrationsAfterFirst = connectRequests;
 			const secondSubscription = await runtime.transport.subscribe({
-				url: '/notes/events',
 				connectUrl: '/notes/connect',
 				managerKey: 'notes',
 				scope: 'client-scope',
@@ -238,7 +206,6 @@ describe('browser runtime SSE transport', () => {
 		const abort = new AbortController();
 		try {
 			const subscription = await runtime.transport.subscribe({
-				url: '/notes/events',
 				connectUrl: '/notes/connect',
 				managerKey: 'notes',
 				scope: 'client-scope',
@@ -280,7 +247,6 @@ describe('browser runtime registration order', () => {
 
 	function subscribeTo(runtime: ReturnType<typeof createRuntime>, name: string, onReconnect?: () => void) {
 		return runtime.transport.subscribe({
-			url: `/${name}/events`,
 			connectUrl: `/${name}/connect`,
 			managerKey: name,
 			scope: `${name}-client-scope`,
@@ -567,7 +533,6 @@ describe('browser runtime registration order', () => {
 			const followerReceived: SyncEnvelope[] = [];
 			const subscribe = (runtime: ReturnType<typeof createRuntime>, received: SyncEnvelope[]) =>
 				runtime.transport.subscribe({
-					url: '/notes/events',
 					connectUrl: '/notes/connect',
 					managerKey: 'notes',
 					scope: 'notes-client-scope',

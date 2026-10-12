@@ -102,7 +102,6 @@ describe('registration hold', () => {
 		const signal = new AbortController();
 		runtime.transport.holdRegistrations?.();
 		const registered = runtime.transport.subscribe({
-			url: '/a/events',
 			connectUrl: '/a/connect',
 			managerKey: 'notes',
 			scope: 'a',

@@ -59,7 +59,6 @@ function createFailingConnectRuntime(fails: (connect: number) => boolean) {
 	});
 	const subscribe = (signal: AbortSignal) =>
 		runtime.transport.subscribe({
-			url: '/notes/events',
 			connectUrl: '/notes/connect',
 			managerKey: 'notes',
 			scope: 'notes:workspace-1',

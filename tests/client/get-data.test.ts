@@ -113,7 +113,9 @@ describe('client get and data', () => {
 		expect(result.isOk()).toBe(true);
 		expect(store.data()).toEqual({ id: 'profile-1', name: 'Hydrated' });
 		expect(transport.options?.getCursor?.()).toBe('cursor-7');
-		expect(new URL(transport.options?.url ?? '').searchParams.get('after')).toBe('cursor-7');
+		expect(new URL(transport.options?.connectUrl ?? '', 'http://sync.test').searchParams.get('after')).toBe(
+			'cursor-7'
+		);
 		store.dispose();
 	});
 

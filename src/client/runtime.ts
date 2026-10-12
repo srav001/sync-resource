@@ -153,24 +153,8 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		this.tabId = createId('tab');
 	}
 
-	async subscribe(options: {
-		readonly url: string;
-		readonly connectUrl?: string;
-		readonly streamUrl?: string;
-		readonly managerKey?: string;
-		readonly scope?: string;
-		readonly signal: AbortSignal;
-		getCursor?(this: void): string | undefined;
-		onEnvelope(this: void, envelope: SyncEnvelope): void;
-		onReconnect?(this: void): void;
-	}): Promise<SyncResult<() => void, SyncError>> {
-		if (!options.connectUrl || !options.managerKey || !options.scope) {
-			return this.subscribeDirect(options);
-		}
-
-		const connectUrl = options.connectUrl;
-		const managerKey = options.managerKey;
-		const scope = options.scope;
+	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]): Promise<SyncResult<() => void, SyncError>> {
+		const { connectUrl, managerKey, scope } = options;
 		const key = `${managerKey}:${scope}:${connectUrl}`;
 		const entry = this.getOrCreateSubscription(key, {
 			connectUrl,
@@ -720,49 +704,6 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			subscriber(envelope);
 		}
 	}
-
-	private async subscribeDirect(options: {
-		readonly url: string;
-		readonly signal: AbortSignal;
-		getCursor?(this: void): string | undefined;
-		onEnvelope(this: void, envelope: SyncEnvelope): void;
-	}): Promise<SyncResult<() => void, SyncError>> {
-		const controller = new AbortController();
-		const abort = () => controller.abort(options.signal.reason);
-		if (options.signal.aborted) {
-			abort();
-			return err('aborted', 'Realtime subscription was aborted.');
-		}
-		options.signal.addEventListener('abort', abort, { once: true });
-		try {
-			const response = await this.fetchImpl(urlWithCursor(options.url, options.getCursor?.()), {
-				headers: {
-					accept: 'text/event-stream'
-				},
-				signal: controller.signal
-			});
-			if (controller.signal.aborted) {
-				options.signal.removeEventListener('abort', abort);
-				return err('aborted', 'Realtime subscription was aborted.');
-			}
-			if (!response.ok || !response.body) {
-				options.signal.removeEventListener('abort', abort);
-				return err('bad_request', `Failed to subscribe: ${response.status}`);
-			}
-			readSseStream(response.body.getReader(), controller.signal, options.onEnvelope, () => controller.abort());
-			return ok(() => {
-				options.signal.removeEventListener('abort', abort);
-				controller.abort();
-			});
-		} catch (cause) {
-			options.signal.removeEventListener('abort', abort);
-			return err(
-				controller.signal.aborted ? 'aborted' : 'internal',
-				cause instanceof Error ? cause.message : String(cause),
-				{ cause }
-			);
-		}
-	}
 }
 
 // A snapshot is otherwise deleted only when its own store reads it after expiry, so scopes never opened again stay
@@ -922,7 +863,7 @@ function readOwner(): { readonly ownerId: string; readonly expires: number } | u
 	}
 }
 
-async function readSseStream(
+export async function readSseStream(
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	signal: AbortSignal,
 	onEnvelope: (envelope: SyncEnvelope, json: string) => void,

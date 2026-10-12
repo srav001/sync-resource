@@ -96,7 +96,6 @@ function register(
 	origin = ''
 ) {
 	return runtime.transport.subscribe({
-		url: `${origin}/${manager}/events`,
 		connectUrl: `${origin}/${manager}/connect`,
 		managerKey: manager,
 		scope: `requested:${manager}`,

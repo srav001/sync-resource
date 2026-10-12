@@ -43,11 +43,9 @@ export interface SyncCacheConfiguration {
 
 export interface RuntimeTransport {
 	subscribe(options: {
-		readonly url: string;
-		readonly connectUrl?: string;
-		readonly streamUrl?: string;
-		readonly managerKey?: string;
-		readonly scope?: string;
+		readonly connectUrl: string;
+		readonly managerKey: string;
+		readonly scope: string;
 		readonly signal: AbortSignal;
 		getCursor?(this: void): string | undefined;
 		onEnvelope(this: void, envelope: SyncEnvelope): void;
