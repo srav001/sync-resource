@@ -285,6 +285,8 @@ Sync Resource no longer uses any of these. Remove them from your code.
   `stale` is the one staleness flag.
 - **Shared:** `isResetManifest`, `isSyncChange`, `isSyncErrorCode`, `isSyncErrorRecovery`, `isSyncProtocolError` and
   `isSyncSignal`. `isSyncEnvelope` and `isSyncHttpResult` remain.
+- **`normalizeSyncError(cause, fallbackMessage)`:** the second argument is gone; an `Error` with an empty message becomes
+  `Sync operation failed.`.
 - **`SyncRecoveryMetadata`:** removed from every entry point; use `SyncErrorRecovery`.
 - **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.
 - **`RuntimeTransport.subscribe`:** the `url` and `streamUrl` options are removed, and `connectUrl`, `managerKey` and

@@ -129,8 +129,8 @@ describe('protocol boundary rejection', () => {
 		});
 
 		const native = new Error('');
-		const normalizedNative = normalizeSyncError(native, 'fallback');
-		expect(normalizedNative).toMatchObject({ code: 'internal', message: 'fallback', cause: native });
+		const normalizedNative = normalizeSyncError(native);
+		expect(normalizedNative).toMatchObject({ code: 'internal', message: 'Sync operation failed.', cause: native });
 		expect(normalizeSyncError(42)).toMatchObject({ code: 'internal', message: '42', cause: 42 });
 	});
 

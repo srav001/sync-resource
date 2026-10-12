@@ -155,7 +155,7 @@ export function syncError(code: SyncErrorCode, message: string, options?: SyncEr
 	return new SyncError(code, message, options);
 }
 
-export function normalizeSyncError(cause: unknown, fallbackMessage = 'Sync operation failed.'): SyncError {
+export function normalizeSyncError(cause: unknown): SyncError {
 	if (isSyncError(cause)) {
 		return cause;
 	}
@@ -165,7 +165,7 @@ export function normalizeSyncError(cause: unknown, fallbackMessage = 'Sync opera
 	}
 
 	if (cause instanceof Error) {
-		return syncError('internal', cause.message || fallbackMessage, { cause });
+		return syncError('internal', cause.message || 'Sync operation failed.', { cause });
 	}
 
 	return syncError('internal', String(cause), { cause });
