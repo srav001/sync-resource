@@ -619,7 +619,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 									replayLimit,
 									streamExecution
 								);
-								if (!replay.cursorFound && replay.retainedEnvelopeCount > 0) {
+								if (!replay.cursorFound || replay.envelopes.length >= replayLimit) {
 									const resetEnvelope = buildResetEnvelope(
 										managerOptions.key,
 										scope,
@@ -628,10 +628,11 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 									);
 									rememberSentCursor(resetEnvelope.cursor);
 									enqueueSync(resetEnvelope);
-								}
-								for (const envelope of replay.envelopes) {
-									rememberSentCursor(envelope.cursor);
-									enqueueSync(envelope);
+								} else {
+									for (const envelope of replay.envelopes) {
+										rememberSentCursor(envelope.cursor);
+										enqueueSync(envelope);
+									}
 								}
 							}
 
@@ -819,6 +820,10 @@ export class MemoryManagerOutbox implements ManagerSyncPersistence {
 		}
 	}
 
+	latestCursor(scope: string): string | undefined {
+		return this.scopes.get(scope)?.at(-1)?.cursor;
+	}
+
 	readAfter(scope: string, cursor: string, limit: number): ManagerOutboxRead {
 		const envelopes = this.scopes.get(scope) ?? [];
 		const cursorIndex = envelopes.findIndex((envelope) => envelope.cursor === cursor);
@@ -966,6 +971,10 @@ class OutboxBackedManagerPersistence implements ManagerSyncPersistence {
 		execution?: OperationExecution
 	): Promise<ManagerOutboxRead> | ManagerOutboxRead {
 		return this.outbox.readAfter(scope, cursor, limit, execution);
+	}
+
+	latestCursor(scope: string): Awaitable<string | undefined> {
+		return this.outbox.latestCursor?.(scope);
 	}
 
 	readMutation(scope: string, mutationId: string): ManagerMutationRecord | undefined {
@@ -1188,6 +1197,8 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 		return executeResourceAndPersist();
 
 		async function executeResourceAndPersist(): Promise<SyncResult<ManagerExecutionSuccess, SyncError>> {
+			// Captured before the read so replay from it covers every commit that lands while the read runs.
+			const readCursor = isWriteMethod(method) ? undefined : await options.persistence.latestCursor?.(scope);
 			const resourceArgs = mergeParams(params, args);
 			const result = await executeResource(resourceArgs, withDeferredSourceCommit(method, effectiveCallOptions));
 			if (result.isErr()) {
@@ -1203,7 +1214,8 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 				args,
 				effectiveCallOptions,
 				result.value,
-				nextCursor
+				nextCursor,
+				readCursor
 			);
 			const mutationRecord = mutationIdentity
 				? buildMutationRecord({
@@ -1734,14 +1746,15 @@ function buildEnvelope<TArgs>(
 	args: TArgs,
 	options: OperationOptions | undefined,
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>,
-	nextCursor: () => string
+	nextCursor: () => string,
+	readCursor: string | undefined
 ): SyncEnvelope | undefined {
 	const changes = collectChanges(method, args, value);
 	if (changes.length === 0) {
 		return undefined;
 	}
 
-	const replayCursor = getSyncCursor(value) ?? getChangesSyncCursor(changes);
+	const replayCursor = getSyncCursor(value) ?? getChangesSyncCursor(changes) ?? readCursor;
 	if (!replayCursor && !isWriteMethod(method)) {
 		return undefined;
 	}

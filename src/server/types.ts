@@ -158,6 +158,7 @@ export interface ManagerOutbox {
 		limit: number,
 		execution?: OperationExecution
 	): Awaitable<ManagerOutboxRead>;
+	latestCursor?(scope: string): Awaitable<string | undefined>;
 }
 
 export interface ManagerOutboxRead {

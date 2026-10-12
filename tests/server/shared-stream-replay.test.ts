@@ -113,3 +113,26 @@ describe('shared stream replay ordering', () => {
 		expect([...before, ...after]).toEqual(['c5', 'c9']);
 	});
 });
+
+describe('shared stream replay gaps', () => {
+	it('resets an unknown cursor even when the outbox retains nothing', async () => {
+		registerSharedStreamManager({ key: 'notes' });
+		const p = persistence(() => ({ cursorFound: false, retainedEnvelopeCount: 0, envelopes: [] }));
+		await reg('t3', p, 'old-cursor');
+		const res = await httpSharedSyncStream(stream('t3'));
+		const reader = res.body!.getReader();
+		await reader.read();
+		expect(await drain(reader, 150)).toEqual(['reset:retention_gap']);
+	});
+
+	it('resets instead of sending a replay truncated at the replay limit', async () => {
+		registerSharedStreamManager({ key: 'notes' });
+		const full = Array.from({ length: 100 }, (_, index) => env(`c${index + 1}`));
+		const p = persistence(() => ({ cursorFound: true, retainedEnvelopeCount: 150, envelopes: full }));
+		await reg('t5', p, 'c0');
+		const res = await httpSharedSyncStream(stream('t5'));
+		const reader = res.body!.getReader();
+		await reader.read();
+		expect(await drain(reader, 150)).toEqual(['reset:retention_gap']);
+	});
+});

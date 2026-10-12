@@ -433,11 +433,12 @@ async function replaySubscription(stream: StreamState, detail: SubscriptionDetai
 		const replay = await detail.persistence.readAfter(detail.scope, afterCursor, detail.replayLimit, {
 			signal: stream.signal
 		});
-		if (!replay.cursorFound && replay.retainedEnvelopeCount > 0) {
+		if (!replay.cursorFound || replay.envelopes.length >= detail.replayLimit) {
 			stream.sendEnvelope(buildResetEnvelope(detail.managerKey, detail.scope, afterCursor, detail.nextCursor()));
-		}
-		for (const envelope of replay.envelopes) {
-			stream.sendEnvelope(envelope);
+		} else {
+			for (const envelope of replay.envelopes) {
+				stream.sendEnvelope(envelope);
+			}
 		}
 		replaySucceeded = true;
 	} finally {
