@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import { resetSyncConfiguration } from '../../src/client/core.ts';
 import { manager, resource, type ManagerOutboxRead, type SyncEnvelope } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
-import { parseSseEvent } from '../../src/shared/sse.ts';
+import { openSharedStream, readSyncEnvelope } from '../fixtures/sharedStream.ts';
 import { createSyncTestSystem } from '../fixtures/syncSystem.ts';
 
 afterEach(() => {
@@ -11,27 +11,11 @@ afterEach(() => {
 	resetSharedStreamForTests();
 });
 
-describe('direct manager SSE', () => {
-	it('opens with a ready event', async () => {
-		const system = createSyncTestSystem();
-		const response = await system.manager.http.events?.({
-			request: new Request('http://sync.test/events', { headers: { accept: 'text/event-stream' } }),
-			params: { workspaceId: 'workspace-1' }
-		});
-		expect(response?.ok).toBe(true);
-		const reader = response?.body?.getReader();
-		const first = await reader?.read();
-		expect(first?.done).toBe(false);
-		const event = parseSseEvent(new TextDecoder().decode(first?.value));
-		expect(event.eventName).toBe('ready');
-		expect(JSON.parse(event.data)).toMatchObject({ scope: 'notes:workspace-1' });
-		await reader?.cancel();
-	});
-
+describe('manager on the shared stream', () => {
 	it('delivers committed writes to a live subscriber', async () => {
 		const system = createSyncTestSystem();
 		await system.transport.subscribe({
-			url: 'http://sync.test/events',
+			url: 'http://sync.test/connect',
 			signal: new AbortController().signal,
 			onEnvelope: () => {}
 		});
@@ -48,7 +32,7 @@ describe('direct manager SSE', () => {
 	it('removes the subscriber when the request is aborted', async () => {
 		const system = createSyncTestSystem();
 		await system.transport.subscribe({
-			url: 'http://sync.test/events',
+			url: 'http://sync.test/connect',
 			signal: new AbortController().signal,
 			onEnvelope: () => {}
 		});
@@ -62,57 +46,30 @@ describe('direct manager SSE', () => {
 
 	it('replays envelopes after a cursor and emits a reset after retention loss', async () => {
 		const system = createSyncTestSystem();
-		const bound = system.manager.bind({ workspaceId: 'workspace-1' });
-		const firstResponse = await system.manager.http.events?.({
-			request: new Request('http://sync.test/events'),
-			params: { workspaceId: 'workspace-1' }
-		});
-		const firstReader = firstResponse?.body?.getReader();
-		await firstReader?.read();
+		const params = { workspaceId: 'workspace-1' };
+		const bound = system.manager.bind(params);
+		const firstReader = await openSharedStream(system.manager.http, params);
 		await bound.add({ input: { id: 'note-1', title: 'One' } });
-		const firstEvent = parseSseEvent(new TextDecoder().decode((await firstReader?.read())?.value));
-		const cursor = JSON.parse(firstEvent.data).cursor as string;
+		const { cursor } = await readSyncEnvelope(firstReader);
 		expect(cursor).toBeTruthy();
-		await firstReader?.cancel();
+		await firstReader.cancel();
 		await bound.add({ input: { id: 'note-2', title: 'Two' } });
-		const replayResponse = await system.manager.http.events?.({
-			request: new Request(`http://sync.test/events?after=${encodeURIComponent(cursor)}`),
-			params: { workspaceId: 'workspace-1' }
-		});
-		const replayReader = replayResponse?.body?.getReader();
-		await replayReader?.read();
-		const replayEvent = parseSseEvent(new TextDecoder().decode((await replayReader?.read())?.value));
-		const replayEnvelope = JSON.parse(replayEvent.data);
-		expect(replayEvent.eventName).toBe('sync');
-		expect(replayEnvelope).toMatchObject({
+		const replayReader = await openSharedStream(system.manager.http, params, { afterCursor: cursor });
+		expect(await readSyncEnvelope(replayReader)).toMatchObject({
 			managerKey: 'notes',
 			scope: 'notes:workspace-1',
 			cursor: system.persistence.retained('notes:workspace-1')[1]?.cursor,
 			changes: [{ type: 'itemAdded', id: 'note-2', value: { id: 'note-2', title: 'Two' } }]
 		});
-		await replayReader?.cancel();
+		await replayReader.cancel();
 		system.persistence.setRetention(1);
 		await bound.add({ input: { id: 'note-3', title: 'Three' } });
-		const resetResponse = await system.manager.http.events?.({
-			request: new Request(`http://sync.test/events?after=${encodeURIComponent(cursor)}`),
-			params: { workspaceId: 'workspace-1' }
-		});
-		const resetReader = resetResponse?.body?.getReader();
-		await resetReader?.read();
-		const resetEvent = parseSseEvent(new TextDecoder().decode((await resetReader?.read())?.value));
-		expect(JSON.parse(resetEvent.data)).toMatchObject({
+		const resetReader = await openSharedStream(system.manager.http, params, { afterCursor: cursor });
+		expect(await readSyncEnvelope(resetReader)).toMatchObject({
 			scope: 'notes:workspace-1',
-			changes: [
-				{
-					type: 'reset',
-					manifest: {
-						reason: 'retention_gap',
-						previousCursor: cursor
-					}
-				}
-			]
+			changes: [{ type: 'reset', manifest: { reason: 'retention_gap', previousCursor: cursor } }]
 		});
-		await resetReader?.cancel();
+		await resetReader.cancel();
 	});
 
 	describe('replay from a custom outbox', () => {
@@ -144,15 +101,10 @@ describe('direct manager SSE', () => {
 					}
 				}
 			});
-			const response = await notes.http.events!({
-				request: new Request('http://sync.test/events?after=old'),
-				params: { workspaceId: 'ws' }
-			});
-			const reader = response.body!.getReader();
-			await reader.read();
-			const event = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
+			const reader = await openSharedStream(notes.http, { workspaceId: 'ws' }, { afterCursor: 'old' });
+			const envelope = await readSyncEnvelope(reader);
 			await reader.cancel();
-			return { limits, envelope: JSON.parse(event.data) as SyncEnvelope };
+			return { limits, envelope };
 		}
 
 		it('resets an unknown cursor even when the outbox retains nothing', async () => {

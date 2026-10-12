@@ -43,7 +43,7 @@ import type {
 const EffectEnvironmentTypeId: unique symbol = Symbol('@sync-resource/effect/environment');
 const PlainResourceTypeId: unique symbol = Symbol.for('@sync-resource/effect/plain-resource');
 const unboundedSignal = new AbortController().signal;
-const managerHttpHandlerNames = ['get', 'list', 'add', 'mutate', 'delete', 'connect', 'events'] as const;
+const managerHttpHandlerNames = ['get', 'list', 'add', 'mutate', 'delete', 'connect'] as const;
 
 export type EffectOperationOptions = Omit<OperationOptions, 'signal' | 'environment'>;
 export type EffectResourceSelf = Partial<
@@ -405,7 +405,6 @@ export interface EffectManagerRoutesOptions<TContext, TParams, TError = never, R
 	readonly path: `/${string}`;
 	readonly params: (request: HttpServerRequest.HttpServerRequest) => Effect.Effect<TParams, TError, R>;
 	readonly context?: (request: HttpServerRequest.HttpServerRequest) => Effect.Effect<TContext, TError, R>;
-	readonly events?: boolean;
 }
 
 export function httpSharedSyncStreamRoute(path: `/${string}`): HttpRouter.Route<never, never> {
@@ -436,9 +435,6 @@ export function managerHttpRoutes<TContext, TParams, TError = never, R = never, 
 	addManagerRoute(routes, options, 'POST', 'mutate');
 	addManagerRoute(routes, options, 'POST', 'delete');
 	addManagerRoute(routes, options, 'POST', 'connect');
-	if (options.events) {
-		addManagerRoute(routes, options, 'GET', 'events');
-	}
 	return routes;
 }
 

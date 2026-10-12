@@ -17,6 +17,7 @@ import {
 	type SyncEnvelope
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { openSharedStream } from '../fixtures/sharedStream.ts';
 
 interface Params {
 	readonly workspaceId: string;
@@ -72,7 +73,10 @@ const querySchema = {
 	}
 };
 
-afterEach(() => resetSharedStreamForTests());
+afterEach(() => {
+	vi.useRealTimers();
+	resetSharedStreamForTests();
+});
 
 describe('Effect server entrypoint', () => {
 	it('preserves handler service requirements and typed failures', async () => {
@@ -258,7 +262,7 @@ describe('Effect server entrypoint', () => {
 		expect(await titles('a')).toEqual(['a', 'a']);
 	});
 
-	it('mounts only supported HTTP routes unless diagnostic events are requested', async () => {
+	it('mounts only the supported HTTP routes', async () => {
 		const notes = resource(paramsSchema, (method) => ({
 			get: method.get({
 				output: noteSchema,
@@ -279,7 +283,6 @@ describe('Effect server entrypoint', () => {
 			params: () => Effect.succeed({ workspaceId: 'w1' })
 		};
 		expect(managerHttpRoutes(options)).toHaveLength(2);
-		expect(managerHttpRoutes({ ...options, events: true })).toHaveLength(3);
 
 		const routes = managerHttpRoutes<undefined, Params, never, never, never>(options);
 		const managerWeb = HttpRouter.toWebHandler(HttpRouter.addAll(routes), {
@@ -609,15 +612,13 @@ describe('Effect server entrypoint', () => {
 		});
 		expect(response.status).toBe(200);
 
-		const stream = await notesManager.http.events!({
-			request: new Request('https://sync.test/events'),
-			params: { workspaceId: 'w1' }
-		});
-		const reader = stream.body!.getReader();
-		await reader.read();
+		vi.useFakeTimers();
+		const reader = await openSharedStream(notesManager.http, { workspaceId: 'w1' });
 		await reader.cancel();
-		await vi.waitFor(() => expect(realtimeFinalized).toBe(true));
 		expect(events).toContain('subscribe');
+		expect(realtimeFinalized).toBe(false);
+		await vi.advanceTimersByTimeAsync(5 * 60_000);
+		await vi.waitFor(() => expect(realtimeFinalized).toBe(true));
 	});
 
 	it('forwards the persistence latest cursor to list reads', async () => {
@@ -711,12 +712,7 @@ describe('Effect server entrypoint', () => {
 				}
 			})
 		);
-		const stream = await notesManager.http.events!({
-			request: new Request('https://sync.test/events'),
-			params: { workspaceId: 'w1' }
-		});
-		const reader = stream.body!.getReader();
-		await reader.read();
+		const reader = await openSharedStream(notesManager.http, { workspaceId: 'w1' });
 		await reader.cancel();
 		await vi.waitFor(() => expect(finalized).toBe(true));
 	});

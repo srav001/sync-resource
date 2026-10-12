@@ -1,6 +1,5 @@
-import { isCallable, isRecord, isString, isUnrefableTimer } from '../shared/guards.ts';
+import { isCallable, isRecord, isString } from '../shared/guards.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
-import { encodeSseFrame, encodeSyncEnvelopeSseFrames, MAX_SSE_FRAME_BYTES } from '../shared/sse.ts';
 import { stableStringify } from '../shared/stableJson.ts';
 import { normalizeSyncError, syncError, syncErrorToHttpStatus, toSyncProtocolError, type SyncError } from './errors.js';
 import { withCommitExecution } from './executionState.js';
@@ -15,7 +14,6 @@ import {
 	type MethodKind
 } from './resource.js';
 import {
-	buildResetEnvelope,
 	jsonResponse,
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
@@ -49,7 +47,6 @@ import type {
 
 // Body decoding never uses streaming state, so one decoder safely avoids per-request allocation.
 const textDecoder = new TextDecoder();
-const MAX_STREAM_BACKPRESSURE_QUEUE = 4096;
 const MAX_MEMORY_MUTATION_RECORDS = 10_000;
 const MEMORY_MUTATION_RECORD_TTL_MS = 60 * 60_000;
 const unboundedExecution: OperationExecution = { signal: new AbortController().signal };
@@ -225,7 +222,6 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		inFlightMutations
 	};
 	let cursorIndex = 0;
-	const subscribers = new Map<string, Set<(envelope: SyncEnvelope) => void>>();
 	const busSubscriptions = new Map<string, BusSubscriptionEntry>();
 	const sharedBusLeases = new Map<string, () => void>();
 
@@ -354,239 +350,11 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 			});
 		};
 
-		handlers.events = async (args) => {
-			const scope = encodeScope(managerOptions.key, managerOptions.scope(args.params));
-			const execution = operationExecution(
-				mergeOperationOptions(operationOptionsFromRequest(args.request), args.options)
-			);
-			const telemetryContext = {
-				manager: managerOptions.key,
-				method: 'events',
-				scope,
-				...execution
-			};
-			const authResult = await authorize(managerOptions, args.context, args.params, telemetryContext);
-			if (authResult.isErr()) {
-				return jsonResponse(syncHttpError(authResult.error), syncErrorToHttpStatus(authResult.error));
-			}
-
-			let cancelStream = (): void => {};
-			const stream = new ReadableStream<Uint8Array>(
-				{
-					async start(controller) {
-						const afterCursor = readAfterCursor(args.request);
-						const replayLimit = managerOptions.replayLimit ?? 1000;
-						const maxEventBytes = managerOptions.stream?.maxEventBytes ?? 256 * 1024;
-						const heartbeatMs = managerOptions.stream?.heartbeatMs ?? 60_000;
-						const sentCursorLimit = Math.max(replayLimit * 2, 4096);
-						const buffered: SyncEnvelope[] = [];
-						const sentCursors = new Set<string>();
-						const sentCursorOrder: string[] = [];
-						let sentCursorStart = 0;
-						let replaying = afterCursor !== undefined;
-						let closed = false;
-						let heartbeat: ReturnType<typeof setInterval> | undefined;
-						let releaseBus: (() => void) | undefined;
-						const streamController = new AbortController();
-						const streamExecution = {
-							...execution,
-							signal: AbortSignal.any([execution.signal, streamController.signal])
-						};
-						let scopeSubscribers = subscribers.get(scope);
-						if (!scopeSubscribers) {
-							scopeSubscribers = new Set();
-							subscribers.set(scope, scopeSubscribers);
-						}
-						const onAbort = () => close();
-
-						function close(failure?: { readonly cause: unknown }): void {
-							if (closed) {
-								return;
-							}
-							closed = true;
-							streamController.abort();
-							execution.signal.removeEventListener('abort', onAbort);
-							scopeSubscribers?.delete(send);
-							if (scopeSubscribers?.size === 0) {
-								subscribers.delete(scope);
-							}
-							releaseBus?.();
-							releaseBus = undefined;
-							if (heartbeat) {
-								clearInterval(heartbeat);
-								heartbeat = undefined;
-							}
-							try {
-								if (failure) {
-									controller.error(failure.cause);
-								} else {
-									controller.close();
-								}
-							} catch {}
-						}
-						cancelStream = close;
-
-						function enqueue<TPayload>(eventName: string, payload: TPayload): void {
-							if (closed) {
-								return;
-							}
-							enqueueFrame(encodeSseFrame(eventName, payload));
-						}
-
-						function enqueueSync(envelope: SyncEnvelope): void {
-							if (closed) {
-								return;
-							}
-							const frames = encodeSyncEnvelopeSseFrames(envelope, maxEventBytes);
-							if (!frames) {
-								close();
-								return;
-							}
-							for (const frame of frames) {
-								enqueueFrame(frame);
-							}
-						}
-
-						function enqueueFrame(frame: Uint8Array): void {
-							if (closed) {
-								return;
-							}
-							if (frame.byteLength > MAX_SSE_FRAME_BYTES) {
-								close();
-								return;
-							}
-							if (
-								controller.desiredSize !== null &&
-								controller.desiredSize < -MAX_STREAM_BACKPRESSURE_QUEUE
-							) {
-								close();
-								return;
-							}
-							try {
-								controller.enqueue(frame);
-							} catch {
-								close();
-							}
-						}
-
-						function send(envelope: SyncEnvelope): void {
-							if (sentCursors.has(envelope.cursor)) {
-								return;
-							}
-							if (replaying) {
-								buffered.push(envelope);
-								return;
-							}
-							rememberSentCursor(envelope.cursor);
-							enqueueSync(envelope);
-						}
-
-						function rememberSentCursor(cursor: string): void {
-							if (sentCursors.has(cursor)) {
-								return;
-							}
-							sentCursors.add(cursor);
-							sentCursorOrder.push(cursor);
-							while (sentCursorOrder.length - sentCursorStart > sentCursorLimit) {
-								const staleCursor = sentCursorOrder[sentCursorStart];
-								sentCursorStart += 1;
-								if (staleCursor !== undefined) {
-									sentCursors.delete(staleCursor);
-								}
-							}
-							if (sentCursorStart > 1024 && sentCursorStart * 2 > sentCursorOrder.length) {
-								sentCursorOrder.splice(0, sentCursorStart);
-								sentCursorStart = 0;
-							}
-						}
-
-						try {
-							scopeSubscribers.add(send);
-							if (execution.signal.aborted) {
-								close();
-								return;
-							}
-							execution.signal.addEventListener('abort', onAbort, { once: true });
-							const acquiredBus = await acquireBusSubscription(
-								managerOptions,
-								scope,
-								streamExecution.signal
-							);
-							if (closed) {
-								acquiredBus?.();
-								return;
-							}
-							releaseBus = acquiredBus;
-							enqueue('ready', { scope, after: afterCursor });
-							const ping = { type: 'ping' as const, managerKey: managerOptions.key, scope, ts: 0 };
-							heartbeat = setInterval(() => {
-								// This direct stream is not the production browser transport, but the heartbeat keeps diagnostic streams bounded and observable.
-								ping.ts = Date.now();
-								enqueue('ping', ping);
-							}, heartbeatMs);
-							unrefTimer(heartbeat);
-
-							if (afterCursor !== undefined) {
-								const replay = await persistence.readAfter(
-									scope,
-									afterCursor,
-									replayLimit + 1,
-									streamExecution
-								);
-								if (!replay.cursorFound || replay.envelopes.length > replayLimit) {
-									const resetEnvelope = buildResetEnvelope(
-										managerOptions.key,
-										scope,
-										afterCursor,
-										nextCursor()
-									);
-									rememberSentCursor(resetEnvelope.cursor);
-									enqueueSync(resetEnvelope);
-								} else {
-									for (const envelope of replay.envelopes) {
-										rememberSentCursor(envelope.cursor);
-										enqueueSync(envelope);
-									}
-								}
-							}
-
-							replaying = false;
-							for (const envelope of buffered) {
-								if (!sentCursors.has(envelope.cursor)) {
-									send(envelope);
-								}
-							}
-						} catch (cause) {
-							const cancelled = streamExecution.signal.aborted;
-							close(cancelled ? undefined : { cause });
-							if (cancelled) {
-								return;
-							}
-							await reportManagerError(managerOptions, telemetryContext, normalizeSyncError(cause));
-						}
-					},
-					cancel() {
-						cancelStream();
-					}
-				},
-				{ highWaterMark: 1 }
-			);
-
-			return new Response(stream, {
-				headers: {
-					'content-type': 'text/event-stream; charset=utf-8',
-					'cache-control': 'no-store',
-					connection: 'keep-alive'
-				}
-			});
-		};
-
 		return handlers;
 	}
 
 	// Writes persist their envelope with the mutation record before publishing, and signals are never persisted.
 	async function recordAndPublish(envelope: SyncEnvelope): Promise<void> {
-		publishToLocalSubscribers(envelope);
 		publishSharedStreamEnvelope(envelope);
 		publishToRealtimeBusBestEffort(envelope);
 	}
@@ -604,17 +372,6 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 			{ manager: options.key, method, scope, ...unboundedExecution },
 			errorValue
 		);
-	}
-
-	function publishToLocalSubscribers(envelope: SyncEnvelope): void {
-		const scopeSubscribers = subscribers.get(envelope.scope);
-		if (!scopeSubscribers) {
-			return;
-		}
-
-		for (const subscriber of scopeSubscribers) {
-			subscriber(envelope);
-		}
 	}
 
 	async function acquireBusSubscription(
@@ -635,7 +392,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 			const controller = new AbortController();
 			let created!: BusSubscriptionEntry;
 			const ready = Promise.resolve()
-				.then(() => bus.subscribe(scope, publishToLocalSubscribers, { signal: controller.signal }))
+				.then(() => bus.subscribe(scope, () => {}, { signal: controller.signal }))
 				.catch(async (cause: unknown) => {
 					if (controller.signal.aborted) {
 						return undefined;
@@ -643,7 +400,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 					if (busSubscriptions.get(scope) === created) {
 						busSubscriptions.delete(scope);
 					}
-					await reportRealtimeError('events', scope, normalizeSyncError(cause));
+					await reportRealtimeError('realtimeBus.subscribe', scope, normalizeSyncError(cause));
 					return undefined;
 				});
 			created = { controller, owners: 0, ready };
@@ -1844,10 +1601,4 @@ function syncHttpError(errorValue: SyncError): SyncHttpResult<unknown> {
 		isError: true,
 		error: toSyncProtocolError(errorValue)
 	};
-}
-
-function unrefTimer(timer: ReturnType<typeof setInterval> | undefined): void {
-	if (timer && isUnrefableTimer(timer)) {
-		timer.unref();
-	}
 }

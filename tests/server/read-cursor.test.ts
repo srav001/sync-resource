@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vite-plus/test';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
 	httpSharedSyncStream,
@@ -14,6 +14,7 @@ import {
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
+import { openSharedStream } from '../fixtures/sharedStream.ts';
 
 afterEach(() => resetSharedStreamForTests());
 
@@ -223,11 +224,8 @@ describe('operation execution', () => {
 			params
 		});
 		expect(added.status).toBe(200);
-		const events = await notes.http.events!({ request: request('http://sync.test/events?after=c1'), params });
-		const reader = events.body!.getReader();
-		while (!Object.hasOwn(calls, 'readAfter')) {
-			await reader.read();
-		}
+		const reader = await openSharedStream(notes.http, params, { afterCursor: 'c1', signal: abort.signal });
+		await vi.waitFor(() => expect(calls).toHaveProperty('readAfter'));
 		await reader.cancel();
 
 		const signals = [authorized, calls.latestCursor, calls.append, calls.readAfter].map(signalOf);

@@ -645,7 +645,7 @@ async function reportSharedStreamError(
 	try {
 		await manager.handleError(errorValue, {
 			manager: detail.managerKey,
-			method: 'events',
+			method: 'stream.replay',
 			scope: detail.scope
 		});
 		return ok();

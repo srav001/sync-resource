@@ -25,6 +25,7 @@ import {
 	parseSyncEnvelopeJson,
 	type SyncEnvelopeChunk
 } from '../../src/shared/sse.ts';
+import { openSharedStream } from './sharedStream.ts';
 
 export const SYNC_TEST_NOW = 1_700_000_000_000;
 
@@ -253,7 +254,7 @@ export class InMemoryCache implements CacheAdapter {
 type NotesManager = ReturnType<typeof createNotesManager>;
 type SubscriptionOptions = Parameters<RuntimeTransport['subscribe']>[0];
 
-export class DirectManagerSseTransport implements RuntimeTransport {
+export class SharedStreamTransport implements RuntimeTransport {
 	readonly received: SyncEnvelope[] = [];
 	private readonly manager: NotesManager;
 	private readonly params: NotesParams;
@@ -270,7 +271,7 @@ export class DirectManagerSseTransport implements RuntimeTransport {
 
 	async subscribe(options: SubscriptionOptions): Promise<SyncResult<() => void, SyncError>> {
 		this.options = options;
-		await this.open(options.url);
+		await this.open();
 		return ok(() => this.disconnect());
 	}
 
@@ -285,12 +286,7 @@ export class DirectManagerSseTransport implements RuntimeTransport {
 			throw new Error('Transport has no logical subscription.');
 		}
 		this.disconnect();
-		const url = new URL(options.url, 'http://sync.test');
-		const cursor = options.getCursor?.();
-		if (cursor) {
-			url.searchParams.set('after', cursor);
-		}
-		await this.open(url.href);
+		await this.open(options.getCursor?.());
 		if (notifyStore) {
 			options.onReconnect?.();
 		}
@@ -329,27 +325,17 @@ export class DirectManagerSseTransport implements RuntimeTransport {
 		await this.readerTask;
 	}
 
-	private async open(url: string): Promise<void> {
-		if (!this.manager.http.events) {
-			throw new Error('Test manager did not expose an events handler.');
-		}
+	private async open(afterCursor?: string): Promise<void> {
 		const controller = new AbortController();
 		this.controller = controller;
-		const response = await this.manager.http.events({
-			request: new Request(url, {
-				headers: { accept: 'text/event-stream' },
-				signal: controller.signal
-			}),
-			params: this.params
+		const reader = await openSharedStream(this.manager.http, this.params, {
+			afterCursor,
+			signal: controller.signal
 		});
-		if (!response.ok || !response.body) {
-			throw new Error(`Events stream failed with ${response.status}.`);
-		}
-		this.readerTask = this.read(response.body, controller.signal);
+		this.readerTask = this.read(reader, controller.signal);
 	}
 
-	private async read(stream: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
-		const reader = stream.getReader();
+	private async read(reader: ReadableStreamDefaultReader<Uint8Array>, signal: AbortSignal): Promise<void> {
 		const decoder = new TextDecoder();
 		let buffer = '';
 		try {
@@ -421,7 +407,7 @@ export interface SyncTestSystem {
 	readonly persistence: InMemorySyncPersistence;
 	readonly cache: InMemoryCache;
 	readonly manager: NotesManager;
-	readonly transport: DirectManagerSseTransport;
+	readonly transport: SharedStreamTransport;
 	readonly fetchRequests: readonly Request[];
 	createStore(): ClientStore<NotesManager['type']>;
 }
@@ -432,7 +418,7 @@ export function createSyncTestSystem(workspaceId = 'workspace-1'): SyncTestSyste
 	const cache = new InMemoryCache();
 	const managerValue = createNotesManager(database, persistence);
 	const params = { workspaceId };
-	const transport = new DirectManagerSseTransport(managerValue, params);
+	const transport = new SharedStreamTransport(managerValue, params);
 	const fetchRequests: Request[] = [];
 	let idIndex = 0;
 

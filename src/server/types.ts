@@ -214,7 +214,6 @@ export interface ManagerHttpHandlers<TContext, TParams> {
 	mutate?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
 	delete?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
 	connect?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
-	events?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
 }
 
 export interface MethodType<TQuery, TInput, TOutput> {

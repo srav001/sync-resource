@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vite-plus/test';
 
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { openSharedStream, readSyncEnvelope } from '../fixtures/sharedStream.ts';
 import { createSyncTestSystem, type SyncTestSystem } from '../fixtures/syncSystem.ts';
 
 afterEach(() => resetSharedStreamForTests());
@@ -52,21 +53,19 @@ describe('manager execution and HTTP', () => {
 		expect((await bad.json()).error.code).toBe('bad_request');
 	});
 
-	it('serves replay through the diagnostic SSE endpoint', async () => {
+	it('serves replay through connect and the shared stream', async () => {
 		const system = createSyncTestSystem();
-		const bound = system.manager.bind({ workspaceId: 'workspace-1' });
+		const params = { workspaceId: 'workspace-1' };
+		const bound = system.manager.bind(params);
 		await bound.add({ input: { id: 'n1', title: 'one' } }, { mutationId: 'm1' });
 		const cursor = system.persistence.retained('notes:workspace-1')[0]!.cursor;
 		await bound.add({ input: { id: 'n2', title: 'two' } }, { mutationId: 'm2' });
-		const response = await system.manager.http.events!({
-			request: new Request(`http://sync.test/events?after=${encodeURIComponent(cursor)}`),
-			params: { workspaceId: 'workspace-1' }
+		const reader = await openSharedStream(system.manager.http, params, { afterCursor: cursor });
+		expect(await readSyncEnvelope(reader)).toMatchObject({
+			cursor: system.persistence.retained('notes:workspace-1')[1]!.cursor,
+			sourceMutationId: 'm2',
+			changes: [{ type: 'itemAdded', id: 'n2' }]
 		});
-		expect(response.headers.get('content-type')).toContain('text/event-stream');
-		const reader = response.body!.getReader();
-		const first = await reader.read();
-		const text = new TextDecoder().decode(first.value);
-		expect(text).toContain('event: ready');
 		await reader.cancel();
 	});
 });

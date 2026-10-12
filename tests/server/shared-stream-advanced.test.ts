@@ -73,8 +73,8 @@ describe('shared stream replay and framing', () => {
 		const errors: string[] = [];
 		registerSharedStreamManager({
 			key: 'notes',
-			handleError(error) {
-				errors.push(error.message);
+			handleError(error, context) {
+				errors.push(`${context.method}:${error.message}`);
 			}
 		});
 		const persistence = createPersistence(async () => {
@@ -103,7 +103,7 @@ describe('shared stream replay and framing', () => {
 				nextCursor: 'cursor-reset'
 			}
 		});
-		expect(errors).toEqual(['outbox unavailable']);
+		expect(errors).toEqual(['stream.replay:outbox unavailable']);
 		expect((await reader.read()).done).toBe(true);
 	});
 
