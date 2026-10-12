@@ -36,14 +36,6 @@ export class SyncErr<TValue, TError extends SyncError = SyncError> {
 
 export type SyncResult<TValue, TError extends SyncError = SyncError> = SyncOk<TValue, TError> | SyncErr<TValue, TError>;
 
-export type InferOk<TResult> = TResult extends { readonly status: 'ok'; readonly value: infer TValue } ? TValue : never;
-export type InferErr<TResult> = TResult extends {
-	readonly status: 'error';
-	readonly error: infer TError extends SyncError;
-}
-	? TError
-	: never;
-
 export function ok(): SyncOk<void, never>;
 export function ok<TValue>(value: TValue): SyncOk<TValue, never>;
 export function ok<TValue>(value?: TValue): SyncOk<TValue | void, never> {
@@ -64,82 +56,3 @@ export function err(
 	const [code, message, options] = args;
 	return new SyncErr(syncError(code, message, options));
 }
-
-export function isOk<TValue, TError extends SyncError>(
-	result: SyncResult<TValue, TError>
-): result is SyncOk<TValue, TError> {
-	return result.isOk();
-}
-
-export function isError<TValue, TError extends SyncError>(
-	result: SyncResult<TValue, TError>
-): result is SyncErr<TValue, TError> {
-	return result.isErr();
-}
-
-export function map<TValue, TError extends SyncError, TNext>(
-	result: SyncResult<TValue, TError>,
-	mapper: (value: TValue) => TNext
-): SyncResult<TNext, TError> {
-	if (result.isErr()) {
-		return result;
-	}
-
-	return ok(mapper(result.value));
-}
-
-export function mapError<TValue, TError extends SyncError, TNextError extends SyncError>(
-	result: SyncResult<TValue, TError>,
-	mapper: (errorValue: TError) => TNextError
-): SyncResult<TValue, TNextError> {
-	if (result.isErr()) {
-		return err(mapper(result.error));
-	}
-
-	return new SyncOk(result.value);
-}
-
-export function andThen<TValue, TError extends SyncError, TNext, TNextError extends SyncError>(
-	result: SyncResult<TValue, TError>,
-	mapper: (value: TValue) => SyncResult<TNext, TNextError>
-): SyncResult<TNext, TError | TNextError> {
-	if (result.isErr()) {
-		return result;
-	}
-
-	return mapper(result.value);
-}
-
-export function trySync<TValue, TError extends SyncError>(
-	run: () => TValue,
-	mapper: (cause: unknown) => TError
-): SyncResult<TValue, TError> {
-	try {
-		return ok(run());
-	} catch (cause) {
-		return err(mapper(cause));
-	}
-}
-
-export async function tryPromise<TValue, TError extends SyncError>(
-	run: () => Promise<TValue>,
-	mapper: (cause: unknown) => TError
-): Promise<SyncResult<TValue, TError>> {
-	try {
-		return ok(await run());
-	} catch (cause) {
-		return err(mapper(cause));
-	}
-}
-
-export const Result = {
-	ok,
-	err,
-	isOk,
-	isError,
-	map,
-	mapError,
-	andThen,
-	try: trySync,
-	tryPromise
-};

@@ -20,23 +20,7 @@ export {
 	type ManagerTypeFromResource,
 	type ManagerWriteMethod
 } from './manager.js';
-export {
-	andThen,
-	err,
-	isError,
-	isOk,
-	map,
-	mapError,
-	ok,
-	Result,
-	tryPromise,
-	trySync,
-	SyncErr,
-	SyncOk,
-	type InferErr,
-	type InferOk,
-	type SyncResult
-} from '../shared/result.js';
+export { err, ok, SyncErr, SyncOk, type SyncResult } from '../shared/result.js';
 export {
 	resource,
 	type AddMethodDefinition,

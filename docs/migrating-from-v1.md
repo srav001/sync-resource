@@ -15,8 +15,9 @@ carry the page, and an idle scope keeps only its newest outbox envelope. Everyth
 6. Only if you used `events: true`, `http.events`, or a `/events` URL: [use the shared stream](#5-replace-the-direct-events-route-with-the-shared-stream).
 7. Only if code reads raw `list` responses: [read the page from `value`](#6-list-read-envelopes-no-longer-carry-pageloaded).
 8. Only if you rely on replay for clients that were offline longer than the idle TTL: [review idle scopes](#7-idle-scopes-keep-only-their-newest-envelope).
-9. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
-   `sync-resource/server/effect` ([requirements](#requirements)).
+9. Only if you imported the `Result` helpers: [they are removed](#8-result-helpers-are-removed).
+10. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
+    `sync-resource/server/effect` ([requirements](#requirements)).
 
 Then adopt what you want from [Optional additions](#optional-additions). Automatic behavior changes need no code and
 are listed in [No code change needed](#no-code-change-needed).
@@ -259,6 +260,22 @@ repairs through a reset instead of replaying.
 
 **Action.** None for the browser client, which repairs automatically. If you need replay for longer-offline clients,
 raise `stream.idleTtlMs` or use a durable outbox; custom outboxes are not pruned by the manager.
+
+### 8. `Result` helpers are removed
+
+`Result`, `map`, `mapError`, `andThen`, `trySync`, `tryPromise`, `isOk`, `isError`, `InferOk` and `InferErr` are no
+longer exported from `sync-resource/client/core` or `sync-resource/server`. Sync Resource does not use them anymore.
+
+Still exported: `ok`, `err` and the `SyncResult` type. Every `SyncResult` value keeps its `isOk()` and `isErr()` methods.
+
+**Before (v1).**
+
+```ts
+import { isOk, Result } from 'sync-resource/client/core';
+```
+
+**After (v2).** Remove these imports, and replace the calls with your own code or with `ok`, `err` and the `isOk()` /
+`isErr()` methods.
 
 ## Requirements
 

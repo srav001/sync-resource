@@ -24,23 +24,7 @@ export {
 	type StoreWithMutate,
 	type StoreWriteOptions
 } from './store.ts';
-export {
-	andThen,
-	err,
-	isError,
-	isOk,
-	map,
-	mapError,
-	ok,
-	Result,
-	SyncErr,
-	SyncOk,
-	tryPromise,
-	trySync,
-	type InferErr,
-	type InferOk,
-	type SyncResult
-} from '../shared/result.ts';
+export { err, ok, SyncErr, SyncOk, type SyncResult } from '../shared/result.ts';
 export { isSyncError, normalizeSyncError, SyncError, syncError, syncErrorToHttpStatus } from '../shared/index.ts';
 export type {
 	CacheAdapter,
