@@ -279,28 +279,41 @@ Sync Resource no longer uses any of these. Remove them from your code.
 - **Client core:** `createRepairScheduler`, `planRepair`, `noRepairNeeded`, `RepairPlan` and `RepairScheduler`. The store
   repairs itself after a reset or a stale page, and `repair()` is the manual call. The types `StoreActionMethodName`,
   `ParamsOf` and `PageOutputMeta` are no longer exported.
-- **Solid:** `SolidStoreListHandle` is removed; use `StoreListHandle`. `SolidClientStore` is the core store type without
-  `on` and `subscribe`, plus `core`; every member it had is still there.
+- **Store `unsubscribe(callback)`:** removed. Call the function that `subscribe(callback)` returns.
 - **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
   `stale` is the one staleness flag.
-- **Server:** `parseSchema`, `registerSharedStreamManager`, `registerSharedStreamSubscription`,
-  `publishSharedStreamEnvelope`, `getSharedStreamConfig` and `getRegisteredSharedStreamManagerKeys`, and the types `ManagerOptions` and `ManagerType`. `GetMethodInput` and
-  `ListMethodInput` are one `ReadMethodInput`. `GetResourceArgs`, `ListResourceArgs` and `DeleteResourceArgs` are no
-  longer exported.
-- **Shared:** `isResetManifest`, `isSyncChange`, `isSyncErrorCode`, `isSyncErrorRecovery`, `isSyncProtocolError` and
-  `isSyncSignal`. `isSyncEnvelope` and `isSyncHttpResult` remain.
-- **`normalizeSyncError(cause, fallbackMessage)`:** the second argument is gone; an `Error` with an empty message becomes
-  `Sync operation failed.`.
-- **`SyncRecoveryMetadata`:** removed from every entry point; use `SyncErrorRecovery`.
-- **`ManagerSyncPersistence`, including the Effect persistence:** `append` is removed. The manager never called it;
-  `recordMutation` stores the record and appends its envelope. The `outbox` option still takes `append`.
 - **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.
-- **Shared stream:** the transport id is read only from the `x-sync-transport-id` header; the `transportId` query
-  parameter is gone. The browser client always sent the header.
 - **`RuntimeTransport.subscribe`:** the `url` and `streamUrl` options are removed, and `connectUrl`, `managerKey` and
   `scope` are required. The direct per-manager SSE subscription they served is gone with the `/events` route. The
   `streamUrl` option of `configureSync` is unchanged.
-- **Store `unsubscribe(callback)`:** removed. Call the function that `subscribe(callback)` returns.
+- **Solid:** `SolidStoreListHandle` is removed; use `StoreListHandle`. `SolidClientStore` is the core store type without
+  `on` and `subscribe`, plus `core`; every member it had is still there.
+- **Server:** `parseSchema`, `registerSharedStreamManager`, `registerSharedStreamSubscription`,
+  `publishSharedStreamEnvelope`, `getSharedStreamConfig`, `getRegisteredSharedStreamManagerKeys`, and the types
+  `ManagerOptions` and `ManagerType`. `GetMethodInput` and `ListMethodInput` are one `ReadMethodInput`.
+  `GetResourceArgs`, `ListResourceArgs` and `DeleteResourceArgs` are no longer exported.
+- **`ManagerSyncPersistence`, including the Effect persistence:** `append` is removed. The manager never called it;
+  `recordMutation` stores the record and appends its envelope. The `outbox` option still takes `append`.
+- **Shared stream:** the transport id is read only from the `x-sync-transport-id` header; the `transportId` query
+  parameter is gone. The browser client always sent the header.
+- **Shared:** `isResetManifest`, `isSyncChange`, `isSyncErrorCode`, `isSyncErrorRecovery`, `isSyncProtocolError` and
+  `isSyncSignal`. `isSyncEnvelope` and `isSyncHttpResult` remain.
+- **Every entry point:** the `SyncRecoveryMetadata` type is `SyncErrorRecovery`. `normalizeSyncError` has no
+  `fallbackMessage` argument; an `Error` with an empty message becomes `Sync operation failed.`.
+
+**Before.**
+
+```ts
+const persistence = { append, readAfter, readMutation, recordMutation };
+const stale = page.stale || page.repairNeeded;
+```
+
+**After.**
+
+```ts
+const persistence = { readAfter, readMutation, recordMutation };
+const stale = page.stale;
+```
 
 ## Requirements
 
