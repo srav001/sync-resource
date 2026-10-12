@@ -254,11 +254,7 @@ export type ResourceMethodTypes<TMethods extends ResourceMethodMap> = {
 	readonly [Key in keyof TMethods]: ResourceMethodType<TMethods[Key]>;
 };
 
-export type GetResourceArgs<TParams extends object, TQuery> = [TQuery] extends [never]
-	? { readonly params: TParams }
-	: { readonly params: TParams; readonly query: TQuery };
-
-export type ListResourceArgs<TParams extends object, TQuery> = [TQuery] extends [never]
+type QueryResourceArgs<TParams extends object, TQuery> = [TQuery] extends [never]
 	? { readonly params: TParams }
 	: { readonly params: TParams; readonly query: TQuery };
 
@@ -271,10 +267,6 @@ export type MutateResourceArgs<TParams extends object, TQuery, TInput> = [TQuery
 	? { readonly params: TParams; readonly input: TInput }
 	: { readonly params: TParams; readonly query: TQuery; readonly input: TInput };
 
-export type DeleteResourceArgs<TParams extends object, TQuery> = [TQuery] extends [never]
-	? { readonly params: TParams }
-	: { readonly params: TParams; readonly query: TQuery };
-
 export interface ResourceWriteMethod<TArgs, TOutput> {
 	(args: TArgs, options?: OperationOptions): Promise<SyncResult<ResourceOk<TOutput>, SyncError>>;
 	(
@@ -286,12 +278,12 @@ export interface ResourceWriteMethod<TArgs, TOutput> {
 export type ResourceMethod<TParams extends object, TMethod> =
 	TMethod extends GetMethodDefinition<infer _TParams extends object, infer TQuery, infer TOutput>
 		? (
-				args: GetResourceArgs<TParams, TQuery>,
+				args: QueryResourceArgs<TParams, TQuery>,
 				options?: OperationOptions
 			) => Promise<SyncResult<ResourceOk<TOutput>, SyncError>>
 		: TMethod extends ListMethodDefinition<infer _TParams extends object, infer TQuery, infer TOutput>
 			? (
-					args: ListResourceArgs<TParams, TQuery>,
+					args: QueryResourceArgs<TParams, TQuery>,
 					options?: OperationOptions
 				) => Promise<SyncResult<ResourceOk<TOutput>, SyncError>>
 			: TMethod extends AddMethodDefinition<infer _TParams extends object, infer TInput, infer TOutput>
@@ -304,7 +296,7 @@ export type ResourceMethod<TParams extends object, TMethod> =
 					  >
 					? ResourceWriteMethod<MutateResourceArgs<TParams, TQuery, TInput>, TOutput>
 					: TMethod extends DeleteMethodDefinition<infer _TParams extends object, infer TQuery, infer TOutput>
-						? ResourceWriteMethod<DeleteResourceArgs<TParams, TQuery>, TOutput>
+						? ResourceWriteMethod<QueryResourceArgs<TParams, TQuery>, TOutput>
 						: never;
 
 export type ResourceMethods<TParams extends object, TMethods extends ResourceMethodMap> = {
