@@ -612,9 +612,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		} catch {}
 	}
 
-	private async connectOwnerStream(): Promise<SyncResult<void, SyncError>> {
+	private async connectOwnerStream(): Promise<void> {
 		if (this.disposed || !this.isOwner) {
-			return ok(undefined);
+			return;
 		}
 		const controller = new AbortController();
 		this.streamAbort = controller;
@@ -638,7 +638,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			this.settleStreamAttempt();
 			this.broadcast?.postMessage({ type: 'reconnected', hydrate: wasReconnect });
 
-			const readResult = await readSseStream(
+			await readSseStream(
 				response.body.getReader(),
 				controller.signal,
 				(envelope, json) => {
@@ -647,20 +647,11 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 				},
 				() => controller.abort()
 			);
-			if (!this.disposed && this.isOwner) {
-				this.scheduleReconnect();
-			}
-			return readResult;
-		} catch (cause) {
+		} catch {
 			this.settleStreamAttempt();
-			if (!this.disposed && this.isOwner) {
-				this.scheduleReconnect();
-			}
-			return err(
-				controller.signal.aborted ? 'aborted' : 'internal',
-				cause instanceof Error ? cause.message : String(cause),
-				{ cause }
-			);
+		}
+		if (!this.disposed && this.isOwner) {
+			this.scheduleReconnect();
 		}
 	}
 
@@ -937,20 +928,20 @@ async function readSseStream(
 	signal: AbortSignal,
 	onEnvelope: (envelope: SyncEnvelope, json: string) => void,
 	onTerminalFailure: () => void
-): Promise<SyncResult<void, SyncError>> {
+): Promise<void> {
 	let buffer = '';
 	let terminalFailure = false;
 	const textDecoder = new TextDecoder('utf-8', { fatal: true });
 	const pendingSyncChunks = new Map<string, PendingSyncEnvelopeChunks>();
 	const abort = () => {
-		cancelReader(reader);
+		reader.cancel().catch(() => undefined);
 	};
 	signal.addEventListener('abort', abort, { once: true });
 	try {
 		while (!signal.aborted) {
 			const chunk = await reader.read();
 			if (chunk.done) {
-				return ok(undefined);
+				return;
 			}
 			buffer += textDecoder.decode(chunk.value, { stream: true });
 			let eventEnd = buffer.indexOf('\n\n');
@@ -959,7 +950,7 @@ async function readSseStream(
 				buffer = buffer.slice(eventEnd + 2);
 				if (exceedsFrameBound(eventText, 2)) {
 					terminalFailure = true;
-					return err('payload_too_large', 'Sync SSE frame exceeded max size.');
+					return;
 				}
 				const json = parseSseJson(eventText, pendingSyncChunks);
 				if (json !== undefined) {
@@ -973,15 +964,11 @@ async function readSseStream(
 			if (exceedsFrameBound(buffer, 0)) {
 				// Bound malformed or stalled streams so a broken SSE response cannot grow memory without limit.
 				terminalFailure = true;
-				return err('payload_too_large', 'Sync SSE buffer exceeded max size.');
+				return;
 			}
 		}
-		return ok(undefined);
-	} catch (cause) {
+	} catch {
 		terminalFailure = !signal.aborted;
-		return err(signal.aborted ? 'aborted' : 'internal', cause instanceof Error ? cause.message : String(cause), {
-			cause
-		});
 	} finally {
 		signal.removeEventListener('abort', abort);
 		try {
@@ -990,15 +977,6 @@ async function readSseStream(
 		if (terminalFailure) {
 			onTerminalFailure();
 		}
-	}
-}
-
-async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<SyncResult<void, SyncError>> {
-	try {
-		await reader.cancel();
-		return ok(undefined);
-	} catch (cause) {
-		return err('internal', cause instanceof Error ? cause.message : String(cause), { cause });
 	}
 }
 
