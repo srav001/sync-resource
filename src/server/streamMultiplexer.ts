@@ -12,7 +12,6 @@ import { err, ok, type SyncResult } from '../shared/result.ts';
 import { encodeSseFrame, encodeSyncEnvelopeSseFrames, MAX_SSE_FRAME_BYTES } from '../shared/sse.ts';
 import type { ManagerSyncPersistence } from './types.ts';
 
-// V1 keeps one physical browser-session stream and registers manager/scope subscriptions separately.
 // The durable outbox remains the correctness source; this module only multiplexes live delivery and replay.
 const MAX_BACKPRESSURE_QUEUE = 4096;
 const JSON_HEADERS = {
@@ -493,7 +492,7 @@ function clearStreamState(stream: StreamState): void {
 	stream.bufferedByScope.clear();
 }
 
-export function buildResetEnvelope(
+function buildResetEnvelope(
 	managerKey: string,
 	scope: string,
 	previousCursor: string,
@@ -536,7 +535,7 @@ function getClientIp(request: Request): string {
 			return first;
 		}
 	}
-	return new URL(request.url, 'http://sync.local').hostname || 'unknown';
+	return new URL(request.url).hostname || 'unknown';
 }
 
 function subscriptionKey(transportId: string, scope: string): string {
