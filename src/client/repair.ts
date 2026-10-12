@@ -1,26 +1,19 @@
 import type { ResetManifest, SyncError } from '../shared/index.ts';
-import { err, ok, type SyncResult } from '../shared/result.ts';
+import { err, type SyncResult } from '../shared/result.ts';
 import type { PageState } from './types.ts';
 
 type RepairResult = SyncResult<void, SyncError>;
 
-type PageHealth = Pick<PageState, 'repairNeeded' | 'stale' | 'coverage'>;
-
-export type RepairKind = 'none' | 'page' | 'scope';
-
-export interface RepairPlan {
-	readonly kind: RepairKind;
-	readonly stalePageCount: number;
-	readonly reason?: string;
-}
-
 export interface RepairScheduler {
-	plan(pages: readonly PageHealth[], reset?: ResetManifest): RepairPlan;
 	request(run: () => Promise<RepairResult>): Promise<RepairResult>;
 	dispose(): void;
 }
 
-export function createRepairScheduler(delayMs = 0): RepairScheduler {
+export function needsRepair(pages: readonly Pick<PageState, 'stale'>[], reset?: ResetManifest): boolean {
+	return reset !== undefined || pages.some((page) => page.stale);
+}
+
+export function createRepairScheduler(): RepairScheduler {
 	let active: Promise<RepairResult> | undefined;
 	let queued: QueuedRepair | undefined;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -54,11 +47,10 @@ export function createRepairScheduler(delayMs = 0): RepairScheduler {
 		timeout = setTimeout(() => {
 			timeout = undefined;
 			startQueued();
-		}, delayMs);
+		}, 0);
 	}
 
 	return {
-		plan: planRepair,
 		request(run) {
 			if (disposed) {
 				return Promise.resolve(err('disposed', 'Repair scheduler was disposed.'));
@@ -92,41 +84,4 @@ interface QueuedRepair {
 	readonly run: () => Promise<RepairResult>;
 	readonly promise: Promise<RepairResult>;
 	resolve(this: void, result: RepairResult): void;
-}
-
-export function planRepair(pages: readonly PageHealth[], reset?: ResetManifest): RepairPlan {
-	const stalePageCount = countStalePages(pages);
-	if (reset) {
-		return {
-			kind: reset.reason === 'retention_gap' ? 'scope' : 'page',
-			stalePageCount,
-			reason: reset.reason
-		};
-	}
-
-	if (stalePageCount === 0) {
-		return {
-			kind: 'none',
-			stalePageCount
-		};
-	}
-
-	return {
-		kind: 'page',
-		stalePageCount
-	};
-}
-
-export async function noRepairNeeded(): Promise<SyncResult<void, SyncError>> {
-	return ok(undefined);
-}
-
-function countStalePages(pages: readonly PageHealth[]): number {
-	let count = 0;
-	for (const page of pages) {
-		if (page.repairNeeded || page.stale || page.coverage === 'stale') {
-			count += 1;
-		}
-	}
-	return count;
 }

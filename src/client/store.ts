@@ -29,7 +29,7 @@ import {
 	type InternalPendingCommand,
 	type PendingCommand
 } from './optimistic.ts';
-import { createRepairScheduler, noRepairNeeded, type RepairScheduler } from './repair.ts';
+import { createRepairScheduler, needsRepair, type RepairScheduler } from './repair.ts';
 import { getSyncCacheOptions, getSyncRuntime, readSyncResponse, urlWithCursor } from './runtime.ts';
 import type {
 	CollectionMeta,
@@ -736,14 +736,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		if (this.disposed) {
 			return err('disposed', 'Store is disposed.');
 		}
-		const plan = this.repairRequested
-			? {
-					kind: 'scope' as const,
-					stalePageCount: activePageMetas(this.state).length
-				}
-			: this.repairScheduler.plan(activePageMetas(this.state));
-		if (plan.kind === 'none') {
-			return noRepairNeeded();
+		if (!this.repairRequested && !needsRepair(activePageMetas(this.state))) {
+			return ok(undefined);
 		}
 
 		return this.repairScheduler.request(async () => {
@@ -966,8 +960,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			this.pendingCommands,
 			this.activeQuery
 		);
-		const plan = this.repairScheduler.plan(activePageMetas(this.state), envelope.reset);
-		if (plan.kind !== 'none') {
+		if (needsRepair(activePageMetas(this.state), envelope.reset)) {
 			this.repairRequested = true;
 			this.repair();
 		}

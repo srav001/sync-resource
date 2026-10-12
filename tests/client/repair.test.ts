@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
-import { createRepairScheduler, noRepairNeeded, planRepair } from '../../src/client/repair.ts';
+import { createRepairScheduler, needsRepair } from '../../src/client/repair.ts';
 import type { PageState } from '../../src/client/types.ts';
-import type { ResetManifest } from '../../src/shared/index.ts';
 import { err, ok } from '../../src/shared/result.ts';
 
 const page = (overrides: Partial<PageState> = {}): PageState => ({
@@ -19,51 +18,22 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe('repair planning', () => {
-	it('returns none for clean pages and counts each stale condition once', () => {
-		expect(planRepair([])).toEqual({ kind: 'none', stalePageCount: 0 });
-		expect(
-			planRepair([page(), page({ stale: true }), page({ repairNeeded: true }), page({ coverage: 'stale' })])
-		).toEqual({
-			kind: 'page',
-			stalePageCount: 3
-		});
+describe('repair need', () => {
+	it('is false for clean pages and true for a stale page', () => {
+		expect(needsRepair([])).toBe(false);
+		expect(needsRepair([page()])).toBe(false);
+		expect(needsRepair([page(), page({ stale: true })])).toBe(true);
 	});
 
-	it.each([
-		['ordinary reset', { scope: 'notes:workspace-1', reason: 'manual' }],
-		['repair reset', { scope: 'notes:workspace-1', reason: 'repair' }]
-	] satisfies readonly [string, ResetManifest][])('plans %s as page repair', (_name, reset) => {
-		expect(planRepair([page({ stale: true })], reset)).toEqual({
-			kind: 'page',
-			stalePageCount: 1,
-			reason: reset.reason
-		});
-	});
-
-	it('plans retention gaps as scope repair, including clean pages', () => {
-		expect(
-			planRepair([page(), page({ stale: true })], {
-				scope: 'notes:workspace-1',
-				reason: 'retention_gap'
-			})
-		).toEqual({
-			kind: 'scope',
-			stalePageCount: 1,
-			reason: 'retention_gap'
-		});
-	});
-
-	it('returns a successful result for noRepairNeeded', async () => {
-		const result = await noRepairNeeded();
-		expect(result.isOk()).toBe(true);
+	it('is true for any reset, including with clean pages', () => {
+		expect(needsRepair([page()], { scope: 'notes:workspace-1', reason: 'manual' })).toBe(true);
 	});
 });
 
 describe('repair scheduler', () => {
 	it('coalesces queued requests and runs one callback', async () => {
 		vi.useFakeTimers();
-		const scheduler = createRepairScheduler(10);
+		const scheduler = createRepairScheduler();
 		let calls = 0;
 		const run = async () => {
 			calls += 1;
@@ -72,7 +42,7 @@ describe('repair scheduler', () => {
 		const first = scheduler.request(run);
 		const second = scheduler.request(run);
 		expect(second).toBe(first);
-		await vi.advanceTimersByTimeAsync(10);
+		await vi.advanceTimersByTimeAsync(0);
 		expect((await first).isOk()).toBe(true);
 		expect(calls).toBe(1);
 		scheduler.dispose();
@@ -125,7 +95,7 @@ describe('repair scheduler', () => {
 
 	it('resolves queued work as disposed and rejects new work after disposal', async () => {
 		vi.useFakeTimers();
-		const scheduler = createRepairScheduler(100);
+		const scheduler = createRepairScheduler();
 		const queued = scheduler.request(async () => ok(undefined));
 		scheduler.dispose();
 		const queuedResult = await queued;

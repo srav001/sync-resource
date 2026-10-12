@@ -6,7 +6,6 @@ export {
 	type ConfigureSyncOptions,
 	type CreateRuntimeOptions
 } from './runtime.ts';
-export { createRepairScheduler, noRepairNeeded, planRepair, type RepairPlan, type RepairScheduler } from './repair.ts';
 export { bindStoreEvents, type StoreAdapterEventSinks, type StoreAdapterEventSource } from './adapter.ts';
 export {
 	createStore,

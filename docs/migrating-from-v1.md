@@ -3,7 +3,8 @@
 v2 keeps the v1 resource, manager, and store APIs. The client and server protocol changed in these ways that can need
 action: the browser now registers realtime subscriptions through a batch route, `hydrate()` resolves earlier,
 `resetSharedStreamForTests` is no longer exported, the per-manager `/events` route is gone, list read envelopes no longer
-carry the page, and an idle scope keeps only its newest outbox envelope. Everything else is additive or automatic.
+carry the page, an idle scope keeps only its newest outbox envelope, and some unused exports, options and fields are
+removed. Everything else is additive or automatic.
 
 ## Checklist
 
@@ -16,7 +17,8 @@ carry the page, and an idle scope keeps only its newest outbox envelope. Everyth
 7. Only if code reads raw `list` responses: [read the page from `value`](#6-list-read-envelopes-no-longer-carry-pageloaded).
 8. Only if you rely on replay for clients that were offline longer than the idle TTL: [review idle scopes](#7-idle-scopes-keep-only-their-newest-envelope).
 9. Only if you imported the `Result` helpers: [they are removed](#8-result-helpers-are-removed).
-10. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
+10. Only if you used one of the exports, options or fields in [section 9](#9-removed-exports-options-and-fields): remove it.
+11. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
     `sync-resource/server/effect` ([requirements](#requirements)).
 
 Then adopt what you want from [Optional additions](#optional-additions). Automatic behavior changes need no code and
@@ -269,6 +271,13 @@ import { isOk, Result } from 'sync-resource/client/core';
 
 **After (v2).** Remove these imports, and replace the calls with your own code or with `ok`, `err` and the `isOk()` /
 `isErr()` methods.
+
+### 9. Removed exports, options and fields
+
+Sync Resource no longer uses any of these. Remove them from your code.
+
+- **Client core:** `createRepairScheduler`, `planRepair`, `noRepairNeeded`, `RepairPlan` and `RepairScheduler`. The store
+  repairs itself after a reset or a stale page, and `repair()` is the manual call.
 
 ## Requirements
 
