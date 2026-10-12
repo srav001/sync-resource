@@ -4,7 +4,7 @@ import type {
 	SyncEnvelope,
 	SyncError,
 	SyncErrorCode,
-	SyncRecoveryMetadata,
+	SyncErrorOptions,
 	SyncSignal
 } from '../shared/index.ts';
 import type { SyncErr, SyncOk, SyncResult } from '../shared/result.js';
@@ -75,15 +75,7 @@ export interface ResourceHandlerContext extends ResourceExecution {
 	ok(): SyncOk<void>;
 	ok<TValue>(value: TValue): SyncOk<TValue>;
 	error(errorValue: SyncError): SyncErr<never, SyncError>;
-	syncError(
-		code: SyncErrorCode,
-		message: string,
-		options?: {
-			readonly details?: unknown;
-			readonly cause?: unknown;
-			readonly recovery?: SyncRecoveryMetadata;
-		}
-	): SyncError;
+	syncError(code: SyncErrorCode, message: string, options?: SyncErrorOptions): SyncError;
 }
 
 export interface ResourceCommitContext {
