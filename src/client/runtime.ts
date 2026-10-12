@@ -925,18 +925,8 @@ function readOwner(): { readonly ownerId: string; readonly expires: number } | u
 		return undefined;
 	}
 	try {
-		const raw = window.localStorage.getItem(OWNER_STORAGE_KEY);
-		if (!raw) {
-			return undefined;
-		}
-		const parsed = JSON.parse(raw);
-		if (!isOwnerRecord(parsed)) {
-			return undefined;
-		}
-		return {
-			ownerId: parsed.ownerId,
-			expires: parsed.expires
-		};
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(OWNER_STORAGE_KEY) ?? 'null');
+		return isOwnerRecord(parsed) ? parsed : undefined;
 	} catch {
 		return undefined;
 	}
