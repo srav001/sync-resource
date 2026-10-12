@@ -145,31 +145,6 @@ type EffectMethodOptions<TKind extends MethodKind, TParams extends object, TQuer
 			: never;
 	};
 
-type EffectHandlerRequirements<THandler> = THandler extends (...args: never[]) => infer TResult
-	? TResult extends Effect.Effect<unknown, SyncError, infer R>
-		? R
-		: never
-	: never;
-type ValidEffectHandler<THandler, TOutput> = THandler extends (...args: never[]) => infer TResult
-	? TResult extends Effect.Effect<infer TValue, SyncError, infer R>
-		? TValue extends HandlerValue<TOutput, R>
-			? unknown
-			: never
-		: never
-	: never;
-type EffectHandlerFunction<TParams extends object, TQuery, TInput, TOutput> = (
-	args: MethodArgs<TParams, TQuery, TInput> & {
-		readonly ctx: ResourceHandlerContext;
-		readonly self: EffectResourceSelf;
-	}
-) => Effect.Effect<HandlerValue<TOutput, unknown>, SyncError, unknown>;
-type EffectHandlerOptions<TKind extends MethodKind, TParams extends object, TQuery, TInput, TOutput, THandler> = Omit<
-	EffectMethodOptions<TKind, TParams, TQuery, TInput, TOutput, unknown>,
-	'handler'
-> & {
-	readonly handler: THandler;
-} & ValidEffectHandler<THandler, TOutput>;
-
 export type EffectResourceMethodDefinition<TParams extends object = object> =
 	| EffectMethodDefinition<'get', TParams, unknown, never, unknown, unknown>
 	| EffectMethodDefinition<'list', TParams, unknown, never, unknown, unknown>
@@ -179,18 +154,18 @@ export type EffectResourceMethodDefinition<TParams extends object = object> =
 export type EffectResourceMethodMap = Partial<Record<MethodKind, { readonly kind: MethodKind }>>;
 
 export interface EffectMethodBuilder<TParams extends object> {
-	get<TOutput, THandler extends EffectHandlerFunction<TParams, never, never, TOutput>>(
-		definition: EffectHandlerOptions<'get', TParams, never, never, TOutput, THandler>
-	): EffectMethodDefinition<'get', TParams, never, never, TOutput, EffectHandlerRequirements<THandler>>;
-	get<TQuery, TOutput, THandler extends EffectHandlerFunction<TParams, TQuery, never, TOutput>>(
-		definition: EffectHandlerOptions<'get', TParams, TQuery, never, TOutput, THandler>
-	): EffectMethodDefinition<'get', TParams, TQuery, never, TOutput, EffectHandlerRequirements<THandler>>;
-	list<TOutput, THandler extends EffectHandlerFunction<TParams, never, never, TOutput>>(
-		definition: EffectHandlerOptions<'list', TParams, never, never, TOutput, THandler>
-	): EffectMethodDefinition<'list', TParams, never, never, TOutput, EffectHandlerRequirements<THandler>>;
-	list<TQuery, TOutput, THandler extends EffectHandlerFunction<TParams, TQuery, never, TOutput>>(
-		definition: EffectHandlerOptions<'list', TParams, TQuery, never, TOutput, THandler>
-	): EffectMethodDefinition<'list', TParams, TQuery, never, TOutput, EffectHandlerRequirements<THandler>>;
+	get<TOutput, R = never>(
+		definition: EffectMethodOptions<'get', TParams, never, never, TOutput, R>
+	): EffectMethodDefinition<'get', TParams, never, never, TOutput, R>;
+	get<TQuery, TOutput, R = never>(
+		definition: EffectMethodOptions<'get', TParams, TQuery, never, TOutput, R>
+	): EffectMethodDefinition<'get', TParams, TQuery, never, TOutput, R>;
+	list<TOutput, R = never>(
+		definition: EffectMethodOptions<'list', TParams, never, never, TOutput, R>
+	): EffectMethodDefinition<'list', TParams, never, never, TOutput, R>;
+	list<TQuery, TOutput, R = never>(
+		definition: EffectMethodOptions<'list', TParams, TQuery, never, TOutput, R>
+	): EffectMethodDefinition<'list', TParams, TQuery, never, TOutput, R>;
 	add<TInput, TOutput = void, R = never>(
 		definition: EffectMethodOptions<'add', TParams, never, TInput, TOutput, R>
 	): EffectMethodDefinition<'add', TParams, never, TInput, TOutput, R>;

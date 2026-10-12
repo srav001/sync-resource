@@ -730,11 +730,12 @@ import { manager, resource } from 'sync-resource/server/effect';
 
 const notesResource = resource(noteParamsSchema, (method) => ({
 	list: method.list({
+		query: notePageQuerySchema,
 		output: notePageSchema,
-		handler: ({ params }) =>
+		handler: ({ params, query }) =>
 			Effect.gen(function* () {
 				const repository = yield* NotesRepository;
-				return yield* repository.list(params);
+				return yield* repository.list(params, query.limit);
 			})
 	})
 }));
