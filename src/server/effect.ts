@@ -882,6 +882,15 @@ function webHandler(
 				)
 			);
 		});
-		return HttpServerResponse.fromWeb(response);
+		if (response.headers.get('content-type')?.startsWith('text/event-stream')) {
+			return HttpServerResponse.fromWeb(response);
+		}
+		// fromWeb wraps the body in an Effect Stream, which costs far more than buffering a bounded JSON body.
+		const body = yield* Effect.promise(() => response.text());
+		return HttpServerResponse.text(body, {
+			status: response.status,
+			headers: response.headers,
+			contentType: response.headers.get('content-type') ?? undefined
+		});
 	});
 }

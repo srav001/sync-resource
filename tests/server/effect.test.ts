@@ -261,6 +261,48 @@ describe('Effect server entrypoint', () => {
 		await streamWeb.dispose();
 	});
 
+	it('keeps the status and headers of buffered JSON responses', async () => {
+		const notes = resource(paramsSchema, (method) => ({
+			get: method.get({
+				output: noteSchema,
+				handler: ({ params }) => Effect.succeed({ id: params.workspaceId, title: 'one' })
+			})
+		}));
+		const notesManager = await Effect.runPromise(
+			manager({
+				key: 'effect-headers',
+				resource: notes,
+				authorize: (_context, params) => Effect.succeed(params.workspaceId === 'w1'),
+				scope: (p) => p.workspaceId
+			})
+		);
+		const routesFor = (workspaceId: string) =>
+			HttpRouter.toWebHandler(
+				HttpRouter.addAll(
+					managerHttpRoutes<undefined, Params, never, never, never>({
+						manager: notesManager,
+						path: '/notes',
+						params: () => Effect.succeed({ workspaceId })
+					})
+				),
+				{ disableLogger: true }
+			);
+
+		const allowed = routesFor('w1');
+		const ok = await allowed.handler(new Request('https://sync.test/notes/get'));
+		expect(ok.status).toBe(200);
+		expect(ok.headers.get('content-type')).toBe('application/json; charset=utf-8');
+		expect(ok.headers.get('cache-control')).toBe('no-store');
+		await allowed.dispose();
+
+		const denied = routesFor('w2');
+		const forbidden = await denied.handler(new Request('https://sync.test/notes/get'));
+		expect(forbidden.status).toBe(403);
+		expect(forbidden.headers.get('content-type')).toBe('application/json; charset=utf-8');
+		expect(await forbidden.json()).toMatchObject({ isError: true, error: { code: 'forbidden' } });
+		await denied.dispose();
+	});
+
 	it('runs each batched connect through the full router, including its middleware and params', async () => {
 		const notes = resource(paramsSchema, (method) => ({
 			get: method.get({
