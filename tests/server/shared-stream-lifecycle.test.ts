@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
 	httpSharedSyncStream,
+	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
 	registerSharedStreamSubscription,
 	type ManagerSyncPersistence
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import type { SyncEnvelope } from '../../src/shared/protocol.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 
 const FIVE_MINUTES_MS = 5 * 60_000;
@@ -102,6 +104,59 @@ describe('shared stream lifecycle', () => {
 		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
 		expect(notesIdle).toEqual(['notes:workspace-1']);
 		expect(tasksIdle).toEqual([]);
+	});
+
+	describe('logical registrations and the physical stream of one transport id', () => {
+		const scope = 'notes:workspace-1';
+
+		async function openStream(transportId: string): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+			const reader = (await httpSharedSyncStream(streamRequest(transportId))).body!.getReader();
+			expect(parseSseEvent(decode((await reader.read()).value)).eventName).toBe('hello');
+			return reader;
+		}
+
+		async function receivesLiveEnvelope(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<boolean> {
+			const envelope: SyncEnvelope = {
+				managerKey: 'notes',
+				scope,
+				cursor: `cursor-${Math.random()}`,
+				changes: []
+			};
+			publishSharedStreamEnvelope(envelope);
+			const next = await Promise.race([
+				reader.read(),
+				new Promise<undefined>((resolve) => setTimeout(resolve, 20))
+			]);
+			return next !== undefined && !next.done;
+		}
+
+		it('attaches a registration made before the stream opens', async () => {
+			registerSharedStreamManager({ key: 'notes' });
+			await registerSubscription('transport-pre-stream', scope);
+			const reader = await openStream('transport-pre-stream');
+			expect(await receivesLiveEnvelope(reader)).toBe(true);
+			await reader.cancel();
+		});
+
+		it('drops a registration made before the stream opens when it replaces an older stream', async () => {
+			registerSharedStreamManager({ key: 'notes' });
+			const older = await openStream('transport-replace-drop');
+			await registerSubscription('transport-replace-drop', scope);
+			const replacement = await openStream('transport-replace-drop');
+			expect(await receivesLiveEnvelope(replacement)).toBe(false);
+			await older.cancel();
+			await replacement.cancel();
+		});
+
+		it('keeps a registration made after the replacing stream opened when the older stream closes late', async () => {
+			registerSharedStreamManager({ key: 'notes' });
+			const older = await openStream('transport-replace-keep');
+			const replacement = await openStream('transport-replace-keep');
+			await registerSubscription('transport-replace-keep', scope);
+			await older.cancel();
+			expect(await receivesLiveEnvelope(replacement)).toBe(true);
+			await replacement.cancel();
+		});
 	});
 
 	it('cancels pending replay with the physical stream and treats disconnect as normal termination', async () => {

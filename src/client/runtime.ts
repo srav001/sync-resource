@@ -97,6 +97,8 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	private disposed = false;
 	private isOwner = false;
 	private streamAbort: AbortController | undefined;
+	private streamAttempted: Promise<void> = Promise.resolve();
+	private settleStreamAttempt: () => void = () => {};
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	private ownerHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -186,6 +188,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return;
 		}
 		this.disposed = true;
+		this.settleStreamAttempt();
 		this.streamAbort?.abort();
 		this.streamAbort = undefined;
 		if (this.reconnectTimer) {
@@ -300,6 +303,12 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		signal: AbortSignal
 	): Promise<SyncResult<void, SyncError>> {
 		try {
+			// The server drops a transport's registrations when its stream is replaced or closed, so the owner registers
+			// after its first stream attempt; opening the stream would otherwise abort and re-send every registration.
+			await this.streamAttempted;
+			if (signal.aborted) {
+				return err('aborted', 'Realtime subscription was aborted.');
+			}
 			const response = await this.fetchImpl(urlWithCursor(entry.connectUrl, entry.getCursor?.()), {
 				method: 'POST',
 				headers: {
@@ -389,6 +398,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return;
 		}
 		this.started = true;
+		this.streamAttempted = new Promise<void>((resolve) => {
+			this.settleStreamAttempt = resolve;
+		});
 		this.openBroadcastChannel();
 		if (!isBrowserRuntime()) {
 			this.isOwner = true;
@@ -397,17 +409,24 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		}
 		const locks = navigator.locks;
 		if (locks) {
+			const ownStream = async () => {
+				if (this.disposed || this.subscriptions.size === 0) {
+					return;
+				}
+				this.isOwner = true;
+				this.startOwnerHeartbeat();
+				this.connectOwnerStream();
+				await new Promise<void>((resolve) => {
+					this.releaseOwnerLock = resolve;
+				});
+			};
 			locks
-				.request(LOCK_NAME, async () => {
-					if (this.disposed || this.subscriptions.size === 0) {
-						return;
+				.request(LOCK_NAME, { ifAvailable: true }, (lock) => {
+					if (lock) {
+						return ownStream();
 					}
-					this.isOwner = true;
-					this.startOwnerHeartbeat();
-					this.connectOwnerStream();
-					await new Promise<void>((resolve) => {
-						this.releaseOwnerLock = resolve;
-					});
+					this.settleStreamAttempt();
+					return locks.request(LOCK_NAME, ownStream);
 				})
 				.catch(() => this.startLocalStorageOwnership());
 			return;
@@ -444,6 +463,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		const now = Date.now();
 		const owner = readOwner();
 		if (owner && owner.ownerId !== this.tabId && owner.expires > now) {
+			this.settleStreamAttempt();
 			this.ownerHeartbeatTimer = setTimeout(() => this.startLocalStorageOwnership(), OWNER_EXPIRES_MS);
 			return;
 		}
@@ -498,6 +518,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			const wasReconnect = this.reconnectAttempt > 0;
 			this.reconnectAttempt = 0;
 			this.handleReconnect(wasReconnect);
+			this.settleStreamAttempt();
 			this.broadcast?.postMessage({ type: 'reconnected', hydrate: wasReconnect });
 
 			const readResult = await readSseStream(
@@ -514,6 +535,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			}
 			return readResult;
 		} catch (cause) {
+			this.settleStreamAttempt();
 			if (!this.disposed && this.isOwner) {
 				this.scheduleReconnect();
 			}

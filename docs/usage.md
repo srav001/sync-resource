@@ -834,6 +834,9 @@ Rules:
 - Never open one physical stream per store, manager, or project.
 - Duplicate stores for the same manager/scope share one logical subscription.
 - Reconnect re-registers active logical subscriptions with their latest cursor.
+- The tab that owns the physical stream sends its first `/connect` registrations after the first stream attempt
+  resolves (opened or failed), so a registration is never sent twice for one stream. Follower tabs register immediately.
+  A `subscribe` call therefore resolves no earlier than the owner's first stream response.
 - Replay/reset remains per logical scope through durable outbox cursors.
 - `/connect` returns the authoritative encoded scope before replay is delivered.
 - Each pending `/connect` wait is independently abortable; cancelling one waiter does not cancel establishment while

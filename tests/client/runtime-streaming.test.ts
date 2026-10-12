@@ -273,6 +273,193 @@ describe('browser runtime SSE transport', () => {
 	});
 });
 
+describe('browser runtime registration order', () => {
+	function connectResponse(scope: string): Response {
+		return Response.json({ isOk: true, isError: false, value: { scope } });
+	}
+
+	function sseResponse(onStart?: (controller: ReadableStreamDefaultController<Uint8Array>) => void): Response {
+		return new Response(new ReadableStream<Uint8Array>({ start: (controller) => onStart?.(controller) }), {
+			headers: { 'content-type': 'text/event-stream' }
+		});
+	}
+
+	function subscribeTo(runtime: ReturnType<typeof createRuntime>, name: string, onReconnect?: () => void) {
+		return runtime.transport.subscribe({
+			url: `/${name}/events`,
+			connectUrl: `/${name}/connect`,
+			managerKey: name,
+			scope: `${name}-client-scope`,
+			signal: new AbortController().signal,
+			onEnvelope() {},
+			onReconnect
+		});
+	}
+
+	it('registers logical subscriptions only after the shared stream opens and does not re-send them', async () => {
+		const order: string[] = [];
+		let openStream!: () => void;
+		const streamOpened = new Promise<void>((resolve) => {
+			openStream = resolve;
+		});
+		let hydrations = 0;
+		const fetchImpl: typeof fetch = async (input, init) => {
+			const request = toRequest(input, init);
+			if (request.url.endsWith('/api/sync-resource/stream')) {
+				order.push('stream');
+				await streamOpened;
+				return sseResponse();
+			}
+			order.push(new URL(request.url).pathname);
+			return connectResponse(`${new URL(request.url).pathname}:scope`);
+		};
+		const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-gate` });
+		try {
+			const subscriptions = Promise.all([
+				subscribeTo(runtime, 'notes', () => (hydrations += 1)),
+				subscribeTo(runtime, 'tasks', () => (hydrations += 1))
+			]);
+			await waitFor(() => order.length > 0);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(order).toEqual(['stream']);
+			openStream();
+			const results = await subscriptions;
+			expect(results.every((result) => result.isOk())).toBe(true);
+			expect(order).toEqual(['stream', '/notes/connect', '/tasks/connect']);
+			expect(hydrations).toBe(0);
+		} finally {
+			runtime.dispose();
+		}
+	});
+
+	it('still registers when the first stream attempt fails, then re-registers and hydrates once it opens', async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, 'random').mockReturnValue(0.5);
+		let streamRequests = 0;
+		let connects = 0;
+		let hydrations = 0;
+		const fetchImpl: typeof fetch = async (input, init) => {
+			const request = toRequest(input, init);
+			if (request.url.endsWith('/api/sync-resource/stream')) {
+				streamRequests += 1;
+				return streamRequests === 1 ? new Response('busy', { status: 429 }) : sseResponse();
+			}
+			connects += 1;
+			return connectResponse('notes:scope');
+		};
+		const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-failed` });
+		try {
+			const subscription = await subscribeTo(runtime, 'notes', () => (hydrations += 1));
+			expect(subscription.isOk()).toBe(true);
+			expect(connects).toBe(1);
+			await vi.advanceTimersByTimeAsync(1_000);
+			await waitFor(() => streamRequests === 2 && connects === 2);
+			expect(hydrations).toBe(1);
+		} finally {
+			runtime.dispose();
+		}
+	});
+
+	describe('with Web Locks ownership', () => {
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
+
+		function stubBrowser(options: { readonly granted: boolean }) {
+			let grantOwnership!: () => void;
+			const request = vi.fn(
+				(_name: string, ...rest: unknown[]) =>
+					new Promise<void>((resolve) => {
+						const callback = rest.at(-1) as (lock: object | null) => Promise<void>;
+						const ifAvailable = typeof rest[0] === 'object';
+						if (ifAvailable) {
+							callback(options.granted ? {} : null).then(resolve);
+							return;
+						}
+						grantOwnership = () => callback({}).then(resolve);
+					})
+			);
+			vi.stubGlobal('window', { localStorage: undefined });
+			vi.stubGlobal('navigator', { locks: { request } });
+			return { grantOwnership: () => grantOwnership() };
+		}
+
+		it('registers after the stream opens when the tab owns the Web Lock', async () => {
+			stubBrowser({ granted: true });
+			const order: string[] = [];
+			const fetchImpl: typeof fetch = async (input, init) => {
+				const request = toRequest(input, init);
+				if (request.url.endsWith('/api/sync-resource/stream')) {
+					order.push('stream');
+					await new Promise((resolve) => setTimeout(resolve, 20));
+					return sseResponse();
+				}
+				order.push('connect');
+				return connectResponse('notes:scope');
+			};
+			const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-owner` });
+			try {
+				const subscription = await subscribeTo(runtime, 'notes');
+				expect(subscription.isOk()).toBe(true);
+				expect(order).toEqual(['stream', 'connect']);
+			} finally {
+				runtime.dispose();
+			}
+		});
+
+		it('does not wait for a stream the follower tab will never open', async () => {
+			stubBrowser({ granted: false });
+			let streamRequests = 0;
+			let connects = 0;
+			const fetchImpl: typeof fetch = async (input, init) => {
+				const request = toRequest(input, init);
+				if (request.url.endsWith('/api/sync-resource/stream')) {
+					streamRequests += 1;
+					return sseResponse();
+				}
+				connects += 1;
+				return connectResponse('notes:scope');
+			};
+			const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-follower` });
+			try {
+				const subscription = await subscribeTo(runtime, 'notes');
+				expect(subscription.isOk()).toBe(true);
+				expect(connects).toBe(1);
+				expect(streamRequests).toBe(0);
+			} finally {
+				runtime.dispose();
+			}
+		});
+
+		it('re-registers a follower subscription when the tab takes over stream ownership', async () => {
+			const browser = stubBrowser({ granted: false });
+			let streamRequests = 0;
+			let connects = 0;
+			let hydrations = 0;
+			const fetchImpl: typeof fetch = async (input, init) => {
+				const request = toRequest(input, init);
+				if (request.url.endsWith('/api/sync-resource/stream')) {
+					streamRequests += 1;
+					return sseResponse();
+				}
+				connects += 1;
+				return connectResponse('notes:scope');
+			};
+			const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-handover` });
+			try {
+				const subscription = await subscribeTo(runtime, 'notes', () => (hydrations += 1));
+				expect(subscription.isOk()).toBe(true);
+				expect(connects).toBe(1);
+				browser.grantOwnership();
+				await waitFor(() => streamRequests === 1 && connects === 2);
+				expect(hydrations).toBe(0);
+			} finally {
+				runtime.dispose();
+			}
+		});
+	});
+});
+
 function toRequest(input: URL | RequestInfo, init?: RequestInit): Request {
 	return new Request(input instanceof Request ? input : new URL(String(input), 'http://sync.test'), init);
 }
