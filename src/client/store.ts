@@ -312,6 +312,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly errorSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['error']>>();
 	private readonly abort = new AbortController();
 	private readonly inflightReads = new Map<string, Promise<SyncResult<unknown, SyncError>>>();
+	private readsInFlight = 0;
+	private liveDuringReads: SyncEnvelope[] = [];
 	private readonly inflightHydrates = new Map<string, Promise<SyncResult<void, SyncError>>>();
 	private readonly queuedForcedHydrates = new Map<string, ForcedHydrationQueue>();
 	private readonly successfulHydrates = new Map<string, SyncResult<void, SyncError>>();
@@ -592,15 +594,13 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private async get<TQuery>(query?: TQuery): Promise<SyncResult<OutputOf<TManager, 'get'>, SyncError>> {
 		return this.singleflightRead<OutputOf<TManager, 'get'>>(
 			`${this.cacheKey()}:get:${stableStringify(query)}`,
-			async () => {
+			async (settleRead) => {
 				const result = await this.request<OutputOf<TManager, 'get'>>('get', 'GET', undefined, query);
 				if (result.isErr()) {
 					return result;
 				}
 				setBaseData(this.state, result.value.value, this.reconcileIdentity(), this.pendingCommands.values());
-				if (result.value.envelope) {
-					this.state.cursor = result.value.envelope.cursor;
-				}
+				settleRead(result.value.envelope);
 				this.emit('data');
 				this.scheduleCachedRuntimeStateSave();
 				return ok(result.value.value);
@@ -628,7 +628,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 		return this.singleflightRead<OutputOf<TManager, 'list'>>(
 			`${this.scopeCacheKey()}:page:${stableStringify(requestQuery)}`,
-			async () => {
+			async (settleRead) => {
 				const result = await this.request<OutputOf<TManager, 'list'>>('list', 'GET', undefined, requestQuery);
 				if (result.isErr()) {
 					return result;
@@ -644,9 +644,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 					this.pendingCommands.values(),
 					activate
 				);
-				if (result.value.envelope) {
-					this.state.cursor = result.value.envelope.cursor;
-				}
+				settleRead(result.value.envelope);
 				this.emit('items', 'listMeta', 'pages');
 				this.scheduleCachedRuntimeStateSave();
 				return ok(result.value.value);
@@ -711,7 +709,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private async singleflightRead<TValue>(
 		key: string,
-		run: () => Promise<SyncResult<TValue, SyncError>>
+		run: (settleRead: (envelope: SyncEnvelope | undefined) => void) => Promise<SyncResult<TValue, SyncError>>
 	): Promise<SyncResult<TValue, SyncError>> {
 		const existing = this.inflightReads.get(key);
 		if (existing) {
@@ -719,9 +717,15 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			return existing as Promise<SyncResult<TValue, SyncError>>;
 		}
 
-		const task = run()
+		const liveStart = this.liveDuringReads.length;
+		this.readsInFlight += 1;
+		const task = run((envelope) => this.settleRead(liveStart, envelope))
 			.catch((cause) => err(this.recordError(toStoreSyncError(cause))))
 			.finally(() => {
+				this.readsInFlight -= 1;
+				if (this.readsInFlight === 0) {
+					this.liveDuringReads = [];
+				}
 				if (this.inflightReads.get(key) === task) {
 					this.inflightReads.delete(key);
 				}
@@ -955,7 +959,25 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		return isAbsolute ? url.href : url.pathname + url.search;
 	}
 
+	// A read response predates every envelope applied since the read started, so those envelopes are re-applied over it.
+	private settleRead(liveStart: number, readEnvelope: SyncEnvelope | undefined): void {
+		const live = this.liveDuringReads.slice(liveStart);
+		for (const envelope of live) {
+			this.applyEnvelopeState(envelope);
+		}
+		if (live.length === 0 && readEnvelope) {
+			this.state.cursor = readEnvelope.cursor;
+		}
+	}
+
 	private applyEnvelope(envelope: SyncEnvelope): void {
+		if (this.readsInFlight > 0) {
+			this.liveDuringReads.push(envelope);
+		}
+		this.applyEnvelopeState(envelope);
+	}
+
+	private applyEnvelopeState(envelope: SyncEnvelope): void {
 		applyOptimisticEnvelope(
 			this.state,
 			this.localPendingEnvelope(envelope),

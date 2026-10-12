@@ -838,6 +838,8 @@ Rules:
   resolves (opened or failed), so a registration is never sent twice for one stream. Follower tabs register immediately.
   A `subscribe` call therefore resolves no earlier than the owner's first stream response.
 - Replay/reset remains per logical scope through durable outbox cursors.
+- A read response never overwrites newer realtime state: envelopes applied while a read was in flight are re-applied over
+  its output in arrival order, and the cursor stays at the last of them.
 - `/connect` returns the authoritative encoded scope before replay is delivered.
 - Each pending `/connect` wait is independently abortable; cancelling one waiter does not cancel establishment while
   another consumer still owns it.
