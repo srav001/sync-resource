@@ -118,7 +118,6 @@ export interface StoreBase<TManager extends ManagerTypeShape> {
 	connect(): Promise<SyncResult<void, SyncError>>;
 	repair(): Promise<SyncResult<void, SyncError>>;
 	subscribe(callback: StoreSubscriber<TManager>): () => void;
-	unsubscribe(callback: StoreSubscriber<TManager>): void;
 	dispose(): void;
 }
 
@@ -375,7 +374,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			connect: () => this.connect(),
 			repair: () => this.repair(),
 			subscribe: (callback: StoreSubscriber<TManager>) => this.subscribe(callback),
-			unsubscribe: (callback: StoreSubscriber<TManager>) => this.unsubscribe(callback),
 			dispose: () => this.dispose(),
 			data: () => this.state.data,
 			list: <TQuery>(query: TQuery) => this.list(query),
@@ -552,11 +550,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	subscribe(callback: StoreSubscriber<TManager>): () => void {
 		this.subscribers.add(callback);
 		callback(this.snapshot());
-		return () => this.unsubscribe(callback);
-	}
-
-	unsubscribe(callback: StoreSubscriber<TManager>): void {
-		this.subscribers.delete(callback);
+		return () => {
+			this.subscribers.delete(callback);
+		};
 	}
 
 	dispose(): void {
