@@ -21,7 +21,7 @@ describe('shared physical SSE stream', () => {
 	it('opens with protocol hello version 1 and registered manager keys', async () => {
 		const system = createSyncTestSystem();
 		const transportId = 'transport-1';
-		const connected = await system.manager.http.connect?.({
+		const connected = await system.manager.http.connect({
 			request: new Request('http://sync.test/connect', {
 				method: 'POST',
 				headers: { 'x-sync-transport-id': transportId }
@@ -46,7 +46,7 @@ describe('shared physical SSE stream', () => {
 	it('routes a committed envelope to the registered scope', async () => {
 		const system = createSyncTestSystem();
 		const transportId = 'transport-routing';
-		await system.manager.http.connect?.({
+		await system.manager.http.connect({
 			request: new Request('http://sync.test/connect', {
 				method: 'POST',
 				headers: { 'x-sync-transport-id': transportId }

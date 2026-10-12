@@ -88,7 +88,7 @@ export async function openSharedStream<TParams>(
 	if (options.afterCursor) {
 		url.searchParams.set('after', options.afterCursor);
 	}
-	const connected = await handlers.connect!({
+	const connected = await handlers.connect({
 		request: new Request(url, { method: 'POST', headers, signal: options.signal }),
 		params
 	});

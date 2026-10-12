@@ -319,7 +319,11 @@ export interface EffectManager<TKey extends string, TResource, TContext = undefi
 		readonly params: ResourceParams<TResource>;
 		readonly methods: TResource extends { readonly type: { readonly methods: infer M } } ? M : never;
 	};
-	readonly http: ManagerHttpHandlers<TContext, ResourceParams<TResource>>;
+	readonly http: ManagerHttpHandlers<
+		TContext,
+		ResourceParams<TResource>,
+		TResource extends { readonly type: { readonly methods: infer M } } ? M : never
+	>;
 	readonly _effectRequirements?: ResourceRequirements<ResourceDefinitions<TResource>>;
 	bind(params: ResourceParams<TResource>, context?: TContext): EffectBoundManager<TKey, TResource>;
 }
@@ -638,7 +642,7 @@ function wrapManager<TKey extends string, TResource extends EffectResourceLike, 
 		merged.set(caller, context);
 		return context;
 	};
-	const http: ManagerHttpHandlers<TContext, ResourceParams<TResource>> = {};
+	const http: Partial<ManagerHttpHandlers<TContext, ResourceParams<TResource>>> = {};
 	for (const name of managerHttpHandlerNames) {
 		const handler = plain.http[name];
 		if (!handler) {
@@ -658,7 +662,7 @@ function wrapManager<TKey extends string, TResource extends EffectResourceLike, 
 	return {
 		key: plain.key,
 		type: plain.type as EffectManager<TKey, TResource, TContext>['type'],
-		http,
+		http: http as EffectManager<TKey, TResource, TContext>['http'],
 		bind(params, context) {
 			const bound = plain.bind(params, context);
 			const wrapped: RuntimeBoundManager = { key: bound.key, params: bound.params, scope: bound.scope };

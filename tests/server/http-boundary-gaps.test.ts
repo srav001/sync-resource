@@ -50,7 +50,7 @@ describe('manager authorization boundaries', () => {
 		const direct = await notes.bind({ workspaceId: 'w1' }).get();
 		expect(direct.isErr() && direct.error.code).toBe('forbidden');
 
-		const response = await notes.http.get!({
+		const response = await notes.http.get({
 			request: new Request('https://sync.test/get'),
 			params: { workspaceId: 'w1' }
 		});
@@ -111,7 +111,7 @@ describe('manager authorization boundaries', () => {
 			realtimeBus
 		});
 
-		const response = await notes.http.add!({
+		const response = await notes.http.add({
 			request: new Request('https://sync.test/add', {
 				method: 'POST',
 				body: JSON.stringify({ input: { id: 'n1' } })
@@ -151,7 +151,7 @@ describe('manager authorization boundaries', () => {
 			}
 		});
 
-		const response = await notes.http.get!({
+		const response = await notes.http.get({
 			request: new Request('https://sync.test/get'),
 			params: { workspaceId: 'w1' },
 			context: { userId: 'u1' }
@@ -184,13 +184,13 @@ describe('manager HTTP argument and metadata boundaries', () => {
 			scope: (params) => params.workspaceId
 		});
 
-		await notes.http.list!({
+		await notes.http.list({
 			request: new Request(
 				'https://sync.test/list?query=%7B%22tag%22%3A%22encoded%22%7D&tag=fallback&clientId=url-client&mutationId=url-mutation'
 			),
 			params: { workspaceId: 'w1' }
 		});
-		await notes.http.list!({
+		await notes.http.list({
 			request: new Request('https://sync.test/list?tag=fallback&after=domain-cursor&clientId=c1&mutationId=m1'),
 			params: { workspaceId: 'w1' }
 		});
@@ -224,11 +224,11 @@ describe('manager HTTP argument and metadata boundaries', () => {
 			scope: (params) => params.workspaceId
 		});
 
-		await notes.http.delete!({
+		await notes.http.delete({
 			request: new Request('https://sync.test/delete?id=url-id', { method: 'DELETE' }),
 			params: { workspaceId: 'w1' }
 		});
-		await notes.http.delete!({
+		await notes.http.delete({
 			request: new Request('https://sync.test/delete?id=url-id', {
 				method: 'DELETE',
 				body: JSON.stringify({ query: { id: 'body-id' } })
@@ -257,7 +257,7 @@ describe('manager HTTP argument and metadata boundaries', () => {
 			authorize: () => true,
 			scope: (params) => params.workspaceId
 		});
-		const response = await notes.http.add!({
+		const response = await notes.http.add({
 			request: new Request('https://sync.test/add?mutationId=url-mutation&clientId=url-client', {
 				method: 'POST',
 				headers: {
@@ -323,7 +323,7 @@ describe('manager HTTP argument and metadata boundaries', () => {
 			body,
 			duplex: 'half'
 		} as RequestInit & { duplex: 'half' });
-		const response = await notes.http.add!({
+		const response = await notes.http.add({
 			request,
 			params: { workspaceId: 'w1' }
 		});
@@ -363,11 +363,11 @@ describe('manager HTTP argument and metadata boundaries', () => {
 			maxPayloadBytes: byteLength - 1
 		});
 
-		const accepted = await exact.http.add!({
+		const accepted = await exact.http.add({
 			request: new Request('https://sync.test/add', { method: 'POST', body }),
 			params: { workspaceId: 'w1' }
 		});
-		const rejected = await tooSmall.http.add!({
+		const rejected = await tooSmall.http.add({
 			request: new Request('https://sync.test/add', { method: 'POST', body }),
 			params: { workspaceId: 'w1' }
 		});
@@ -407,7 +407,7 @@ describe('manager HTTP argument and metadata boundaries', () => {
 			method: 'POST',
 			body: JSON.stringify({ input: { id: 'n1' } })
 		});
-		const responsePromise = notes.http.add!({
+		const responsePromise = notes.http.add({
 			request,
 			params: { workspaceId: 'w1' },
 			options: { signal: explicitAbort.signal }

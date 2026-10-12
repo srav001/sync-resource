@@ -44,7 +44,7 @@ const list = async (outbox: MemoryManagerOutbox, duringRead?: () => void) => {
 		scope: (params) => params.workspaceId,
 		outbox
 	});
-	const response = await notesManager.http.list!({
+	const response = await notesManager.http.list({
 		request: new Request('http://sync.test/list?query=%7B%22limit%22%3A20%7D'),
 		params: { workspaceId: 'ws' }
 	});
@@ -114,7 +114,7 @@ describe('read sync cursor', () => {
 			scope: (params) => params.workspaceId,
 			outbox
 		});
-		const response = await notesManager.http.get!({
+		const response = await notesManager.http.get({
 			request: new Request('http://sync.test/get'),
 			params: { workspaceId: 'ws' }
 		});
@@ -170,7 +170,7 @@ const emptyRead: ManagerOutboxRead = { envelopes: [], cursorFound: true, retaine
 describe('custom outbox read cursor', () => {
 	it('uses the cursor of a plain outbox that implements latestCursor for list reads and the page cursor', async () => {
 		const notes = plainManager({ append: () => {}, readAfter: () => emptyRead, latestCursor: () => 'custom:7' });
-		const response = await notes.http.list!({ request: new Request('http://sync.test/list'), params });
+		const response = await notes.http.list({ request: new Request('http://sync.test/list'), params });
 		const { envelope } = (await response.json()) as { envelope?: SyncEnvelope };
 		expect(envelope).toEqual({ managerKey: 'notes', scope: 'notes:ws', cursor: 'custom:7', changes: [] });
 	});
@@ -192,7 +192,7 @@ describe('custom outbox read cursor', () => {
 				outbox
 			});
 		const read = async (notes: ReturnType<typeof pageManager>) => {
-			const response = await notes.http.list!({ request: new Request('http://sync.test/list'), params });
+			const response = await notes.http.list({ request: new Request('http://sync.test/list'), params });
 			return ((await response.json()) as { envelope?: SyncEnvelope }).envelope;
 		};
 		const items = [{ id: 'n1' }];
@@ -223,7 +223,7 @@ describe('custom outbox read cursor', () => {
 			scope: (scopeParams) => scopeParams.workspaceId,
 			outbox: new MemoryManagerOutbox()
 		});
-		const response = await notes.http.list!({ request: new Request('http://sync.test/list'), params });
+		const response = await notes.http.list({ request: new Request('http://sync.test/list'), params });
 		const { envelope } = (await response.json()) as { envelope?: SyncEnvelope };
 		expect(envelope).toMatchObject({
 			cursor: 'explicit:1',
@@ -234,7 +234,7 @@ describe('custom outbox read cursor', () => {
 	it('invents no cursor when a plain outbox cannot report one', async () => {
 		const notes = plainManager({ append: () => {}, readAfter: () => emptyRead });
 		for (const method of ['list', 'get'] as const) {
-			const response = await notes.http[method]!({ request: new Request(`http://sync.test/${method}`), params });
+			const response = await notes.http[method]({ request: new Request(`http://sync.test/${method}`), params });
 			expect(response.status).toBe(200);
 			const body = (await response.json()) as { value: unknown; envelope?: SyncEnvelope };
 			expect(body.value).toEqual(method === 'list' ? { items: [{ id: 'n1' }] } : { id: 'ws' });
@@ -279,8 +279,8 @@ describe('operation execution', () => {
 			method: 'POST',
 			body: JSON.stringify({ input: { id: 'n2' } })
 		});
-		await notes.http.list!({ request: listRequest, params });
-		const added = await notes.http.add!({ request: addRequest, params });
+		await notes.http.list({ request: listRequest, params });
+		const added = await notes.http.add({ request: addRequest, params });
 		expect(added.status).toBe(200);
 		const reader = await openSharedStream(notes.http, params, { afterCursor: 'c1', signal: abort.signal });
 		await replayRead.promise;
@@ -300,7 +300,7 @@ describe('operation execution', () => {
 			},
 			readAfter: () => emptyRead
 		});
-		const added = await notes.http.add!({
+		const added = await notes.http.add({
 			request: new Request('http://sync.test/add?mutationId=m1', {
 				method: 'POST',
 				body: JSON.stringify({ input: { id: 'n3' } })

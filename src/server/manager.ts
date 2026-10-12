@@ -92,7 +92,7 @@ export type BoundManager<TKey extends string, TResource> = ManagerMethods<Resour
 export interface Manager<TKey extends string, TResource, TContext = undefined, TParams = ResourceParams<TResource>> {
 	readonly key: TKey;
 	readonly type: ManagerTypeFromResource<TKey, TResource>;
-	readonly http: ManagerHttpHandlers<TContext, TParams>;
+	readonly http: ManagerHttpHandlers<TContext, TParams, ResourceMethodTypes<TResource>>;
 	bind(params: TParams, context?: TContext): BoundManager<TKey, TResource>;
 }
 
@@ -291,8 +291,8 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		managerOptions: RuntimeManagerOptions<TContext, ResourceParams<TResource>> & {
 			readonly maxPayloadBytes?: number;
 		}
-	): ManagerHttpHandlers<TContext, ResourceParams<TResource>> {
-		const handlers: ManagerHttpHandlers<TContext, ResourceParams<TResource>> = {};
+	): Manager<TKey, TResource, TContext>['http'] {
+		const handlers: Partial<ManagerHttpHandlers<TContext, ResourceParams<TResource>>> = {};
 
 		for (const kind of methodKinds(runtimeMethods)) {
 			handlers[kind] = (args) =>
@@ -350,7 +350,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 			});
 		};
 
-		return handlers;
+		return handlers as Manager<TKey, TResource, TContext>['http'];
 	}
 
 	// Writes persist their envelope with the mutation record before publishing, and signals are never persisted.

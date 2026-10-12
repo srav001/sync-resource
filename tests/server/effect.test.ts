@@ -616,7 +616,7 @@ describe('Effect server entrypoint', () => {
 		);
 		expect(duplicate).toEqual({ id: 'n1', title: 'one' });
 
-		const response = await notesManager.http.add!({
+		const response = await notesManager.http.add({
 			request: new Request('https://sync.test/add', {
 				method: 'POST',
 				body: JSON.stringify({ input: { id: 'n2', title: 'two' } })
@@ -656,7 +656,7 @@ describe('Effect server entrypoint', () => {
 				}
 			})
 		);
-		const response = await notesManager.http.list!({
+		const response = await notesManager.http.list({
 			request: new Request('https://sync.test/list'),
 			params: { workspaceId: 'w1' }
 		});
@@ -685,7 +685,7 @@ describe('Effect server entrypoint', () => {
 					}
 				})
 			);
-			const response = await notesManager.http.list!({
+			const response = await notesManager.http.list({
 				request: new Request('https://sync.test/list'),
 				params: { workspaceId: 'w1' }
 			});
@@ -759,7 +759,7 @@ describe('Effect server entrypoint', () => {
 				}
 			})
 		);
-		const connected = await notesManager.http.connect!({
+		const connected = await notesManager.http.connect({
 			request: new Request('https://sync.test/connect?after=seed', {
 				method: 'POST',
 				headers: { 'x-sync-transport-id': 'effect-transport' }

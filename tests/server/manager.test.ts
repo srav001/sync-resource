@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vite-plus/test';
+import { afterEach, describe, expect, expectTypeOf, it } from 'vite-plus/test';
 
 import { resetSyncConfiguration } from '../../src/client/core.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
@@ -42,17 +42,24 @@ describe('manager execution and HTTP', () => {
 	it('parses HTTP query/body and returns protocol result/status', async () => {
 		const system = createSyncTestSystem();
 		system.database.seed('workspace-1', [{ id: 'n1', title: 'one' }]);
-		const listResponse = await system.manager.http.list!({
+		const listResponse = await system.manager.http.list({
 			request: new Request('http://sync.test/list?query=%7B%22limit%22%3A20%7D'),
 			params: { workspaceId: 'workspace-1' }
 		});
 		expect(listResponse.status).toBe(200);
 		expect(await listResponse.json()).toMatchObject({ isOk: true, value: { items: [{ id: 'n1' }] } });
-		const bad = await system.manager.http.add!({
+		const bad = await system.manager.http.add({
 			request: new Request('http://sync.test/add', { method: 'POST', body: '{bad' }),
 			params: { workspaceId: 'workspace-1' }
 		});
 		expect(bad.status).toBe(400);
 		expect((await bad.json()).error.code).toBe('bad_request');
+	});
+
+	it('types HTTP handlers from the resource methods', () => {
+		const http = createSyncTestSystem().manager.http;
+		expectTypeOf(http.list).toBeFunction();
+		expectTypeOf(http.connect).toBeFunction();
+		expectTypeOf(http).not.toHaveProperty('get');
 	});
 });

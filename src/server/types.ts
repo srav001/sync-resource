@@ -8,6 +8,7 @@ import type {
 	SyncSignal
 } from '../shared/index.ts';
 import type { SyncErr, SyncOk, SyncResult } from '../shared/result.js';
+import type { ResourceMethodMap } from './resource.js';
 
 export type {
 	CostMetric,
@@ -207,14 +208,11 @@ export interface ManagerHttpHandlerArgs<TContext, TParams> {
 	readonly options?: OperationOptions;
 }
 
-export interface ManagerHttpHandlers<TContext, TParams> {
-	get?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
-	list?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
-	add?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
-	mutate?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
-	delete?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
-	connect?(args: ManagerHttpHandlerArgs<TContext, TParams>): Promise<Response>;
-}
+type ManagerHttpHandler<TContext, TParams> = (args: ManagerHttpHandlerArgs<TContext, TParams>) => Promise<Response>;
+
+export type ManagerHttpHandlers<TContext, TParams, TMethods = ResourceMethodMap> = {
+	-readonly [Kind in keyof TMethods]: ManagerHttpHandler<TContext, TParams>;
+} & { connect: ManagerHttpHandler<TContext, TParams> };
 
 export interface MethodType<TQuery, TInput, TOutput> {
 	readonly query: TQuery;
