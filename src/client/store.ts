@@ -725,9 +725,11 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 		const liveStart = this.liveDuringReads.length;
 		this.readsInFlight += 1;
+		const releaseRegistrations = this.runtime.transport.holdRegistrations?.();
 		const task = run((envelope) => this.settleRead(liveStart, envelope))
 			.catch((cause) => err(this.recordError(toStoreSyncError(cause))))
 			.finally(() => {
+				releaseRegistrations?.();
 				this.readsInFlight -= 1;
 				if (this.readsInFlight === 0) {
 					this.liveDuringReads = [];
