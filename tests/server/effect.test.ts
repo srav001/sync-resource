@@ -17,6 +17,7 @@ import {
 	type SyncEnvelope
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { nextMacrotask } from '../fixtures/async.ts';
 import { openSharedStream } from '../fixtures/sharedStream.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
@@ -129,10 +130,8 @@ describe('Effect server entrypoint', () => {
 	});
 
 	it('interrupts handlers and waits for their finalizers', async () => {
-		let started!: () => void;
-		const didStart = new Promise<void>((resolve) => {
-			started = resolve;
-		});
+		const started = new Deferred();
+		const releaseFinalizer = new Deferred();
 		let finalized = false;
 		const notes = resource(paramsSchema, (method) => ({
 			get: method.get({
@@ -140,12 +139,16 @@ describe('Effect server entrypoint', () => {
 				handler: () =>
 					Effect.ensuring(
 						Effect.andThen(
-							Effect.sync(started),
+							Effect.sync(() => started.resolve()),
 							Effect.as(Effect.never, { id: 'unreachable', title: 'unreachable' })
 						),
-						Effect.sync(() => {
-							finalized = true;
-						})
+						Effect.promise(() => releaseFinalizer.promise).pipe(
+							Effect.andThen(
+								Effect.sync(() => {
+									finalized = true;
+								})
+							)
+						)
 					)
 			})
 		}));
@@ -158,8 +161,15 @@ describe('Effect server entrypoint', () => {
 			})
 		);
 		const fiber = Effect.runFork(notesManager.bind({ workspaceId: 'w1' }).get());
-		await didStart;
-		await Effect.runPromise(Fiber.interrupt(fiber));
+		await started.promise;
+		let interruptionFinished = false;
+		const interrupted = Effect.runPromise(Fiber.interrupt(fiber)).then(() => {
+			interruptionFinished = true;
+		});
+		await nextMacrotask();
+		expect(interruptionFinished).toBe(false);
+		releaseFinalizer.resolve();
+		await interrupted;
 		expect(finalized).toBe(true);
 	});
 
@@ -219,7 +229,7 @@ describe('Effect server entrypoint', () => {
 		const interrupted = Effect.runPromise(Fiber.interrupt(fiber)).then(() => {
 			interruptionFinished = true;
 		});
-		await Promise.resolve();
+		await nextMacrotask();
 		expect(sourceCommitted).toBe(true);
 		expect(interruptionFinished).toBe(false);
 		releaseFinality();
