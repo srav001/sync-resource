@@ -1,30 +1,6 @@
 import type { SyncEnvelope, SyncError } from '../shared/index.ts';
 import type { SyncResult } from '../shared/result.ts';
 
-export type {
-	CostMetric,
-	ItemAddedChange,
-	ItemDeletedChange,
-	ItemUpdatedChange,
-	PageLoadedChange,
-	ResetChange,
-	ResetManifest,
-	SyncChange,
-	SyncEnvelope,
-	SyncError,
-	SyncErrorCode,
-	SyncErrorOptions,
-	SyncErrorRecovery,
-	SyncHttpError,
-	SyncHttpOk,
-	SyncHttpResult,
-	SyncProtocolError,
-	SyncRecoveryMetadata,
-	SyncRecoverySource,
-	SyncResetReason,
-	SyncSignal
-} from '../shared/index.ts';
-
 export interface MethodType<TQuery, TInput, TOutput> {
 	readonly query: TQuery;
 	readonly input: TInput;

@@ -25,13 +25,30 @@ export {
 	type StoreWriteOptions
 } from './store.ts';
 export { err, ok, SyncErr, SyncOk, type SyncResult } from '../shared/result.ts';
-export { isSyncError, normalizeSyncError, SyncError, syncError, syncErrorToHttpStatus } from '../shared/index.ts';
+export {
+	isSyncError,
+	normalizeSyncError,
+	SyncError,
+	syncError,
+	syncErrorToHttpStatus,
+	type CostMetric,
+	type ResetManifest,
+	type SyncEnvelope,
+	type SyncErrorCode,
+	type SyncErrorOptions,
+	type SyncErrorRecovery,
+	type SyncRecoveryMetadata,
+	type SyncHttpError,
+	type SyncHttpOk,
+	type SyncHttpResult,
+	type SyncRecoverySource,
+	type SyncSignal
+} from '../shared/index.ts';
 export type {
 	CacheAdapter,
 	CacheItem,
 	CollectionMeta,
 	CollectionItem,
-	CostMetric,
 	InputOf,
 	ManagerTypeShape,
 	MethodType,
@@ -46,20 +63,9 @@ export type {
 	ReconcileItemContext,
 	ReconcileQueryContext,
 	ReconcileTargetContext,
-	ResetManifest,
 	RuntimeTransport,
 	SyncCacheConfiguration,
 	StoreCacheOptions,
 	StoreConfig,
-	SyncEnvelope,
-	SyncErrorCode,
-	SyncErrorOptions,
-	SyncErrorRecovery,
-	SyncRecoveryMetadata,
-	SyncRecoverySource,
-	SyncHttpError,
-	SyncHttpOk,
-	SyncHttpResult,
-	SyncRuntime,
-	SyncSignal
+	SyncRuntime
 } from './types.ts';

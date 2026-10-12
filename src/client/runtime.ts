@@ -1,5 +1,11 @@
 import { isFiniteNumber, isRecord, isString } from '../shared/guards.ts';
-import { isSyncHttpResult, normalizeSyncError, type SyncHttpOk } from '../shared/index.ts';
+import {
+	isSyncHttpResult,
+	normalizeSyncError,
+	type SyncEnvelope,
+	type SyncError,
+	type SyncHttpOk
+} from '../shared/index.ts';
 import { MAX_BATCH_CONNECTS, syncErrorCodeFromHttpStatus } from '../shared/protocol.ts';
 import { err, ok } from '../shared/result.ts';
 import type { SyncResult } from '../shared/result.ts';
@@ -11,14 +17,7 @@ import {
 	parseSyncEnvelopeJson,
 	type SyncEnvelopeChunk
 } from '../shared/sse.ts';
-import type {
-	CacheAdapter,
-	RuntimeTransport,
-	SyncCacheConfiguration,
-	SyncEnvelope,
-	SyncError,
-	SyncRuntime
-} from './types.ts';
+import type { CacheAdapter, RuntimeTransport, SyncCacheConfiguration, SyncRuntime } from './types.ts';
 
 export interface CreateRuntimeOptions {
 	readonly fetch?: typeof fetch;

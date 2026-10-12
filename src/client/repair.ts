@@ -1,5 +1,6 @@
+import type { ResetManifest, SyncError } from '../shared/index.ts';
 import { err, ok, type SyncResult } from '../shared/result.ts';
-import type { PageState, ResetManifest, SyncError } from './types.ts';
+import type { PageState } from './types.ts';
 
 type PageHealth = Pick<PageState, 'repairNeeded' | 'stale' | 'coverage'>;
 

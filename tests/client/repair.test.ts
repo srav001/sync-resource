@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createRepairScheduler, noRepairNeeded, planRepair } from '../../src/client/repair.ts';
-import type { PageState, ResetManifest } from '../../src/client/types.ts';
+import type { PageState } from '../../src/client/types.ts';
+import type { ResetManifest } from '../../src/shared/index.ts';
 import { err, ok } from '../../src/shared/result.ts';
 
 const page = (overrides: Partial<PageState> = {}): PageState => ({
