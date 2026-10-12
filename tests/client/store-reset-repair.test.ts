@@ -70,11 +70,11 @@ describe('store reset and repair', () => {
 
 		transport.emit(resetEnvelope());
 		expect(store.pending()).toHaveLength(0);
-		expect(store.pages()[0]).toMatchObject({ stale: true, repairNeeded: true, coverage: 'stale' });
+		expect(store.pages()[0]).toMatchObject({ stale: true });
 		await vi.advanceTimersByTimeAsync(0);
 		await waitFor(() => reads === 2);
 		expect(store.items()).toEqual([{ id: 'note-1', title: 'Repaired' }]);
-		expect(store.pages()[0]).toMatchObject({ stale: false, repairNeeded: false, coverage: 'full' });
+		expect(store.pages()[0]).toMatchObject({ stale: false });
 
 		const readsAfterAutomaticRepair = reads;
 		expect((await store.repair()).isOk()).toBe(true);

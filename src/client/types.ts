@@ -19,12 +19,9 @@ export interface PageState {
 	readonly cursorIn?: string;
 	readonly cursorOut?: string;
 	readonly ids: readonly string[];
-	readonly coverage: 'prefix' | 'partial' | 'full' | 'stale';
 	readonly complete: boolean;
 	readonly stale: boolean;
-	readonly repairNeeded: boolean;
-	readonly lastSyncCursor?: string;
-	readonly source: 'cache' | 'network' | 'realtime';
+	readonly source: 'network' | 'realtime';
 }
 
 export interface CacheItem<TValue> {

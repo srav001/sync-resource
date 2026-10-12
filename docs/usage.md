@@ -1385,8 +1385,8 @@ Rules:
 - `restore()` only loads authoritative cache. In-memory pending commands are preserved, but pending commands are not restored from IndexedDB.
 - `connect()` attaches realtime from the current cached cursor without forcing a server refresh.
 - IndexedDB stores only last-success authoritative state. Optimistic pending commands stay memory-only.
-- A snapshot holds `baseData`, the loaded `baseItems` once, and per query family (at most 8) its ids, page records (cursors, coverage,
-  size, source), sort flag and meta, plus the active family and cursor. It is stored under `<scope>:view:v2`, so a
+- A snapshot holds `baseData`, the loaded `baseItems` once, and per query family (at most 8) its ids, page records (cursors, completeness,
+  staleness, size, source), sort flag and meta, plus the active family and cursor. It is stored under `<scope>:view:v2`, so a
   snapshot saved in an older format sits under another key, is never read, and the store refetches.
 - Cache writes use one timer, armed by the first dirty event and set to 250 ms. Later dirty events do not reset it, so bursts and continuous realtime traffic write at most once per 250 ms. Events that arrive during an in-flight write arm the next timer after the current write completes. The store passes plain values to the cache adapter; the adapter/library owns IndexedDB storage details.
 
@@ -1526,12 +1526,9 @@ interface PageState {
 	readonly cursorIn?: string;
 	readonly cursorOut?: string;
 	readonly ids: readonly string[];
-	readonly coverage: 'prefix' | 'partial' | 'full' | 'stale';
 	readonly complete: boolean;
 	readonly stale: boolean;
-	readonly repairNeeded: boolean;
-	readonly lastSyncCursor?: string;
-	readonly source: 'cache' | 'network' | 'realtime';
+	readonly source: 'network' | 'realtime';
 }
 ```
 

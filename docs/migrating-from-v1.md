@@ -278,6 +278,8 @@ Sync Resource no longer uses any of these. Remove them from your code.
 
 - **Client core:** `createRepairScheduler`, `planRepair`, `noRepairNeeded`, `RepairPlan` and `RepairScheduler`. The store
   repairs itself after a reset or a stale page, and `repair()` is the manual call.
+- **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
+  `stale` is the one staleness flag.
 
 ## Requirements
 

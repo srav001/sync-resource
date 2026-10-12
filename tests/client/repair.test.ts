@@ -6,10 +6,8 @@ import { err, ok } from '../../src/shared/result.ts';
 
 const page = (overrides: Partial<PageState> = {}): PageState => ({
 	ids: [],
-	coverage: 'full',
 	complete: true,
 	stale: false,
-	repairNeeded: false,
 	source: 'network',
 	...overrides
 });

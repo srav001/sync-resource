@@ -162,16 +162,7 @@ export function applyPageOutput<TOutput, TQuery>(
 		return;
 	}
 
-	applyPageItems(
-		state,
-		output.items,
-		query,
-		readString(output.pageCursor),
-		readString(output.syncCursor),
-		output.meta,
-		reconcile,
-		activate
-	);
+	applyPageItems(state, output.items, query, readString(output.pageCursor), output.meta, reconcile, activate);
 }
 
 export function setBaseData<TValue>(
@@ -225,16 +216,7 @@ export function applyEnvelope<TQuery>(
 	const sourceCommand = envelope.sourceMutationId ? pendingCommands.get(envelope.sourceMutationId) : undefined;
 	for (const syncChange of envelope.changes) {
 		if (syncChange.type === 'pageLoaded') {
-			applyPageItems(
-				state,
-				syncChange.items,
-				activeQuery,
-				syncChange.pageCursor,
-				syncChange.syncCursor ?? envelope.cursor,
-				undefined,
-				reconcile,
-				true
-			);
+			applyPageItems(state, syncChange.items, activeQuery, syncChange.pageCursor, undefined, reconcile, true);
 		}
 		if (syncChange.type === 'itemAdded') {
 			const appendToPage = sourceCommand?.method === 'add' && reconcile.addPlacement !== 'sorted';
@@ -264,7 +246,7 @@ export function applyEnvelope<TQuery>(
 		}
 		if (syncChange.type === 'reset') {
 			pendingCommands.clear();
-			markPagesStale(state, envelope.cursor);
+			markPagesStale(state);
 		}
 	}
 
@@ -506,7 +488,6 @@ function applyPageItems<TItem, TQuery, TMeta>(
 	items: readonly TItem[],
 	query: TQuery,
 	pageCursor: string | undefined,
-	syncCursor: string | undefined,
 	meta: TMeta,
 	reconcile: OptimisticReconcile<TItem, TQuery>,
 	activate: boolean
@@ -546,11 +527,8 @@ function applyPageItems<TItem, TQuery, TMeta>(
 		cursorIn,
 		cursorOut: pageCursor,
 		count: ids.length,
-		coverage: 'full',
 		complete: pageCursor === undefined,
 		stale: false,
-		repairNeeded: false,
-		lastSyncCursor: syncCursor,
 		source: 'network'
 	};
 	const replaced = family.ids.slice(replaceStart, replaceEnd);
@@ -684,13 +662,7 @@ function reconcileAddedItemWithFamily<TItem>(
 	const existingCount = family.ids.length;
 	if (existingCount === 0) {
 		const firstPage = family.pages[0];
-		if (
-			firstPage &&
-			family.pages.length === 1 &&
-			firstPage.complete &&
-			firstPage.coverage === 'full' &&
-			!firstPage.stale
-		) {
+		if (firstPage && family.pages.length === 1 && firstPage.complete && !firstPage.stale) {
 			family.ids = [id];
 			family.items = [item];
 			family.pages = [{ ...firstPage, count: 1, source: 'realtime' }];
@@ -998,14 +970,11 @@ function collectTargetIds<TArgs>(method: WriteMethod, args: TArgs, reconcile: Op
 	return targetIds;
 }
 
-function markPagesStale(state: OptimisticState, cursor: string): void {
+function markPagesStale(state: OptimisticState): void {
 	for (const family of state.families.values()) {
 		family.pages = family.pages.map((page) => ({
 			...page,
-			coverage: 'stale',
 			stale: true,
-			repairNeeded: true,
-			lastSyncCursor: cursor,
 			source: 'realtime'
 		}));
 		family.pagesView = undefined;
