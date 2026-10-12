@@ -1240,10 +1240,7 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 						metrics: collectMetrics(result.value)
 					})
 				: undefined;
-			const commitResult = await commitDeferredSourceWrite(
-				result.value,
-				withCommitExecution({ mutationRecord, envelope }, execution)
-			);
+			const commitResult = await commitDeferredSourceWrite(result.value, { mutationRecord, envelope }, execution);
 			if (commitResult.isErr()) {
 				await reportManagerError(options, telemetryContext, commitResult.error);
 				return commitResult;
@@ -1658,25 +1655,11 @@ function withDeferredSourceCommit(
 
 async function commitDeferredSourceWrite(
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>,
-	context: ResourceCommitContext
+	context: ResourceCommitContext,
+	execution: OperationExecution
 ): Promise<SyncResult<DeferredSourceCommitResult, SyncError>> {
-	if (isBatchOutput(value)) {
-		if (value.sourceCommit) {
-			const result = await value.sourceCommit.commit(context);
-			if (result.isErr()) {
-				return result;
-			}
-
-			return ok({
-				raw: {
-					...value,
-					metrics: mergeMetrics(value.metrics, result.value?.metrics),
-					sourceCommit: undefined
-				},
-				syncPersisted: result.value?.syncPersisted === true
-			});
-		}
-		if (batchHasSourceCommit(value)) {
+	if (!value.sourceCommit) {
+		if (isBatchOutput(value) && batchHasSourceCommit(value)) {
 			return err(
 				syncError(
 					'bad_request',
@@ -1684,20 +1667,10 @@ async function commitDeferredSourceWrite(
 				)
 			);
 		}
-		return ok({
-			raw: value,
-			syncPersisted: false
-		});
+		return ok({ raw: value, syncPersisted: false });
 	}
 
-	if (!value.sourceCommit) {
-		return ok({
-			raw: value,
-			syncPersisted: false
-		});
-	}
-
-	const result = await value.sourceCommit.commit(context);
+	const result = await value.sourceCommit.commit(withCommitExecution(context, execution));
 	if (result.isErr()) {
 		return result;
 	}

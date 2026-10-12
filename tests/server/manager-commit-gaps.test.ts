@@ -322,6 +322,61 @@ describe('manager deferred source commits', () => {
 		slowPublication.resolve();
 	});
 
+	it('commits a resource-level atomic batch once with the commit context and merges commit metrics', async () => {
+		const persistence = new TrackingPersistence();
+		const commits: ResourceCommitContext[] = [];
+		const repository = resource(paramsSchema, (method) => ({
+			add: method.add({
+				input: inputSchema,
+				output: outputSchema,
+				handler({ ctx }) {
+					return ctx.error(ctx.syncError('internal', 'single handler should not run'));
+				},
+				batchHandler({ items }) {
+					return ok({
+						items: items.map((item, index) => ({
+							index,
+							status: 'ok' as const,
+							value: { output: { id: item.input.id } }
+						})),
+						execution: { mode: 'transaction', atomic: true, okCount: items.length, errorCount: 0 },
+						metrics: [{ name: 'write', value: 2, unit: 'row' }],
+						sourceCommit: {
+							commit(context) {
+								commits.push(context);
+								return ok({ metrics: [{ name: 'commit', value: 1, unit: 'transaction' }] });
+							}
+						}
+					});
+				}
+			})
+		}));
+		const notes = manager({
+			key: 'batch-source-commit',
+			resource: repository,
+			authorize: () => true,
+			scope: (params) => params.workspaceId,
+			persistence
+		});
+
+		const result = await notes
+			.bind({ workspaceId: 'w1' })
+			.add([{ input: { id: 'a' } }, { input: { id: 'b' } }], { mutationId: 'batch' });
+
+		expect(result.isOk() && result.value.sourceCommit).toBeUndefined();
+		expect(commits).toHaveLength(1);
+		expect(commits[0]?.mutationRecord).toMatchObject({ mutationId: 'batch', method: 'add', status: 'finalized' });
+		expect(commits[0]?.envelope?.changes).toHaveLength(2);
+		expect(Object.getOwnPropertyDescriptor(commits[0], 'signal')).toMatchObject({
+			enumerable: false,
+			value: expect.any(AbortSignal)
+		});
+		expect(persistence.records[0]?.metrics).toEqual([
+			{ name: 'write', value: 2, unit: 'row' },
+			{ name: 'commit', value: 1, unit: 'transaction' }
+		]);
+	});
+
 	it('rejects per-item source commits deferred through a looped manager batch', async () => {
 		const persistence = new TrackingPersistence();
 		let commits = 0;
