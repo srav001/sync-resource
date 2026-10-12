@@ -1,5 +1,5 @@
-import { isRecord } from '../shared/guards.ts';
-import { isSyncError, syncError, type SyncHttpOk } from '../shared/index.ts';
+import { isRecord, type ValueRecord } from '../shared/guards.ts';
+import { isSyncError, syncError, type SyncEnvelope, type SyncError, type SyncHttpOk } from '../shared/index.ts';
 import { err, ok, type SyncResult } from '../shared/result.ts';
 import { stableStringify } from '../shared/stableJson.ts';
 import {
@@ -43,18 +43,12 @@ import type {
 	ReconcileBuilder,
 	ReconcileConfig,
 	StoreConfig,
-	SyncEnvelope,
-	SyncError,
-	SyncRuntime,
-	SyncSignal
+	SyncRuntime
 } from './types.ts';
 
 type StoreSubscriber<TManager extends ManagerTypeShape> = (snapshot: StoreSnapshot<TManager>) => void;
 type StoreEventCallback<TValue> = (value: TValue) => void;
 type StoreSignalCallback<TPayload = unknown> = (payload: TPayload) => void;
-interface StoreRuntimeMethods<TValue = unknown> {
-	[key: string]: TValue;
-}
 interface ForcedHydrationState {
 	requestedGeneration: number;
 	runningGeneration: number;
@@ -261,12 +255,12 @@ export type StoreActionMethods<TManager extends ManagerTypeShape> = Pick<
 	Extract<StoreActionMethodName, keyof ClientStore<TManager>>
 >;
 
-export function createStore<TManager extends ManagerTypeShape>(
+export function createStoreRuntime<TManager extends ManagerTypeShape>(
 	config: StoreConfig<TManager>,
 	...reconcile: NeedsReconcile<TManager> extends true
 		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
 		: [(builder: ReconcileBuilder<TManager>) => ReconcileConfig] | []
-): ClientStore<TManager> {
+): StoreRuntimeApi<TManager> & ClientStore<TManager> {
 	const reconcileConfig = reconcile[0]?.({
 		defaults(configValue) {
 			return configValue ?? {};
@@ -275,18 +269,13 @@ export function createStore<TManager extends ManagerTypeShape>(
 	return new ClientStoreCore(config, reconcileConfig).api();
 }
 
-export function createStoreRuntime<TManager extends ManagerTypeShape>(
+export function createStore<TManager extends ManagerTypeShape>(
 	config: StoreConfig<TManager>,
 	...reconcile: NeedsReconcile<TManager> extends true
 		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
 		: [(builder: ReconcileBuilder<TManager>) => ReconcileConfig] | []
-): StoreRuntimeApi<TManager> {
-	const reconcileConfig = reconcile[0]?.({
-		defaults(configValue) {
-			return configValue ?? {};
-		}
-	});
-	return new ClientStoreCore(config, reconcileConfig).api();
+): ClientStore<TManager> {
+	return createStoreRuntime(config, ...reconcile);
 }
 
 interface RealtimeSubscription {
@@ -361,29 +350,20 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	api(): StoreRuntimeApi<TManager> & ClientStore<TManager> {
-		const api: StoreRuntimeMethods = {
-			on: {
-				data: (callback: StoreEventCallback<StoreSnapshot<TManager>['data']>) =>
-					this.subscribeEvent('data', callback),
-				items: (callback: StoreEventCallback<StoreSnapshot<TManager>['items']>) =>
-					this.subscribeEvent('items', callback),
-				listMeta: (callback: StoreEventCallback<StoreSnapshot<TManager>['listMeta']>) =>
-					this.subscribeEvent('listMeta', callback),
-				pages: (callback: StoreEventCallback<StoreSnapshot<TManager>['pages']>) =>
-					this.subscribeEvent('pages', callback),
-				signal: <TPayload>(type: string, callback: StoreSignalCallback<TPayload>) =>
-					this.subscribeSignal(type, callback as StoreSignalCallback),
-				pending: (callback: StoreEventCallback<StoreSnapshot<TManager>['pending']>) =>
-					this.subscribeEvent('pending', callback),
-				hydrating: (callback: StoreEventCallback<StoreSnapshot<TManager>['hydrating']>) =>
-					this.subscribeEvent('hydrating', callback),
-				refreshing: (callback: StoreEventCallback<StoreSnapshot<TManager>['refreshing']>) =>
-					this.subscribeEvent('refreshing', callback),
-				disposed: (callback: StoreEventCallback<StoreSnapshot<TManager>['disposed']>) =>
-					this.subscribeEvent('disposed', callback),
-				error: (callback: StoreEventCallback<StoreSnapshot<TManager>['error']>) =>
-					this.subscribeEvent('error', callback)
-			},
+		const on: StoreEventHandlers<TManager> = {
+			data: (callback) => this.subscribeEvent('data', callback),
+			items: (callback) => this.subscribeEvent('items', callback),
+			listMeta: (callback) => this.subscribeEvent('listMeta', callback),
+			pages: (callback) => this.subscribeEvent('pages', callback),
+			signal: (type, callback) => this.subscribeSignal(type, callback),
+			pending: (callback) => this.subscribeEvent('pending', callback),
+			hydrating: (callback) => this.subscribeEvent('hydrating', callback),
+			refreshing: (callback) => this.subscribeEvent('refreshing', callback),
+			disposed: (callback) => this.subscribeEvent('disposed', callback),
+			error: (callback) => this.subscribeEvent('error', callback)
+		};
+		const api: ValueRecord = {
+			on,
 			snapshot: () => this.snapshot(),
 			pending: () => this.pendingValue(),
 			error: () => this.lastError,
@@ -1313,18 +1293,10 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private emitSignals(envelope: SyncEnvelope): void {
-		for (const nextSignal of envelope.signals ?? []) {
-			this.emitSignal(nextSignal);
-		}
-	}
-
-	private emitSignal(nextSignal: SyncSignal): void {
-		const subscribers = this.signalSubscribers.get(nextSignal.type);
-		if (!subscribers) {
-			return;
-		}
-		for (const subscriber of subscribers) {
-			subscriber(nextSignal.payload);
+		for (const signal of envelope.signals ?? []) {
+			for (const subscriber of this.signalSubscribers.get(signal.type) ?? []) {
+				subscriber(signal.payload);
+			}
 		}
 	}
 
