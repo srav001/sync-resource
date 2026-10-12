@@ -30,7 +30,7 @@ import {
 	type PendingCommand
 } from './optimistic.ts';
 import { createRepairScheduler, noRepairNeeded, type RepairScheduler } from './repair.ts';
-import { getSyncCacheOptions, getSyncRuntime, readSyncResponse } from './runtime.ts';
+import { getSyncCacheOptions, getSyncRuntime, readSyncResponse, urlWithCursor } from './runtime.ts';
 import type {
 	CollectionMeta,
 	CollectionItem,
@@ -898,8 +898,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const params = this.config.getParams();
 		const baseUrl = this.config.getUrl(params).replace(/\/$/, '');
 		const result = await this.runtime.transport.subscribe({
-			url: this.realtimeUrl(`${baseUrl}/events`),
-			connectUrl: this.realtimeUrl(`${baseUrl}/connect`),
+			url: urlWithCursor(`${baseUrl}/events`, this.state.cursor),
+			connectUrl: urlWithCursor(`${baseUrl}/connect`, this.state.cursor),
 			managerKey: this.config.key,
 			scope: realtime.scope,
 			signal: realtime.controller.signal,
@@ -950,16 +950,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 		this.emitSignals(envelope);
 	};
-
-	private realtimeUrl(eventsUrl: string): string {
-		if (!this.state.cursor) {
-			return eventsUrl;
-		}
-		const isAbsolute = /^https?:\/\//.test(eventsUrl);
-		const url = new URL(eventsUrl, 'http://sync.local');
-		url.searchParams.set('after', this.state.cursor);
-		return isAbsolute ? url.href : url.pathname + url.search;
-	}
 
 	// A read response predates every envelope applied since the read started, so those envelopes are re-applied over it.
 	// Otherwise the read defines the cursor, replacing one restored from cache or a reset that the server cannot replay.

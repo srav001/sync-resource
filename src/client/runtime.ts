@@ -870,7 +870,7 @@ function batchPath(urlText: string, connectUrl: string): string | undefined {
 	return url.origin === base.origin ? url.pathname + url.search : undefined;
 }
 
-function urlWithCursor(urlText: string, cursor: string | undefined): string {
+export function urlWithCursor(urlText: string, cursor: string | undefined): string {
 	if (!cursor) {
 		return urlText;
 	}
