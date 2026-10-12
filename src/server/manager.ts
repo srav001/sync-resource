@@ -156,13 +156,7 @@ interface ManagerExecutionSuccess {
 	readonly envelope?: SyncEnvelope;
 }
 
-interface PublishOptions {
-	readonly alreadyPersisted?: boolean;
-	readonly transient?: boolean;
-	readonly execution?: OperationExecution;
-}
-
-type PublishEnvelope = (envelope: SyncEnvelope, options?: PublishOptions) => Promise<void>;
+type PublishEnvelope = (envelope: SyncEnvelope) => Promise<void>;
 
 interface InternalOperationOptions extends OperationOptions {
 	readonly deferSourceCommit?: boolean;
@@ -670,10 +664,8 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		return handlers;
 	}
 
-	async function recordAndPublish(envelope: SyncEnvelope, options?: PublishOptions): Promise<void> {
-		if (options?.alreadyPersisted !== true && options?.transient !== true) {
-			await persistence.append(envelope, options?.execution);
-		}
+	// Writes persist their envelope with the mutation record before publishing, and signals are never persisted.
+	async function recordAndPublish(envelope: SyncEnvelope): Promise<void> {
 		publishToLocalSubscribers(envelope);
 		publishSharedStreamEnvelope(envelope);
 		publishToRealtimeBusBestEffort(envelope);
@@ -1250,34 +1242,16 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 			}
 			const raw = commitResult.value.raw;
 			const metrics = collectMetrics(raw);
+			if (mutationRecord && !commitResult.value.syncPersisted) {
+				await options.persistence.recordMutation({ ...mutationRecord, metrics }, execution);
+			}
 			if (envelope && isWriteMethod(method)) {
-				if (mutationRecord && !commitResult.value.syncPersisted) {
-					await options.persistence.recordMutation(
-						{
-							...mutationRecord,
-							metrics
-						},
-						execution
-					);
-					await publish(envelope, { alreadyPersisted: true, execution });
-				} else if (commitResult.value.syncPersisted) {
-					await publish(envelope, { alreadyPersisted: true, execution });
-				} else {
-					await publish(envelope, { execution });
-				}
-			} else if (mutationRecord && !commitResult.value.syncPersisted) {
-				await options.persistence.recordMutation(
-					{
-						...mutationRecord,
-						metrics
-					},
-					execution
-				);
+				await publish(envelope);
 			}
 
 			const signalEnvelope = buildSignalEnvelope(options.key, scope, raw, nextCursor);
 			if (signalEnvelope) {
-				await publish(signalEnvelope, { transient: true, execution });
+				await publish(signalEnvelope);
 			}
 
 			await callHook(() => options.telemetry?.success?.(telemetryContext, metrics));
