@@ -763,7 +763,7 @@ threaded to Effect resource handlers.
 
 ```ts
 import { Effect } from 'effect';
-import { HttpRouter } from 'effect/unstable/http';
+import { HttpRouter } from 'effect/http';
 import { httpSharedSyncStreamRoute, managerHttpRoutes } from 'sync-resource/server/effect';
 
 const SyncRoutes = HttpRouter.addAll([

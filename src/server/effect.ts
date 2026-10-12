@@ -1,5 +1,5 @@
 import { Cause, Context, Effect, Exit, Predicate, Scope, Tracer } from 'effect';
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http';
 
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { isSyncError, normalizeSyncError, type SyncError } from './errors.js';

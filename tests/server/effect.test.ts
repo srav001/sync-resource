@@ -1,5 +1,5 @@
 import { Context, Effect, Fiber } from 'effect';
-import { HttpRouter } from 'effect/unstable/http';
+import { HttpRouter } from 'effect/http';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
