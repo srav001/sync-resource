@@ -222,6 +222,42 @@ describe('Effect server entrypoint', () => {
 		expect(records).toHaveLength(1);
 	});
 
+	it('gives repeated and distinct caller contexts their own services next to the manager context', async () => {
+		const Region = Context.Service<{ readonly value: string }>('sync-resource/test/Region');
+		const NotePrefix = Context.Service<{ readonly value: string }>('sync-resource/test/NotePrefix');
+		const notes = resource(paramsSchema, (method) => ({
+			get: method.get({
+				output: noteSchema,
+				handler: ({ params }) =>
+					Effect.map(NotePrefix, ({ value }) => ({ id: params.workspaceId, title: value }))
+			})
+		}));
+		const notesManager = await Effect.runPromise(
+			Effect.provideService(
+				manager({
+					key: 'effect-merge',
+					resource: notes,
+					authorize: () => Effect.map(Region, ({ value }) => value === 'base'),
+					scope: (p) => p.workspaceId
+				}),
+				Region,
+				{ value: 'base' }
+			)
+		);
+		const bound = notesManager.bind({ workspaceId: 'w1' });
+		const titles = (prefix: string) =>
+			Effect.runPromise(
+				Effect.provideService(
+					Effect.all([bound.get(), bound.get()]).pipe(Effect.map((values) => values.map((v) => v.title))),
+					NotePrefix,
+					{ value: prefix }
+				)
+			);
+		expect(await titles('a')).toEqual(['a', 'a']);
+		expect(await titles('b')).toEqual(['b', 'b']);
+		expect(await titles('a')).toEqual(['a', 'a']);
+	});
+
 	it('mounts only supported HTTP routes unless diagnostic events are requested', async () => {
 		const notes = resource(paramsSchema, (method) => ({
 			get: method.get({

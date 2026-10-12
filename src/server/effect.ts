@@ -630,6 +630,17 @@ function wrapManager<TKey extends string, TResource extends EffectResourceLike, 
 	resourceValue: TResource,
 	base: Context.Context<R>
 ): EffectManager<TKey, TResource, TContext> {
+	// Contexts are immutable, so the merge of the manager context with a repeated caller context is built once.
+	const merged = new WeakMap<object, Context.Context<unknown>>();
+	const withBase = (caller: Context.Context<unknown>): Context.Context<unknown> => {
+		const cached = merged.get(caller);
+		if (cached) {
+			return cached;
+		}
+		const context = Context.merge(base, caller);
+		merged.set(caller, context);
+		return context;
+	};
 	const http: ManagerHttpHandlers<TContext, ResourceParams<TResource>> = {};
 	for (const name of managerHttpHandlerNames) {
 		const handler = plain.http[name];
@@ -666,11 +677,11 @@ function wrapManager<TKey extends string, TResource extends EffectResourceLike, 
 				wrapped[kind] = optionOnly
 					? (options?: EffectOperationOptions) =>
 							liftKernel((signal, caller) =>
-								runtimeCall(operationOptions(options, signal, Context.merge(base, caller)))
+								runtimeCall(operationOptions(options, signal, withBase(caller)))
 							)
 					: <TArgs>(args: TArgs, options?: EffectOperationOptions) =>
 							liftKernel((signal, caller) =>
-								runtimeCall(args, operationOptions(options, signal, Context.merge(base, caller)))
+								runtimeCall(args, operationOptions(options, signal, withBase(caller)))
 							);
 			}
 			return wrapped as EffectBoundManager<TKey, TResource>;
