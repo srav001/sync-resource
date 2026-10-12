@@ -2,6 +2,8 @@ import { isRecord, isString, type ValueRecord } from '../shared/guards.ts';
 import { stableStringify, toStableJson } from '../shared/stableJson.ts';
 import type { PageState, ReconcileConfig, SyncEnvelope } from './types.ts';
 
+const MAX_FAMILIES = 8;
+
 export type WriteMethod = 'add' | 'mutate' | 'delete';
 export type PendingState = 'local_accepted' | 'acked_waiting_delta';
 
@@ -49,7 +51,9 @@ export interface OptimisticState<TItem = unknown, TData = unknown, TQuery = unkn
 	baseData?: TData;
 	readonly baseItems: Map<string, TItem>;
 	readonly families: Map<string, PageFamilyState<TItem, TQuery, TMeta>>;
+	readonly familyRefs: Map<string, number>;
 	activeFamilyKey?: string;
+	recentFamilyKey?: string;
 	cursor?: string;
 }
 
@@ -81,7 +85,8 @@ export interface OptimisticReconcile<TItem = unknown, TQuery = unknown, TInput =
 export function createOptimisticState<TItem, TData, TQuery, TMeta>(): OptimisticState<TItem, TData, TQuery, TMeta> {
 	return {
 		baseItems: new Map(),
-		families: new Map()
+		families: new Map(),
+		familyRefs: new Map()
 	};
 }
 
@@ -97,7 +102,7 @@ export function pendingSnapshot(command: InternalPendingCommand): PendingCommand
 export function captureOptimisticState(state: OptimisticState): CachedOptimisticState {
 	return {
 		baseData: state.baseData,
-		baseItems: state.families.size > 0 ? pageItems(state) : [...state.baseItems.values()],
+		baseItems: [...state.baseItems.values()],
 		families: [...state.families.values()].map((family) => ({
 			key: family.key,
 			query: family.query,
@@ -120,6 +125,8 @@ export function restoreOptimisticState(
 	state.data = state.baseData;
 	state.baseItems.clear();
 	state.families.clear();
+	state.familyRefs.clear();
+	state.recentFamilyKey = undefined;
 	state.activeFamilyKey = snapshot.activeFamilyKey;
 	for (const item of snapshot.baseItems) {
 		const id = reconcile.itemId(item);
@@ -129,6 +136,7 @@ export function restoreOptimisticState(
 	}
 	for (const family of snapshot.families) {
 		const ids = [...family.ids];
+		ids.forEach((id) => retain(state, id));
 		state.families.set(family.key, {
 			key: family.key,
 			query: family.query,
@@ -233,21 +241,23 @@ export function applyEnvelope<TQuery>(
 			);
 		}
 		if (syncChange.type === 'itemAdded') {
-			state.baseItems.set(syncChange.id, syncChange.value);
 			const appendToPage = sourceCommand?.method === 'add' && reconcile.addPlacement !== 'sorted';
 			reconcileAddedItemAcrossFamilies(state, syncChange.id, syncChange.value, reconcile, appendToPage);
+			storeIfReferenced(state, syncChange.id, syncChange.value);
 		}
 		if (syncChange.type === 'itemUpdated') {
 			const current = state.baseItems.get(syncChange.id);
-			const next = syncChange.value ?? applyPatch(current, syncChange.patch);
-			state.baseItems.set(syncChange.id, next);
+			const next = syncChange.value ?? (current && applyPatch(current, syncChange.patch));
 
 			if (state.baseData && reconcile.itemId(state.baseData) === syncChange.id) {
 				state.baseData = syncChange.value ?? applyPatch(state.baseData, syncChange.patch);
 			} else if (activePageMetas(state).length === 0 && syncChange.value) {
 				state.baseData = syncChange.value;
 			}
-			reconcileUpdatedItemAcrossFamilies(state, syncChange.id, next, reconcile);
+			if (next) {
+				reconcileUpdatedItemAcrossFamilies(state, syncChange.id, next, reconcile);
+				storeIfReferenced(state, syncChange.id, next);
+			}
 		}
 		if (syncChange.type === 'itemDeleted') {
 			state.baseItems.delete(syncChange.id);
@@ -299,7 +309,7 @@ export function itemsForQueryFamily<TItem, TQuery>(
 	reconcile: OptimisticReconcile<TItem>,
 	pendingCommands: Iterable<InternalPendingCommand>
 ): readonly TItem[] {
-	const family = state.families.get(queryFamilyKey(query));
+	const family = readFamily(state, queryFamilyKey(query));
 	if (!family) {
 		return [];
 	}
@@ -375,19 +385,19 @@ export function activePages(state: OptimisticState): readonly PageState[] {
 }
 
 export function pagesForQueryFamily<TQuery>(state: OptimisticState, query: TQuery): readonly PageState[] {
-	const family = state.families.get(queryFamilyKey(query));
+	const family = readFamily(state, queryFamilyKey(query));
 	return family ? pagesOf(family) : [];
 }
 
 export function pageMetasForQueryFamily<TQuery>(state: OptimisticState, query: TQuery): readonly PageMeta[] {
-	return state.families.get(queryFamilyKey(query))?.pages ?? [];
+	return readFamily(state, queryFamilyKey(query))?.pages ?? [];
 }
 
 export function metaForQueryFamily<TQuery, TMeta>(
 	state: OptimisticState<unknown, unknown, TQuery, TMeta>,
 	query: TQuery
 ): TMeta | undefined {
-	return state.families.get(queryFamilyKey(query))?.meta;
+	return readFamily(state, queryFamilyKey(query))?.meta;
 }
 
 function pagesOf(family: PageFamilyState): readonly PageState[] {
@@ -549,8 +559,11 @@ function applyPageItems<TItem, TQuery, TMeta>(
 		lastSyncCursor: syncCursor,
 		source
 	};
+	const replaced = family.ids.slice(replaceStart, replaceEnd);
 	replaceRange(family.ids, replaceStart, replaceEnd, ids);
 	replaceRange(family.items, replaceStart, replaceEnd, pageValues);
+	ids.forEach((id) => retain(state, id));
+	replaced.forEach((id) => release(state, id));
 	if (!cursorIn) {
 		family.pages = [page];
 	} else if (found >= 0) {
@@ -630,12 +643,13 @@ function reconcileAddedItemAcrossFamilies<TItem>(
 		if (index >= 0) {
 			setLoadedItem(family, index, item, reconcile);
 		} else if (!appendToPage) {
-			reconcileAddedItemWithFamily(family, id, item, reconcile);
+			reconcileAddedItemWithFamily(state, family, id, item, reconcile);
 		} else if (family === active && family.pages[0]) {
 			const firstPage = family.pages[0];
 			family.ids.splice(firstPage.count, 0, id);
 			family.items.splice(firstPage.count, 0, item);
 			family.pages = [{ ...firstPage, count: firstPage.count + 1 }, ...family.pages.slice(1)];
+			retain(state, id);
 			touch(family);
 		}
 	}
@@ -660,6 +674,7 @@ function setLoadedItem<TItem>(
 }
 
 function reconcileAddedItemWithFamily<TItem>(
+	state: OptimisticState<TItem>,
 	family: PageFamilyState<TItem>,
 	id: string,
 	item: TItem,
@@ -685,6 +700,7 @@ function reconcileAddedItemWithFamily<TItem>(
 			family.ids = [id];
 			family.items = [item];
 			family.pages = [{ ...firstPage, count: 1, source: 'realtime' }];
+			retain(state, id);
 			touch(family);
 		}
 		return;
@@ -701,11 +717,15 @@ function reconcileAddedItemWithFamily<TItem>(
 
 	family.ids.splice(insertedIndex, 0, id);
 	family.items.splice(insertedIndex, 0, item);
+	retain(state, id);
 	// Sorted opt-in additions must keep the existing cursor boundary reachable by a later loadMore.
 	const dropped = !familyComplete && reconcile.addPlacement !== 'sorted';
 	if (dropped) {
-		family.ids.pop();
 		family.items.pop();
+		const droppedId = family.ids.pop();
+		if (droppedId) {
+			release(state, droppedId);
+		}
 	}
 	touch(family);
 	setRealtimePages(family, dropped ? 0 : 1);
@@ -721,9 +741,9 @@ function reconcileUpdatedItemAcrossFamilies<TItem>(
 		const index = family.ids.indexOf(id);
 		const matches = !reconcile.matchesQuery || reconcile.matchesQuery(item, family.query);
 		if (index >= 0 && !matches) {
-			removeAt(family, index);
+			removeAt(state, family, index);
 		} else if (index < 0 && matches) {
-			reconcileAddedItemWithFamily(family, id, item, reconcile);
+			reconcileAddedItemWithFamily(state, family, id, item, reconcile);
 		} else if (index >= 0) {
 			family.items[index] = item;
 			family.itemsView = undefined;
@@ -738,13 +758,16 @@ function removeIdFromFamilies(state: OptimisticState, id: string): void {
 	for (const family of state.families.values()) {
 		const index = family.ids.indexOf(id);
 		if (index >= 0) {
-			removeAt(family, index);
+			removeAt(state, family, index);
 		}
 	}
 }
 
-function removeAt(family: PageFamilyState, index: number): void {
-	family.ids.splice(index, 1);
+function removeAt(state: OptimisticState, family: PageFamilyState, index: number): void {
+	const [id] = family.ids.splice(index, 1);
+	if (id) {
+		release(state, id);
+	}
 	family.items.splice(index, 1);
 	let end = 0;
 	family.pages = family.pages.map((page) => {
@@ -807,28 +830,45 @@ function findInsertIndex<TItem>(
 	return low;
 }
 
-function pageItems(state: OptimisticState): unknown[] {
-	const items: unknown[] = [];
-	const seen = new Set<string>();
-	for (const family of state.families.values()) {
-		for (const id of family.ids) {
-			if (seen.has(id)) {
-				continue;
-			}
-			seen.add(id);
-			const item = state.baseItems.get(id);
-			if (item) {
-				items.push(item);
-			}
-		}
-	}
-	return items;
-}
-
 function getActiveFamily<TItem, TQuery, TMeta>(
 	state: OptimisticState<TItem, unknown, TQuery, TMeta>
 ): PageFamilyState<TItem, TQuery, TMeta> | undefined {
-	return state.activeFamilyKey ? state.families.get(state.activeFamilyKey) : undefined;
+	return state.activeFamilyKey ? readFamily(state, state.activeFamilyKey) : undefined;
+}
+
+// Map order is recency: a read or page load moves the family to the end, so eviction takes the first.
+export function readFamily<TItem, TQuery, TMeta>(
+	state: OptimisticState<TItem, unknown, TQuery, TMeta>,
+	key: string
+): PageFamilyState<TItem, TQuery, TMeta> | undefined {
+	const family = state.families.get(key);
+	if (family && state.recentFamilyKey !== key) {
+		state.families.delete(key);
+		state.families.set(key, family);
+		state.recentFamilyKey = key;
+	}
+	return family;
+}
+
+// While families exist, baseItems holds exactly the items some family holds; familyRefs counts the families per id.
+function retain(state: OptimisticState, id: string): void {
+	state.familyRefs.set(id, (state.familyRefs.get(id) ?? 0) + 1);
+}
+
+function release(state: OptimisticState, id: string): void {
+	const count = state.familyRefs.get(id) ?? 0;
+	if (count > 1) {
+		state.familyRefs.set(id, count - 1);
+	} else {
+		state.familyRefs.delete(id);
+		state.baseItems.delete(id);
+	}
+}
+
+function storeIfReferenced<TItem>(state: OptimisticState<TItem>, id: string, item: TItem): void {
+	if (state.families.size === 0 || state.familyRefs.has(id)) {
+		state.baseItems.set(id, item);
+	}
 }
 
 function getOrCreateFamily<TItem, TQuery>(
@@ -836,13 +876,26 @@ function getOrCreateFamily<TItem, TQuery>(
 	key: string,
 	query: TQuery
 ): PageFamilyState<TItem> {
-	const existing = state.families.get(key);
+	const existing = readFamily(state, key);
 	if (existing) {
 		existing.query = query;
 		return existing;
 	}
+	if (state.families.size === 0) {
+		state.baseItems.clear();
+	}
 	const family: PageFamilyState<TItem> = { key, query, pages: [], ids: [], items: [], sorted: true };
 	state.families.set(key, family);
+	state.recentFamilyKey = key;
+	if (state.families.size > MAX_FAMILIES) {
+		for (const [oldestKey, oldest] of state.families) {
+			if (oldestKey !== state.activeFamilyKey) {
+				state.families.delete(oldestKey);
+				oldest.ids.forEach((id) => release(state, id));
+				break;
+			}
+		}
+	}
 	return family;
 }
 

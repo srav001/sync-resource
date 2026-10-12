@@ -19,6 +19,7 @@ import {
 	pageMetasForQueryFamily,
 	pagesForQueryFamily,
 	pendingSnapshot,
+	readFamily,
 	reconcileFromConfig,
 	refreshData,
 	restoreOptimisticState,
@@ -1367,6 +1368,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const key = stableStringify(query);
 		const cached = this.listItemsCache.get(key);
 		if (cached) {
+			readFamily(this.state, key);
 			return cached;
 		}
 		const items = itemsForQueryFamily<CollectionItem<TManager>, TQuery>(

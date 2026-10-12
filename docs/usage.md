@@ -1408,7 +1408,7 @@ Rules:
 - `restore()` only loads authoritative cache. In-memory pending commands are preserved, but pending commands are not restored from IndexedDB.
 - `connect()` attaches realtime from the current cached cursor without forcing a server refresh.
 - IndexedDB stores only last-success authoritative state. Optimistic pending commands stay memory-only.
-- A snapshot holds `baseData`, the loaded `baseItems` once, and per query family its ids, page records (cursors, coverage,
+- A snapshot holds `baseData`, the loaded `baseItems` once, and per query family (at most 8) its ids, page records (cursors, coverage,
   size, source), sort flag and meta, plus the active family and cursor. It is stored under `<scope>:view:v2`, so a
   snapshot saved in an older format sits under another key, is never read, and the store refetches.
 - Cache writes use one timer, armed by the first dirty event and set to 250 ms. Later dirty events do not reset it, so bursts and continuous realtime traffic write at most once per 250 ms. Events that arrive during an in-flight write arm the next timer after the current write completes. The store passes plain values to the cache adapter; the adapter/library owns IndexedDB storage details.
@@ -1507,7 +1507,7 @@ const notes = createStore<NotesManager>(config, (reconcile) =>
 
 `itemId` receives `{ params }`, `targetId` receives `{ params, query, input }`, and `matchesQuery` receives `{ params, query }`. Use params for identity when the resource method omits query because the scoped params already identify the one item.
 
-`matchesQuery` is optional. Use it when realtime external adds can be safely checked against the current page query. If it returns false, the store keeps the entity in `baseItems` but does not add it to visible page ids.
+`matchesQuery` is optional. Use it when realtime external adds can be safely checked against the current page query. If it returns false, the entity is not added to the family's visible page ids; the store keeps an entity only while a loaded family holds it.
 
 `compare` is optional. Use it when user-visible order is domain-specific.
 
@@ -1566,8 +1566,16 @@ Rules:
 - `loadMore()` reads the default family's last `cursorOut` and injects the cursor internally.
 - `store.list(query)` returns a scoped handle with `items()`, `meta()`, `pages()`, `refresh()`, and `loadMore()` for an additional query family.
 - UI code does not pass cursor, page index, batch index, family key, or loaded ids.
-- The store keeps one normalized entity cache and many page families. A family keeps its loaded ids and items in two
+- The store keeps one normalized entity cache and up to 8 page families. A family keeps its loaded ids and items in two
   aligned arrays and records only each page's size, so `pages()` derives each page's `ids` from the family.
+- The entity cache holds exactly the entities some family holds. A realtime entity that no loaded window holds, an entity
+  dropped from a window, and the entities of an evicted family are released instead of retained.
+- Creating a ninth family evicts the least recently used one. A family counts as used when its handle reads `items()`,
+  `meta()` or `pages()`, when a page loads into it, and while it is the active family, which `items()` reads and is never
+  evicted. A handle for an evicted family reads empty (`[]`, no meta) until its `refresh()` or `loadMore()` loads it
+  again from the first page. Snapshots hold only the families that remain.
+- A patch-only `itemUpdated` (no `value`) applies to an entity the store holds, and is ignored for one it does not hold,
+  because the full item cannot be built. Send `value` when an update can move an entity into a window it was outside.
 - Ids are unique across a family's pages: a page that repeats an id the family already holds, such as one a realtime add
   inserted, leaves the existing entry in place.
 - Visible order is `compare` order when `compare` is set. Items that compare equal, and every item when `compare` is not
@@ -1583,7 +1591,7 @@ Rules:
 - Remote row updates patch loaded rows by id.
 - Remote deletes apply tombstones.
 - External adds are evaluated against each loaded family's `matchesQuery` and `compare`.
-- Membership/order uncertainty keeps the entity base-only or marks affected pages stale when repair is required.
+- Membership/order uncertainty leaves the entity out of the window or marks affected pages stale when repair is required.
 - `store.repair()` retries stale page repair when UI/tests need direct control.
 - Multiple repair requests in one tick share one in-flight repair.
 - A repair request during active repair queues one follow-up repair.
@@ -1664,7 +1672,7 @@ await notes.hydrate();
 await notes.loadMore();
 ```
 
-`refresh()` loads the first page for the default query family. `loadMore()` reuses the default family cursor and adds the next page. For concurrent list families, call `store.list(query).refresh()` and `store.list(query).loadMore()`. UI code should trigger this through a shared infinite-scroll component. If a realtime item belongs outside all loaded windows, the entity can stay base-only without refetching visible lists.
+`refresh()` loads the first page for the default query family. `loadMore()` reuses the default family cursor and adds the next page. For concurrent list families, call `store.list(query).refresh()` and `store.list(query).loadMore()`. UI code should trigger this through a shared infinite-scroll component. If a realtime item belongs outside all loaded windows, visible lists stay unchanged without a refetch and the store does not retain the item.
 
 ## Reset Manifests
 
