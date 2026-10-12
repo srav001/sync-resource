@@ -532,6 +532,92 @@ describe('browser runtime registration order', () => {
 				runtime.dispose();
 			}
 		});
+
+		it('relays every envelope the owner tab receives, chunked or not, to a follower tab', async () => {
+			let lockHeld = false;
+			const request = vi.fn((_name: string, ...rest: unknown[]) => {
+				const callback = rest.at(-1) as (lock: object | null) => Promise<void>;
+				if (!lockHeld) {
+					lockHeld = true;
+					return callback({});
+				}
+				return typeof rest[0] === 'object' ? callback(null) : new Promise<void>(() => {});
+			});
+			vi.stubGlobal('window', { localStorage: undefined });
+			vi.stubGlobal('navigator', { locks: { request } });
+			vi.stubGlobal('BroadcastChannel', LoopbackBroadcastChannel);
+			LoopbackBroadcastChannel.posted.length = 0;
+			const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+			const fetchImpl: typeof fetch = async (input, init) =>
+				toRequest(input, init).url.endsWith('/api/sync-resource/stream')
+					? sseResponse((controller) => streams.push(controller))
+					: connectResponse('notes:scope');
+			const owner = createRuntime({
+				batchConnect: false,
+				cache,
+				fetch: fetchImpl,
+				createId: (p) => `${p}-owner`
+			});
+			const follower = createRuntime({
+				batchConnect: false,
+				cache,
+				fetch: fetchImpl,
+				createId: (p) => `${p}-follower`
+			});
+			const ownerReceived: SyncEnvelope[] = [];
+			const followerReceived: SyncEnvelope[] = [];
+			const subscribe = (runtime: ReturnType<typeof createRuntime>, received: SyncEnvelope[]) =>
+				runtime.transport.subscribe({
+					url: '/notes/events',
+					connectUrl: '/notes/connect',
+					managerKey: 'notes',
+					scope: 'notes-client-scope',
+					signal: new AbortController().signal,
+					onEnvelope: (envelope) => received.push(envelope)
+				});
+			try {
+				expect((await subscribe(owner, ownerReceived)).isOk()).toBe(true);
+				expect((await subscribe(follower, followerReceived)).isOk()).toBe(true);
+				expect(streams).toHaveLength(1);
+
+				const sent = Array.from(
+					{ length: 4 },
+					(_, index): SyncEnvelope => ({
+						managerKey: 'notes',
+						scope: 'notes:scope',
+						cursor: `cursor-${index}`,
+						changes: [
+							{
+								type: 'itemAdded',
+								id: `note-${index}`,
+								value: { id: `note-${index}`, title: 'é😀'.repeat(index === 3 ? 2000 : 1) }
+							}
+						]
+					})
+				);
+				const chunked = encodeSyncEnvelopeSseFrames(sent[3] as SyncEnvelope, {
+					maxEnvelopeBytes: MAX_CHUNKED_SYNC_BYTES,
+					maxFrameBytes: 8192
+				});
+				expect(chunked?.length).toBeGreaterThan(1);
+				for (const envelope of sent.slice(0, 3)) {
+					streams[0]?.enqueue(encodeSseFrame('sync', envelope));
+				}
+				for (const frame of chunked ?? []) {
+					streams[0]?.enqueue(frame);
+				}
+				await waitFor(() => followerReceived.length === sent.length);
+				expect(ownerReceived).toEqual(sent);
+				expect(followerReceived).toEqual(sent);
+				const relayed = LoopbackBroadcastChannel.posted.filter(({ data }) => typeof data === 'string');
+				expect(relayed.map(({ name, data }) => [name, data])).toEqual(
+					sent.map((envelope) => ['sync-resource:v2:transport', JSON.stringify(envelope)])
+				);
+			} finally {
+				owner.dispose();
+				follower.dispose();
+			}
+		});
 	});
 });
 
@@ -547,4 +633,31 @@ async function waitFor(condition: () => boolean): Promise<void> {
 		await Promise.resolve();
 	}
 	throw new Error('Condition was not reached.');
+}
+
+class LoopbackBroadcastChannel {
+	private static readonly open = new Set<LoopbackBroadcastChannel>();
+	static readonly posted: { readonly name: string; readonly data: unknown }[] = [];
+	onmessage: ((message: { readonly data: unknown }) => void) | null = null;
+
+	private readonly name: string;
+
+	constructor(name: string) {
+		this.name = name;
+		LoopbackBroadcastChannel.open.add(this);
+	}
+
+	postMessage(data: unknown): void {
+		LoopbackBroadcastChannel.posted.push({ name: this.name, data });
+		const copy = structuredClone(data);
+		for (const peer of LoopbackBroadcastChannel.open) {
+			if (peer !== this && peer.name === this.name) {
+				queueMicrotask(() => peer.onmessage?.({ data: copy }));
+			}
+		}
+	}
+
+	close(): void {
+		LoopbackBroadcastChannel.open.delete(this);
+	}
 }

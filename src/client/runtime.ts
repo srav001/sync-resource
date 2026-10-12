@@ -1,5 +1,5 @@
 import { isFiniteNumber, isRecord, isString } from '../shared/guards.ts';
-import { isSyncEnvelope, isSyncHttpResult, normalizeSyncError } from '../shared/index.ts';
+import { isSyncHttpResult, normalizeSyncError } from '../shared/index.ts';
 import { MAX_BATCH_CONNECTS } from '../shared/protocol.ts';
 import { err, ok } from '../shared/result.ts';
 import type { SyncResult } from '../shared/result.ts';
@@ -77,26 +77,13 @@ const LOGICAL_CONNECT_TIMEOUT_MS = 30_000;
 const MAX_REGISTRATION_HOLD_MS = 2_000;
 const MAX_STREAM_RECONNECT_MS = 60_000;
 const MAX_REGISTRATION_RETRY_MS = 30_000;
-const BROADCAST_CHANNEL = 'sync-resource:v1:transport';
+const BROADCAST_CHANNEL = 'sync-resource:v2:transport';
 const CACHE_SWEEP_DELAY_MS = 60_000;
 const CACHE_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const CACHE_SWEEP_KEY = 'sync-resource:cache-sweep';
 const LOCK_NAME = 'sync-resource:transport';
 const MAX_PENDING_SYNC_CHUNKS = 32;
 const sseTextEncoder = new TextEncoder();
-type BroadcastPayload =
-	| { readonly type: 'envelope'; readonly envelope: unknown }
-	| { readonly type: 'reconnected'; readonly hydrate?: boolean };
-
-function isBroadcastPayload<TValue>(value: TValue): value is TValue & BroadcastPayload {
-	return (
-		isRecord(value) &&
-		((value.type === 'envelope' && 'envelope' in value) ||
-			(value.type === 'reconnected' &&
-				(value.hydrate === undefined || value.hydrate === true || value.hydrate === false)))
-	);
-}
-
 function backoffDelay(attempt: number, maxMs: number): number {
 	const baseDelay = Math.min(1000 * Math.pow(2, attempt), maxMs);
 	const jitteredDelay = baseDelay + (Math.random() * 2 - 1) * baseDelay * 0.2;
@@ -595,15 +582,15 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return;
 		}
 		this.broadcast = new BroadcastChannel(BROADCAST_CHANNEL);
+		// Followers receive the owner's envelope JSON, a string copy that is cheaper than a structured clone of the object.
 		this.broadcast.onmessage = (message) => {
-			const data = message.data;
-			if (!isBroadcastPayload(data)) {
-				return;
-			}
-			if (data.type === 'envelope' && isSyncEnvelope(data.envelope)) {
-				this.dispatchEnvelope(data.envelope);
-			}
-			if (data.type === 'reconnected') {
+			const data: unknown = message.data;
+			if (isString(data)) {
+				const envelope = parseSyncEnvelopeJson(data);
+				if (envelope) {
+					this.dispatchEnvelope(envelope);
+				}
+			} else if (isRecord(data) && data.type === 'reconnected') {
 				this.handleReconnect(data.hydrate !== false);
 			}
 		};
@@ -677,9 +664,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			const readResult = await readSseStream(
 				response.body.getReader(),
 				controller.signal,
-				(envelope) => {
+				(envelope, json) => {
 					this.dispatchEnvelope(envelope);
-					this.broadcast?.postMessage({ type: 'envelope', envelope });
+					this.broadcast?.postMessage(json);
 				},
 				() => controller.abort()
 			);
@@ -970,7 +957,7 @@ function readOwner(): { readonly ownerId: string; readonly expires: number } | u
 async function readSseStream(
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	signal: AbortSignal,
-	onEnvelope: (envelope: SyncEnvelope) => void,
+	onEnvelope: (envelope: SyncEnvelope, json: string) => void,
 	onTerminalFailure: () => void
 ): Promise<SyncResult<void, SyncError>> {
 	let buffer = '';
@@ -996,9 +983,12 @@ async function readSseStream(
 					terminalFailure = true;
 					return err('payload_too_large', 'Sync SSE frame exceeded max size.');
 				}
-				const envelope = parseSseEnvelope(eventText, pendingSyncChunks);
-				if (envelope) {
-					onEnvelope(envelope);
+				const json = parseSseJson(eventText, pendingSyncChunks);
+				if (json !== undefined) {
+					const envelope = parseSyncEnvelopeJson(json);
+					if (envelope) {
+						onEnvelope(envelope, json);
+					}
 				}
 				eventEnd = buffer.indexOf('\n\n');
 			}
@@ -1042,28 +1032,26 @@ function exceedsFrameBound(text: string, extraBytes: number): boolean {
 	);
 }
 
-function parseSseEnvelope(
+function parseSseJson(
 	eventText: string,
 	pendingSyncChunks: Map<string, PendingSyncEnvelopeChunks>
-): SyncEnvelope | undefined {
+): string | undefined {
 	const { eventName, data } = parseSseEvent(eventText);
 	if (!data) {
 		return undefined;
 	}
 	if (eventName === 'sync') {
-		return parseSyncEnvelopeJson(data);
+		return data;
 	}
-	if (eventName !== 'sync-chunk') {
-		return undefined;
-	}
-
-	return acceptSyncEnvelopeChunk(parseSyncEnvelopeChunkJson(data), pendingSyncChunks);
+	return eventName === 'sync-chunk'
+		? acceptSyncEnvelopeChunk(parseSyncEnvelopeChunkJson(data), pendingSyncChunks)
+		: undefined;
 }
 
 function acceptSyncEnvelopeChunk(
 	chunk: SyncEnvelopeChunk | undefined,
 	pendingSyncChunks: Map<string, PendingSyncEnvelopeChunks>
-): SyncEnvelope | undefined {
+): string | undefined {
 	if (
 		!chunk ||
 		chunk.type !== 'sync-chunk' ||
@@ -1110,7 +1098,7 @@ function acceptSyncEnvelopeChunk(
 		return undefined;
 	}
 
-	return parseSyncEnvelopeJson(serialized);
+	return serialized;
 }
 
 function pruneOldestPendingSyncChunk(pendingSyncChunks: Map<string, PendingSyncEnvelopeChunks>): void {
