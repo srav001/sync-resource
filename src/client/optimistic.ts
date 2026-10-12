@@ -6,7 +6,7 @@ import type { PageState, ReconcileConfig } from './types.ts';
 const MAX_FAMILIES = 8;
 
 export type WriteMethod = 'add' | 'mutate' | 'delete';
-export type PendingState = 'local_accepted' | 'acked_waiting_delta';
+type PendingState = 'local_accepted' | 'acked_waiting_delta';
 
 export interface PendingCommand {
 	readonly mutationId: string;
@@ -58,7 +58,7 @@ export interface OptimisticState<TItem = unknown, TData = unknown, TQuery = unkn
 	cursor?: string;
 }
 
-export interface CachedPageFamilyState<TQuery = unknown, TMeta = unknown> {
+interface CachedPageFamilyState<TQuery = unknown, TMeta = unknown> {
 	readonly key: string;
 	readonly query: TQuery;
 	readonly meta?: TMeta;
@@ -432,7 +432,7 @@ export function reconcileFromConfig<TItem, TQuery, TInput, TParams>(
 	return reconcile;
 }
 
-export function applyPatch<TCurrent, TPatch>(current: TCurrent, patch: TPatch) {
+function applyPatch<TCurrent, TPatch>(current: TCurrent, patch: TPatch) {
 	const base = isRecord(current) ? { ...current } : {};
 	if (!isRecord(patch)) {
 		return base;

@@ -101,8 +101,8 @@ export interface StoreCacheOptions {
 }
 
 export type ParamsOf<TManager extends ManagerTypeShape> = TManager['params'];
-export type MethodsOf<TManager extends ManagerTypeShape> = TManager['methods'];
-export type MethodOf<TManager extends ManagerTypeShape, TKey extends string> = TKey extends keyof MethodsOf<TManager>
+type MethodsOf<TManager extends ManagerTypeShape> = TManager['methods'];
+type MethodOf<TManager extends ManagerTypeShape, TKey extends string> = TKey extends keyof MethodsOf<TManager>
 	? NonNullable<MethodsOf<TManager>[TKey]>
 	: never;
 export type QueryOf<TManager extends ManagerTypeShape, TKey extends string> =
@@ -112,7 +112,7 @@ export type InputOf<TManager extends ManagerTypeShape, TKey extends string> =
 export type OutputOf<TManager extends ManagerTypeShape, TKey extends string> =
 	MethodOf<TManager, TKey> extends MethodType<unknown, unknown, infer TOutput> ? TOutput : never;
 
-export type PageOutputItem<TOutput> = TOutput extends { readonly items: readonly (infer TItem)[] } ? TItem : never;
+type PageOutputItem<TOutput> = TOutput extends { readonly items: readonly (infer TItem)[] } ? TItem : never;
 export type PageOutputMeta<TOutput> = TOutput extends { readonly meta?: infer TMeta } ? TMeta : never;
 export type CollectionItem<TManager extends ManagerTypeShape> = 'list' extends keyof MethodsOf<TManager>
 	? PageOutputItem<OutputOf<TManager, 'list'>>
@@ -168,7 +168,7 @@ export type NeedsReconcile<TManager extends ManagerTypeShape> = 'list' extends k
 		: true
 	: false;
 
-export interface StoreConfigBase<TManager extends ManagerTypeShape> {
+interface StoreConfigBase<TManager extends ManagerTypeShape> {
 	readonly key: TManager['key'];
 	getParams(): ParamsOf<TManager>;
 	getUrl(params: ParamsOf<TManager>): string;
