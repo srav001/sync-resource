@@ -3,8 +3,10 @@
 Typed, server-authoritative synchronization: cached reads, optimistic writes, realtime updates, replay, repair, and
 mutation finality.
 
-> **Coding agents:** read [AGENTS.md](./AGENTS.md) first. It routes you to the correct usage guide and source layer. In
-> an installed project it is at `node_modules/sync-resource/AGENTS.md`, beside this README and `docs/`.
+```text
+Agents: read AGENTS.md first. It routes you to the correct usage guide and source layer.
+In an installed project it is at node_modules/sync-resource/AGENTS.md, beside this README and docs/.
+```
 
 - **Effect-native server.** `sync-resource/server/effect` takes Effect v4 handlers, typed failures, services, and
   interruption, and mounts on Effect's `HttpRouter`.
