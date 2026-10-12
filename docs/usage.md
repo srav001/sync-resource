@@ -875,6 +875,9 @@ Rules:
 - The tab that owns the physical stream sends its first `/connect` registrations after the first stream attempt
   resolves (opened or failed), so a registration is never sent twice for one stream. Follower tabs register immediately.
   A `subscribe` call therefore resolves no earlier than the owner's first stream response.
+- The owner tab relays each envelope's JSON text to follower tabs on the `sync-resource:v2:transport` BroadcastChannel.
+  A follower parses and validates it like a stream frame. Tabs running a different relay version use a different channel,
+  so they share no envelopes until the older tab reloads.
 - A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. The error surfaces as the store error, not in `hydrate()`'s result.
 - Registrations are batched by default; see [Batched registration](#batched-registration).
 - Replay/reset remains per logical scope through durable outbox cursors. An unknown cursor, or more pending envelopes than
@@ -895,9 +898,9 @@ Rules:
   `replay_failed` reset when possible, and closes the stream so reconnect/repair owns recovery. Physical disconnect
   cancels pending replay through the physical response stream's owned signal, clears replay buffers, and is normal
   termination rather than a reported failure.
-- Ping events are ignored on the client hot path before JSON parsing.
-- Malformed chunk frames—including fractional indexes/counts—broadcast payloads, and non-finite owner-lock expiries are
-  discarded before they affect client state.
+- Ping events are ignored.
+- Malformed chunk frames—including fractional indexes/counts—, relayed envelope JSON, and non-finite owner-lock expiries
+  are discarded before they affect client state.
 - Server streams use bounded event size, bounded backpressure, heartbeat, stale transport TTL, and per-transport/IP limits.
   Request abort, reader cancellation, oversize, backpressure, and enqueue failure all perform the same idempotent cleanup.
 - Client SSE limits count UTF-8 bytes, each concurrently read stream owns its stateful decoder, and terminal protocol
@@ -1405,6 +1408,9 @@ Rules:
 - `restore()` only loads authoritative cache. In-memory pending commands are preserved, but pending commands are not restored from IndexedDB.
 - `connect()` attaches realtime from the current cached cursor without forcing a server refresh.
 - IndexedDB stores only last-success authoritative state. Optimistic pending commands stay memory-only.
+- A snapshot holds `baseData`, the loaded `baseItems` once, and per query family its ids, page records (cursors, coverage,
+  size, source), sort flag and meta, plus the active family and cursor. It is stored under `<scope>:view:v2`, so a
+  snapshot saved in an older format sits under another key, is never read, and the store refetches.
 - Cache writes use one timer, armed by the first dirty event and set to 250 ms. Later dirty events do not reset it, so bursts and continuous realtime traffic write at most once per 250 ms. Events that arrive during an in-flight write arm the next timer after the current write completes. The store passes plain values to the cache adapter; the adapter/library owns IndexedDB storage details.
 
 A common wrapper component can derive UI state from `data/items`, `isHydrating()`, `isRefreshing()`, `isPending()`, and `error()`. Do not duplicate derived booleans in the store unless there is a real runtime reason.
@@ -1560,7 +1566,12 @@ Rules:
 - `loadMore()` reads the default family's last `cursorOut` and injects the cursor internally.
 - `store.list(query)` returns a scoped handle with `items()`, `meta()`, `pages()`, `refresh()`, and `loadMore()` for an additional query family.
 - UI code does not pass cursor, page index, batch index, family key, or loaded ids.
-- The store keeps one normalized entity cache and many page families.
+- The store keeps one normalized entity cache and many page families. A family keeps its loaded ids and items in two
+  aligned arrays and records only each page's size, so `pages()` derives each page's `ids` from the family.
+- Ids are unique across a family's pages: a page that repeats an id the family already holds, such as one a realtime add
+  inserted, leaves the existing entry in place.
+- Visible order is `compare` order when `compare` is set. Items that compare equal, and every item when `compare` is not
+  set, keep the family's page order.
 - `listMeta()` returns typed metadata from the default family, such as `totalCount` or other query-level summary values.
 - First-page responses should return `meta` when the UI needs exact query-level counts.
 - Load-more responses may omit `meta` or return `undefined`; the store preserves that family's previous metadata.

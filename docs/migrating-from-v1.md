@@ -283,6 +283,7 @@ raise `stream.idleTtlMs` or use a durable outbox; custom outboxes are not pruned
 - The client discards malformed SSE chunk frames and counts SSE size limits in UTF-8 bytes.
 - Effect manager routes answer JSON responses as buffered bodies with the same status and headers; only the shared stream
   stays a stream.
+- The cache snapshot format changed, so old browser caches are refetched once.
 - Adapters (`sync-resource/client/react`, `solid`, `vue`) are unchanged.
 - TypeScript signatures that only widened (`Validator.parse`, `OperationMeta`, telemetry contexts now extend
   `OperationExecution`) need no change.
