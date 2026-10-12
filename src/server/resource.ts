@@ -40,10 +40,7 @@ export function takesOptionsOnly(
 
 type NoExtraKeys<TValue, TAllowed> = TValue & Record<Exclude<keyof TValue, keyof TAllowed>, never>;
 
-type GetHandlerArgs<TParams extends object, TQuery, TSelf> = [TQuery] extends [never]
-	? { readonly params: TParams; readonly ctx: ResourceHandlerContext; readonly self: TSelf }
-	: { readonly params: TParams; readonly query: TQuery; readonly ctx: ResourceHandlerContext; readonly self: TSelf };
-type ListHandlerArgs<TParams extends object, TQuery, TSelf> = [TQuery] extends [never]
+type QueryHandlerArgs<TParams extends object, TQuery, TSelf> = [TQuery] extends [never]
 	? { readonly params: TParams; readonly ctx: ResourceHandlerContext; readonly self: TSelf }
 	: { readonly params: TParams; readonly query: TQuery; readonly ctx: ResourceHandlerContext; readonly self: TSelf };
 type MutateHandlerArgs<TParams extends object, TQuery, TInput, TSelf> = [TQuery] extends [never]
@@ -55,9 +52,6 @@ type MutateHandlerArgs<TParams extends object, TQuery, TInput, TSelf> = [TQuery]
 			readonly ctx: ResourceHandlerContext;
 			readonly self: TSelf;
 		};
-type DeleteHandlerArgs<TParams extends object, TQuery, TSelf> = [TQuery] extends [never]
-	? { readonly params: TParams; readonly ctx: ResourceHandlerContext; readonly self: TSelf }
-	: { readonly params: TParams; readonly query: TQuery; readonly ctx: ResourceHandlerContext; readonly self: TSelf };
 type MutateBatchItem<TQuery, TInput> = [TQuery] extends [never]
 	? { readonly input: TInput }
 	: { readonly query: TQuery; readonly input: TInput };
@@ -67,14 +61,14 @@ export interface GetMethodInput<TParams extends object, TQuery, TOutput, TSelf> 
 	readonly output: AnySchema<TOutput>;
 	readonly query?: AnySchema<TQuery>;
 	readonly input?: never;
-	handler(this: void, args: GetHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
 }
 
 export interface ListMethodInput<TParams extends object, TQuery, TOutput, TSelf> {
 	readonly query?: AnySchema<TQuery>;
 	readonly output: AnySchema<TOutput>;
 	readonly input?: never;
-	handler(this: void, args: ListHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
 }
 
 export interface AddMethodInput<TParams extends object, TInput, TOutput, TSelf> {
@@ -119,7 +113,7 @@ export interface DeleteMethodInput<TParams extends object, TQuery, TOutput, TSel
 	readonly query?: AnySchema<TQuery>;
 	readonly output?: AnySchema<TOutput>;
 	readonly input?: never;
-	handler(this: void, args: DeleteHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
 	batchHandler?(
 		this: void,
 		args: {
@@ -134,14 +128,14 @@ export interface GetMethodDefinition<TParams extends object, TQuery, TOutput> {
 	readonly kind: 'get';
 	readonly query?: AnySchema<TQuery>;
 	readonly output: AnySchema<TOutput>;
-	handler(this: void, args: GetHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
 }
 
 export interface ListMethodDefinition<TParams extends object, TQuery, TOutput> {
 	readonly kind: 'list';
 	readonly query?: AnySchema<TQuery>;
 	readonly output: AnySchema<TOutput>;
-	handler(this: void, args: ListHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
 }
 
 export interface AddMethodDefinition<TParams extends object, TInput, TOutput> {
@@ -187,7 +181,7 @@ export interface DeleteMethodDefinition<TParams extends object, TQuery, TOutput>
 	readonly kind: 'delete';
 	readonly query?: AnySchema<TQuery>;
 	readonly output?: AnySchema<TOutput>;
-	handler(this: void, args: DeleteHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
+	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
 	batchHandler?(
 		this: void,
 		args: {
@@ -335,12 +329,7 @@ export type Resource<TParams extends object, TMethods extends ResourceMethodMap>
 	};
 };
 
-type RuntimeDefinition =
-	| GetMethodDefinition<object, unknown, unknown>
-	| ListMethodDefinition<object, unknown, unknown>
-	| AddMethodDefinition<object, unknown, unknown>
-	| MutateMethodDefinition<object, unknown, unknown, unknown>
-	| DeleteMethodDefinition<object, unknown, unknown>;
+type RuntimeDefinition = AnyResourceMethodDefinition;
 
 export type BatchResourceHandlerResult<TOutput> = Awaitable<
 	SyncResult<SyncBatchOutput<ResourceHandlerOk<TOutput>>, SyncError>
