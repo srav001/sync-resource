@@ -22,6 +22,7 @@ import type {
 	InferSchemaOutput,
 	ManagerHttpHandlers,
 	ManagerMutationRecord,
+	ManagerOutbox,
 	ManagerOutboxRead,
 	ManagerTelemetryContext,
 	MethodType,
@@ -523,9 +524,7 @@ function adaptManagerOptions<TKey extends string, TResource extends EffectResour
 	base: Context.Context<R>
 ): CreateManagerOptions<TKey, ResourceParams<TResource>, PlainResource<object, ResourceMethodMap>, TContext> {
 	const outbox = options.outbox;
-	const outboxLatestCursor = outbox?.latestCursor;
 	const persistence = options.persistence;
-	const persistenceLatestCursor = persistence?.latestCursor;
 	const realtimeBus = options.realtimeBus;
 	const telemetry = options.telemetry;
 	const telemetryStart = telemetry?.start;
@@ -538,27 +537,23 @@ function adaptManagerOptions<TKey extends string, TResource extends EffectResour
 		runHook(Effect.suspend(make), contextFromEnvironment(execution?.environment, base), execution?.signal);
 	const runFinal = <A>(make: () => Effect.Effect<A, SyncError, R>, execution?: OperationExecution) =>
 		runHook(Effect.suspend(make), contextFromEnvironment(execution?.environment, base));
+	const adaptOutbox = (outbox: EffectManagerOutbox<R>): ManagerOutbox => {
+		const latestCursor = outbox.latestCursor;
+		return {
+			append: (envelope, execution) => runFinal(() => outbox.append(envelope), execution),
+			readAfter: (scope, cursor, limit, execution) =>
+				run(() => outbox.readAfter(scope, cursor, limit), execution),
+			latestCursor: latestCursor && ((scope, execution) => run(() => latestCursor(scope), execution))
+		};
+	};
 	return {
 		...options,
 		resource: options.resource[PlainResourceTypeId] as PlainResource<object, ResourceMethodMap>,
 		authorize: (context, params, execution) => run(() => options.authorize(context, params), execution),
-		outbox: outbox
-			? {
-					append: (envelope, execution) => runFinal(() => outbox.append(envelope), execution),
-					readAfter: (scope, cursor, limit, execution) =>
-						run(() => outbox.readAfter(scope, cursor, limit), execution),
-					latestCursor:
-						outboxLatestCursor && ((scope, execution) => run(() => outboxLatestCursor(scope), execution))
-				}
-			: undefined,
+		outbox: outbox && adaptOutbox(outbox),
 		persistence: persistence
 			? {
-					append: (envelope, execution) => runFinal(() => persistence.append(envelope), execution),
-					readAfter: (scope, cursor, limit, execution) =>
-						run(() => persistence.readAfter(scope, cursor, limit), execution),
-					latestCursor:
-						persistenceLatestCursor &&
-						((scope, execution) => run(() => persistenceLatestCursor(scope), execution)),
+					...adaptOutbox(persistence),
 					readMutation: (scope, mutationId, execution) =>
 						run(() => persistence.readMutation(scope, mutationId), execution),
 					recordMutation: (record, execution) => runFinal(() => persistence.recordMutation(record), execution)
