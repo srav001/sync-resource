@@ -590,15 +590,12 @@ describe('browser runtime registration order', () => {
 							{
 								type: 'itemAdded',
 								id: `note-${index}`,
-								value: { id: `note-${index}`, title: 'é😀'.repeat(index === 3 ? 2000 : 1) }
+								value: { id: `note-${index}`, title: 'é😀'.repeat(index === 3 ? 50_000 : 1) }
 							}
 						]
 					})
 				);
-				const chunked = encodeSyncEnvelopeSseFrames(sent[3] as SyncEnvelope, {
-					maxEnvelopeBytes: MAX_CHUNKED_SYNC_BYTES,
-					maxFrameBytes: 8192
-				});
+				const chunked = encodeSyncEnvelopeSseFrames(sent[3] as SyncEnvelope, MAX_CHUNKED_SYNC_BYTES);
 				expect(chunked?.length).toBeGreaterThan(1);
 				for (const envelope of sent.slice(0, 3)) {
 					streams[0]?.enqueue(encodeSseFrame('sync', envelope));
