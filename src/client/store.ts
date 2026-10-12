@@ -237,7 +237,7 @@ export interface StoreRuntimeApi<TManager extends ManagerTypeShape> extends Stor
 	): Promise<SyncResult<OutputOf<TManager, 'delete'>, SyncError>>;
 }
 
-export type StoreActionMethodName =
+type StoreActionMethodName =
 	| 'restore'
 	| 'hydrate'
 	| 'connect'

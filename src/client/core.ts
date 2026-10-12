@@ -10,7 +10,6 @@ export { bindStoreEvents, type StoreAdapterEventSinks, type StoreAdapterEventSou
 export {
 	createStore,
 	type ClientStore,
-	type StoreActionMethodName,
 	type StoreActionMethods,
 	type StoreBase,
 	type StoreEventHandlers,
@@ -54,8 +53,6 @@ export type {
 	NeedsReconcile,
 	OutputOf,
 	PageState,
-	PageOutputMeta,
-	ParamsOf,
 	QueryOf,
 	ReconcileBuilder,
 	ReconcileConfig,

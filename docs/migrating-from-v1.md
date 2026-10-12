@@ -277,7 +277,8 @@ import { isOk, Result } from 'sync-resource/client/core';
 Sync Resource no longer uses any of these. Remove them from your code.
 
 - **Client core:** `createRepairScheduler`, `planRepair`, `noRepairNeeded`, `RepairPlan` and `RepairScheduler`. The store
-  repairs itself after a reset or a stale page, and `repair()` is the manual call.
+  repairs itself after a reset or a stale page, and `repair()` is the manual call. The types `StoreActionMethodName`,
+  `ParamsOf` and `PageOutputMeta` are no longer exported.
 - **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
   `stale` is the one staleness flag.
 - **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.

@@ -70,7 +70,7 @@ export interface StoreCacheOptions {
 	readonly ttlMs?: number;
 }
 
-export type ParamsOf<TManager extends ManagerTypeShape> = TManager['params'];
+type ParamsOf<TManager extends ManagerTypeShape> = TManager['params'];
 type MethodsOf<TManager extends ManagerTypeShape> = TManager['methods'];
 type MethodOf<TManager extends ManagerTypeShape, TKey extends string> = TKey extends keyof MethodsOf<TManager>
 	? NonNullable<MethodsOf<TManager>[TKey]>
@@ -83,7 +83,7 @@ export type OutputOf<TManager extends ManagerTypeShape, TKey extends string> =
 	MethodOf<TManager, TKey> extends MethodType<unknown, unknown, infer TOutput> ? TOutput : never;
 
 type PageOutputItem<TOutput> = TOutput extends { readonly items: readonly (infer TItem)[] } ? TItem : never;
-export type PageOutputMeta<TOutput> = TOutput extends { readonly meta?: infer TMeta } ? TMeta : never;
+type PageOutputMeta<TOutput> = TOutput extends { readonly meta?: infer TMeta } ? TMeta : never;
 export type CollectionItem<TManager extends ManagerTypeShape> = 'list' extends keyof MethodsOf<TManager>
 	? PageOutputItem<OutputOf<TManager, 'list'>>
 	: never;
