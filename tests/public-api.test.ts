@@ -58,7 +58,7 @@ describe('public package boundaries', () => {
 			readonly peerDependenciesMeta: Record<string, { readonly optional?: boolean }>;
 		};
 		expect(packageJson.dependencies).toBeUndefined();
-		expect(packageJson.peerDependencies.effect).toBe('>=4.0.3 <5');
+		expect(packageJson.peerDependencies.effect).toBe('>=4.0.0 <5');
 		expect(packageJson.peerDependenciesMeta.effect?.optional).toBe(true);
 	});
 });
