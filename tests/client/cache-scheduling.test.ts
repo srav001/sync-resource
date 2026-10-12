@@ -17,31 +17,17 @@ afterEach(() => {
 });
 
 describe('authoritative cache scheduling', () => {
-	it('writes 250ms after the first dirty event of a hydration', async () => {
-		const system = createSyncTestSystem();
-		system.database.seed('workspace-1', [{ id: 'note-1', title: 'Initial' }]);
-		const store = system.createStore();
-		try {
-			await store.hydrate();
-			expect(system.cache.writes).toHaveLength(0);
-			await vi.advanceTimersByTimeAsync(249);
-			expect(system.cache.writes).toHaveLength(0);
-			await vi.advanceTimersByTimeAsync(1);
-			expect(system.cache.writes).toHaveLength(1);
-		} finally {
-			store.dispose();
-			await system.transport.close();
-		}
-	});
-
-	it('flushes pending authoritative cache state on dispose', async () => {
+	it('flushes pending authoritative cache state on dispose and cancels the scheduled write', async () => {
 		const system = createSyncTestSystem();
 		system.database.seed('workspace-1', [{ id: 'note-1', title: 'Initial' }]);
 		const store = system.createStore();
 		await store.hydrate();
+		expect(system.cache.writes).toHaveLength(0);
+
 		store.dispose();
-		await vi.runAllTimersAsync();
-		expect(system.cache.writes.length).toBeGreaterThan(0);
+		expect(system.cache.writes).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(250);
+		expect(system.cache.writes).toHaveLength(1);
 		await system.transport.close();
 	});
 });

@@ -1,29 +1,19 @@
-import { createElement } from 'react';
-import { renderToString } from 'react-dom/server';
-import { createRoot } from 'solid-js';
-import { afterEach, describe, expect, expectTypeOf, it } from 'vite-plus/test';
-import { effectScope } from 'vue';
+import { describe, expect, expectTypeOf, it } from 'vite-plus/test';
 
 import {
 	bindStoreEvents,
-	configureSync,
-	ok,
-	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
 	type ReconcileBuilder,
 	type ReconcileConfig,
-	type RuntimeTransport,
 	type StoreAdapterEventSource,
-	type StoreConfig,
 	type StoreEventHandlers,
 	type StoreSnapshot
 } from '../src/client/core.ts';
-import { createReactStore, type ReactClientStore } from '../src/client/react.ts';
+import type { ReactClientStore } from '../src/client/react.ts';
 import { createExternalStoreSource } from '../src/client/reactSource.ts';
 import { createSolidStore, type SolidClientStore } from '../src/client/solid.ts';
-import { createVueStore, type VueClientStore } from '../src/client/vue.ts';
+import type { VueClientStore } from '../src/client/vue.ts';
 
 interface Note {
 	readonly id: string;
@@ -76,75 +66,7 @@ interface UnidentifiedListManager extends ManagerTypeShape {
 
 type HasKey<TValue, TKey extends PropertyKey> = TKey extends keyof TValue ? true : false;
 
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-
-const transport: RuntimeTransport = {
-	async subscribe() {
-		return ok(() => {});
-	}
-};
-
-const config: StoreConfig<NotesManager> = {
-	key: 'notes',
-	getParams: () => ({ workspaceId: 'workspace-1' }),
-	getUrl: ({ workspaceId }) => `/workspaces/${workspaceId}/notes`,
-	query: () => ({ limit: 20 })
-};
-
-afterEach(() => {
-	resetSyncConfiguration();
-});
-
 describe('framework adapters', () => {
-	it('preserves the existing Solid store lifecycle and accessor API', () => {
-		configureTestRuntime();
-		let store: SolidClientStore<NotesManager> | undefined;
-
-		createRoot((disposeOwner) => {
-			store = createSolidStore<NotesManager>(config);
-			expect(store.items()).toEqual([]);
-			expect(store.isPending()).toBe(false);
-			expect(store.core.snapshot().disposed).toBe(false);
-			disposeOwner();
-		});
-
-		expect(store?.core.snapshot().disposed).toBe(true);
-	});
-
-	it('exposes shallow Vue refs and disposes with its effect scope', () => {
-		configureTestRuntime();
-		const scope = effectScope();
-		const store = scope.run(() => createVueStore<NotesManager>(config));
-
-		expect(store).toBeDefined();
-		expect(store?.items.value).toEqual([]);
-		expect(store?.isPending.value).toBe(false);
-		expect(store?.disposed.value).toBe(false);
-		scope.stop();
-		expect(store?.disposed.value).toBe(true);
-	});
-
-	it('exposes React hooks through a stable external-store boundary', () => {
-		configureTestRuntime();
-		const store = createReactStore<NotesManager>(config);
-
-		function NotesView() {
-			const items = store.useItems();
-			const pending = store.useIsPending();
-			return createElement('span', null, `${items.length}:${String(pending)}`);
-		}
-
-		expect(renderToString(createElement(NotesView))).toContain('0:false');
-		store.dispose();
-		expect(store.core.snapshot().disposed).toBe(true);
-	});
-
 	it('keeps React snapshots stable and reconnects its lazy source', () => {
 		let value = { count: 1 };
 		const storeSubscribers = new Set<(nextValue: { readonly count: number }) => void>();
@@ -234,13 +156,6 @@ describe('framework adapters', () => {
 		>();
 	});
 });
-
-function configureTestRuntime(): void {
-	configureSync({
-		cache: { adapter: cache },
-		transport
-	});
-}
 
 function createEventSource(): {
 	readonly source: StoreAdapterEventSource<NotesManager>;

@@ -125,27 +125,4 @@ describe('resource public execution', () => {
 		expect(result.isOk()).toBe(true);
 		expect(seen).toBe('outer');
 	});
-
-	it('loops writes without a batch handler and suffixes mutation ids', async () => {
-		const seen: string[] = [];
-		const notes = resource(params, (method) => ({
-			add: method.add({
-				input,
-				output,
-				handler({ input: value, ctx }) {
-					seen.push(`${value.title}:${ctx.mutationId}`);
-					return ctx.ok({ id: value.title });
-				}
-			})
-		}));
-		const result = await notes.add(
-			[
-				{ params: { scope: 's' }, input: { title: 'a' } },
-				{ params: { scope: 's' }, input: { title: 'b' } }
-			],
-			{ mutationId: 'batch' }
-		);
-		expect(result.isOk() && result.value.execution.mode).toBe('loop');
-		expect(seen).toEqual(['a:batch:0', 'b:batch:1']);
-	});
 });

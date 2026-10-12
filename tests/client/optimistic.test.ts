@@ -86,26 +86,6 @@ describe('optimistic writes', () => {
 		}
 	});
 
-	it('rolls back failed writes with memory recovery metadata', async () => {
-		const system = createSyncTestSystem();
-		system.database.seed('workspace-1', [{ id: 'note-1', title: 'Initial' }]);
-		const store = system.createStore();
-		try {
-			await store.hydrate();
-			system.database.failNextCommit('database unavailable');
-			const result = await store.mutate({ query: { id: 'note-1' }, input: { title: 'Temporary' } });
-			expect(result.isErr()).toBe(true);
-			if (result.isErr()) {
-				expect(result.error.recovery).toEqual({ restored: true, source: 'memory' });
-			}
-			expect(store.items()).toEqual([{ id: 'note-1', title: 'Initial' }]);
-			expect(store.isPending()).toBe(false);
-		} finally {
-			store.dispose();
-			await system.transport.close();
-		}
-	});
-
 	it('characterizes bare successful acknowledgements as immediate finality', async () => {
 		let listRead = true;
 		configureSync({

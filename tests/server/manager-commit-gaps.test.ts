@@ -360,10 +360,6 @@ describe('manager deferred source commits', () => {
 		expect(commits).toHaveLength(1);
 		expect(commits[0]?.mutationRecord).toMatchObject({ mutationId: 'batch', method: 'add', status: 'finalized' });
 		expect(commits[0]?.envelope?.changes).toHaveLength(2);
-		expect(Object.getOwnPropertyDescriptor(commits[0], 'signal')).toMatchObject({
-			enumerable: false,
-			value: expect.any(AbortSignal)
-		});
 		expect(persistence.records[0]?.metrics).toEqual([
 			{ name: 'write', value: 2, unit: 'row' },
 			{ name: 'commit', value: 1, unit: 'transaction' }

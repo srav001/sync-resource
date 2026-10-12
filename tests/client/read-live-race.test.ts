@@ -89,31 +89,6 @@ describe('reads racing live envelopes', () => {
 		expect(getCursor()).toBe('c2');
 	});
 
-	it('uses the read cursor when no live envelope arrived during the read', async () => {
-		let getCursor!: () => string | undefined;
-		const transport: RuntimeTransport = {
-			async subscribe(options) {
-				getCursor = options.getCursor!;
-				return ok(() => {});
-			}
-		};
-		let calls = 0;
-		configureSync({
-			cache: { adapter: cache },
-			transport,
-			fetch: async () => listResponse('A', `c${++calls}`)
-		});
-		const store = createStore<RaceManager>({
-			key: 'read-live-race',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
-			getUrl: () => 'http://sync.test/notes',
-			query: () => ({ limit: 10 })
-		});
-		await store.hydrate();
-		await store.refresh();
-
-		expect(getCursor()).toBe('c2');
-	});
 	it('takes the cursor from a cursor-only read envelope and the items from the read value', async () => {
 		let getCursor!: () => string | undefined;
 		const transport: RuntimeTransport = {

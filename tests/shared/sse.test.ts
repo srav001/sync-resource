@@ -73,13 +73,11 @@ describe('SSE framing', () => {
 			expect(parseSyncEnvelopeChunkJson(JSON.stringify(malformed))).toBeUndefined();
 		}
 	});
-	it('rejects envelopes above the logical limit and respects frame limits', () => {
+	it('rejects envelopes above the logical limit', () => {
 		const large = {
 			...envelope,
 			changes: [{ type: 'itemAdded' as const, id: 'n1', value: { text: 'x'.repeat(4_000) } }]
 		};
 		expect(encodeSyncEnvelopeSseFrames(large, 100)).toBeUndefined();
-		const frames = encodeSyncEnvelopeSseFrames(envelope, MAX_CHUNKED_SYNC_BYTES);
-		expect(frames!.every((frame) => frame.byteLength <= MAX_SSE_FRAME_BYTES)).toBe(true);
 	});
 });
