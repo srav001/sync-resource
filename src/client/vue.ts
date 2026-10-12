@@ -1,5 +1,6 @@
 import { computed, getCurrentScope, onScopeDispose, shallowRef, type ComputedRef, type ShallowRef } from 'vue';
 
+import type { ValueRecord } from '../shared/guards.ts';
 import { bindStoreEvents } from './adapter.ts';
 import type {
 	ClientStore,
@@ -46,10 +47,6 @@ export interface VueStoreListHandle<TManager extends ManagerTypeShape> {
 	readonly pages: ComputedRef<StoreSnapshot<TManager>['pages']>;
 	refresh(): ReturnType<StoreListHandle<TManager>['refresh']>;
 	loadMore(): ReturnType<StoreListHandle<TManager>['loadMore']>;
-}
-
-interface VueAdapterMethods<TValue = unknown> {
-	readonly [key: string]: TValue;
 }
 
 export type VueClientStore<TManager extends ManagerTypeShape> = {
@@ -153,7 +150,7 @@ export function createVueStore<TManager extends ManagerTypeShape>(
 		onScopeDispose(dispose);
 	}
 
-	const api: VueAdapterMethods = {
+	const api: ValueRecord = {
 		core,
 		snapshot,
 		pending,

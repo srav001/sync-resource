@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
+import type { ValueRecord } from '../shared/guards.ts';
 import type {
 	ClientStore,
 	CollectionMeta,
@@ -45,10 +46,6 @@ export interface ReactStoreListSnapshot<TManager extends ManagerTypeShape> {
 	readonly pages: StoreSnapshot<TManager>['pages'];
 	refresh(): ReturnType<StoreListHandle<TManager>['refresh']>;
 	loadMore(): ReturnType<StoreListHandle<TManager>['loadMore']>;
-}
-
-interface ReactAdapterMethods<TValue = unknown> {
-	readonly [key: string]: TValue;
 }
 
 export type ReactClientStore<TManager extends ManagerTypeShape> = {
@@ -131,7 +128,7 @@ export function createReactStore<TManager extends ManagerTypeShape>(
 		};
 	}
 
-	const api: ReactAdapterMethods = {
+	const api: ValueRecord = {
 		core,
 		useSnapshot: () => useSource(snapshotSource),
 		usePending: () => useSource(pendingSource),

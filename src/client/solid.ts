@@ -1,5 +1,6 @@
 import { createSignal, onCleanup, type Accessor } from 'solid-js';
 
+import type { ValueRecord } from '../shared/guards.ts';
 import type {
 	ClientStore,
 	CollectionMeta,
@@ -63,10 +64,6 @@ export interface SolidStoreListHandle<TManager extends ManagerTypeShape> {
 	pages(): StoreSnapshot<TManager>['pages'];
 	refresh(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
 	loadMore(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
-}
-
-interface SolidAdapterMethods<TValue = unknown> {
-	readonly [key: string]: TValue;
 }
 
 type SolidStoreWithAdd<TManager extends ManagerTypeShape> = 'add' extends keyof TManager['methods']
@@ -204,7 +201,7 @@ export function createSolidStore<TManager extends ManagerTypeShape>(
 
 	onCleanup(dispose);
 
-	const api: SolidAdapterMethods = {
+	const api: ValueRecord = {
 		core,
 		snapshot,
 		pending,
