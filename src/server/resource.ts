@@ -1,16 +1,22 @@
 import { isRecord, type ValueRecord } from '../shared/guards.ts';
-import { isSyncSignal } from '../shared/index.ts';
-import { err, ok, type SyncResult } from '../shared/result.js';
-import { normalizeSyncError, syncError, type SyncError } from './errors.js';
-import { withCommitExecution } from './executionState.js';
-import { callHook } from './hook.js';
+import {
+	normalizeSyncError,
+	syncError,
+	type AnySchema,
+	type CostMetric,
+	type InferSchemaOutput,
+	type SyncError
+} from '../shared/index.ts';
+import { isSyncSignal } from '../shared/protocol.ts';
+import { err, ok, type SyncResult } from '../shared/result.ts';
+import { callHook } from './hook.ts';
 import type {
-	AnySchema,
 	Awaitable,
-	CostMetric,
-	InferSchemaOutput,
 	MethodType,
+	OperationExecution,
 	OperationOptions,
+	ResourceCommit,
+	ResourceCommitContext,
 	ResourceExecution,
 	ResourceHandlerContext,
 	ResourceHandlerOk,
@@ -21,8 +27,8 @@ import type {
 	ResourceOptions,
 	ResourceTelemetryContext,
 	SyncBatchOutput
-} from './types.js';
-import { parseSchema } from './validator.js';
+} from './types.ts';
+import { parseSchema } from './validator.ts';
 
 export type MethodKind = 'get' | 'list' | 'add' | 'mutate' | 'delete';
 
@@ -341,7 +347,7 @@ interface ExecutionState {
 	getAbortError(): SyncError;
 }
 
-interface InternalOperationOptions extends OperationOptions {
+export interface InternalOperationOptions extends OperationOptions {
 	readonly deferSourceCommit?: boolean;
 }
 
@@ -462,9 +468,8 @@ export function resource<TParamsSchema extends AnySchema<object>, const TMethods
 	for (const kind of methodKinds(runtimeMethods)) {
 		const definition = runtimeMethods[kind];
 		if (definition) {
-			const execute = isWriteMethodKind(kind) ? executeWrite : executeSingle;
 			calls[kind] = <TArgs>(args: TArgs, callOptions?: OperationOptions) =>
-				execute(params, runtimeMethods, definition, args, callOptions, options);
+				executeMethod(params, runtimeMethods, definition, args, callOptions, options);
 		}
 	}
 
@@ -482,7 +487,7 @@ export function resource<TParamsSchema extends AnySchema<object>, const TMethods
 	} as never;
 }
 
-async function executeWrite<TArgs>(
+async function executeMethod<TArgs>(
 	paramsSchema: AnySchema<object>,
 	methods: RuntimeDefinitions,
 	definition: RuntimeDefinition,
@@ -490,7 +495,7 @@ async function executeWrite<TArgs>(
 	options: OperationOptions | undefined,
 	resourceOptions: ResourceOptions | undefined
 ): Promise<SyncResult<ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>> {
-	if (!Array.isArray(args)) {
+	if (!Array.isArray(args) || !isWriteMethodKind(definition.kind)) {
 		return executeSingle(paramsSchema, methods, definition, args, options, resourceOptions);
 	}
 
@@ -544,13 +549,13 @@ async function executeWrite<TArgs>(
 	});
 }
 
-async function executeBatch(
-	paramsSchema: AnySchema<object>,
-	definition: RuntimeDefinitionWithBatchHandler,
-	args: readonly unknown[],
+// Every step reports its own failure through the telemetry and error hooks here, once.
+async function runOperation<TOutput extends Committable>(
+	definition: RuntimeDefinition,
 	options: OperationOptions | undefined,
-	resourceOptions: ResourceOptions | undefined
-): Promise<SyncResult<SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>> {
+	resourceOptions: ResourceOptions | undefined,
+	run: (execution: ExecutionState) => Promise<SyncResult<TOutput, SyncError>>
+): Promise<SyncResult<TOutput, SyncError>> {
 	const execution = createExecution(options);
 	const context = {
 		resource: resourceOptions?.name ?? 'resource',
@@ -561,44 +566,13 @@ async function executeBatch(
 	};
 	try {
 		await callHook(() => resourceOptions?.telemetry?.start?.(context));
-
-		const parsed = parseBatchArgs(paramsSchema, definition, args);
-		if (parsed.isErr()) {
-			await reportResourceError(resourceOptions, context, parsed.error);
-			return parsed;
+		const result = await run(execution);
+		if (result.isErr()) {
+			await reportResourceError(resourceOptions, context, result.error);
+			return result;
 		}
-
-		if (execution.exec.signal.aborted) {
-			const abortError = execution.getAbortError();
-			await reportResourceError(resourceOptions, context, abortError);
-			return err(abortError);
-		}
-
-		const handlerResult = await callBatchHandler(
-			definition,
-			parsed.value.params,
-			parsed.value.items,
-			execution.exec
-		);
-		if (handlerResult.isErr()) {
-			await reportResourceError(resourceOptions, context, handlerResult.error);
-			return handlerResult;
-		}
-
-		const outputResult = validateBatchOutput(definition.output, handlerResult.value);
-		if (outputResult.isErr()) {
-			await reportResourceError(resourceOptions, context, outputResult.error);
-			return outputResult;
-		}
-
-		const committedBatch = await commitBatchSourceIfNeeded(outputResult.value, options, execution.exec);
-		if (committedBatch.isErr()) {
-			await reportResourceError(resourceOptions, context, committedBatch.error);
-			return committedBatch;
-		}
-
-		await callHook(() => resourceOptions?.telemetry?.success?.(context, committedBatch.value.metrics ?? []));
-		return ok(committedBatch.value);
+		await callHook(() => resourceOptions?.telemetry?.success?.(context, result.value.metrics ?? []));
+		return result;
 	} catch (cause) {
 		const errorValue = execution.exec.signal.aborted ? execution.getAbortError() : normalizeSyncError(cause);
 		await reportResourceError(resourceOptions, context, errorValue);
@@ -606,6 +580,42 @@ async function executeBatch(
 	} finally {
 		execution.cleanup();
 	}
+}
+
+function executeBatch(
+	paramsSchema: AnySchema<object>,
+	definition: RuntimeDefinitionWithBatchHandler,
+	args: readonly unknown[],
+	options: OperationOptions | undefined,
+	resourceOptions: ResourceOptions | undefined
+): Promise<SyncResult<SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>> {
+	return runOperation<SyncBatchOutput<ResourceHandlerOk<unknown>>>(
+		definition,
+		options,
+		resourceOptions,
+		async (execution) => {
+			const parsed = parseBatchArgs(paramsSchema, definition, args);
+			if (parsed.isErr()) {
+				return parsed;
+			}
+			if (execution.exec.signal.aborted) {
+				return err(execution.getAbortError());
+			}
+			const handlerResult = await definition.batchHandler({
+				params: parsed.value.params,
+				items: parsed.value.items as never,
+				ctx: createHandlerContext(execution.exec)
+			});
+			if (handlerResult.isErr()) {
+				return handlerResult;
+			}
+			const outputResult = validateBatchOutput(definition.output, handlerResult.value);
+			if (outputResult.isErr()) {
+				return outputResult;
+			}
+			return commitSourceIfNeeded(outputResult.value, options, execution.exec);
+		}
+	);
 }
 
 function hasBatchHandler(definition: RuntimeDefinition): definition is RuntimeDefinitionWithBatchHandler {
@@ -640,7 +650,7 @@ function parseBatchArgs(
 			return err('bad_request', 'Batched sync method args must use the same params.');
 		}
 
-		const itemResult = parseBatchItem(definition, parsedArgs.value);
+		const itemResult = parseMethodArgs(definition, parsedArgs.value);
 		if (itemResult.isErr()) {
 			return itemResult;
 		}
@@ -657,81 +667,24 @@ function parseBatchArgs(
 	});
 }
 
-function parseBatchItem(
-	definition: RuntimeDefinitionWithBatchHandler,
-	args: ValueRecord
-): SyncResult<ValueRecord, SyncError> {
-	switch (definition.kind) {
-		case 'add': {
-			const inputResult = parseSchema(definition.input, args.input, 'input');
-			if (inputResult.isErr()) {
-				return inputResult;
-			}
-			return ok({
-				input: inputResult.value
-			});
+// The input and query a handler receives, validated against the method's schemas.
+function parseMethodArgs(definition: RuntimeDefinition, args: ValueRecord): SyncResult<ValueRecord, SyncError> {
+	const parsed: { input?: unknown; query?: unknown } = {};
+	if (definition.kind === 'add' || definition.kind === 'mutate') {
+		const inputResult = parseSchema(definition.input, args.input, 'input');
+		if (inputResult.isErr()) {
+			return inputResult;
 		}
-		case 'mutate': {
-			const inputResult = parseSchema(definition.input, args.input, 'input');
-			if (inputResult.isErr()) {
-				return inputResult;
-			}
-			if (!definition.query) {
-				return ok({
-					input: inputResult.value
-				});
-			}
-			const queryResult = parseSchema(definition.query, args.query, 'query');
-			if (queryResult.isErr()) {
-				return queryResult;
-			}
-			return ok({
-				query: queryResult.value,
-				input: inputResult.value
-			});
-		}
-		case 'delete': {
-			if (!definition.query) {
-				return ok({});
-			}
-			const queryResult = parseSchema(definition.query, args.query, 'query');
-			if (queryResult.isErr()) {
-				return queryResult;
-			}
-			return ok({
-				query: queryResult.value
-			});
-		}
+		parsed.input = inputResult.value;
 	}
-}
-
-function callBatchHandler<TParams extends object>(
-	definition: RuntimeDefinitionWithBatchHandler,
-	params: TParams,
-	items: readonly ValueRecord[],
-	exec: ResourceExecution
-): BatchResourceHandlerResult<unknown> {
-	const context = createHandlerContext(exec);
-	switch (definition.kind) {
-		case 'add':
-			return definition.batchHandler({
-				params,
-				items: items as readonly { readonly input: unknown }[],
-				ctx: context
-			});
-		case 'mutate':
-			return definition.batchHandler({
-				params,
-				items: items as readonly { readonly query?: unknown; readonly input: unknown }[],
-				ctx: context
-			});
-		case 'delete':
-			return definition.batchHandler({
-				params,
-				items: items as readonly { readonly query?: unknown }[],
-				ctx: context
-			});
+	if (definition.kind !== 'add' && definition.query) {
+		const queryResult = parseSchema(definition.query, args.query, 'query');
+		if (queryResult.isErr()) {
+			return queryResult;
+		}
+		parsed.query = queryResult.value;
 	}
+	return ok(parsed);
 }
 
 function validateBatchOutput(
@@ -769,62 +722,27 @@ function validateBatchOutput(
 	});
 }
 
-async function commitBatchSourceIfNeeded(
-	value: SyncBatchOutput<ResourceHandlerOk<unknown>>,
-	options: OperationOptions | undefined,
-	execution: ResourceExecution
-): Promise<SyncResult<SyncBatchOutput<ResourceHandlerOk<unknown>>, SyncError>> {
-	if (!value.sourceCommit || shouldDeferSourceCommit(options)) {
-		return ok(value);
-	}
-
-	const result = await value.sourceCommit.commit(withCommitExecution({}, execution));
-	if (result.isErr()) {
-		return result;
-	}
-
-	return ok({
-		...value,
-		metrics: mergeMetrics(value.metrics, result.value?.metrics),
-		sourceCommit: undefined
-	});
-}
-
-async function executeSingle<TArgs>(
+function executeSingle<TArgs>(
 	paramsSchema: AnySchema<object>,
-	methods: Partial<Record<MethodKind, RuntimeDefinition>>,
+	methods: RuntimeDefinitions,
 	definition: RuntimeDefinition,
 	args: TArgs,
 	options: OperationOptions | undefined,
 	resourceOptions: ResourceOptions | undefined
 ): Promise<SyncResult<ResourceHandlerOk<unknown>, SyncError>> {
-	const execution = createExecution(options);
-	const context = {
-		resource: resourceOptions?.name ?? 'resource',
-		method: definition.kind,
-		mutationId: options?.mutationId,
-		signal: execution.exec.signal,
-		environment: execution.exec.environment
-	};
-	try {
-		await callHook(() => resourceOptions?.telemetry?.start?.(context));
-
+	return runOperation<ResourceHandlerOk<unknown>>(definition, options, resourceOptions, async (execution) => {
 		const parsedArgs = parseArgs(args);
 		if (parsedArgs.isErr()) {
-			await reportResourceError(resourceOptions, context, parsedArgs.error);
 			return parsedArgs;
 		}
 
 		const paramsResult = parseSchema(paramsSchema, parsedArgs.value.params, 'params');
 		if (paramsResult.isErr()) {
-			await reportResourceError(resourceOptions, context, paramsResult.error);
 			return paramsResult;
 		}
 
 		if (execution.exec.signal.aborted) {
-			const abortError = execution.getAbortError();
-			await reportResourceError(resourceOptions, context, abortError);
-			return err(abortError);
+			return err(execution.getAbortError());
 		}
 
 		const handlerResult = await callHandler(
@@ -837,59 +755,71 @@ async function executeSingle<TArgs>(
 			resourceOptions
 		);
 		if (handlerResult.isErr()) {
-			await reportResourceError(resourceOptions, context, handlerResult.error);
 			return handlerResult;
 		}
 
 		const envelopeResult = normalizeHandlerOutput(definition.output, handlerResult.value);
 		if (envelopeResult.isErr()) {
-			await reportResourceError(resourceOptions, context, envelopeResult.error);
 			return envelopeResult;
 		}
 
-		const committedEnvelope = await commitSourceIfNeeded(envelopeResult.value, options, execution.exec);
-		if (committedEnvelope.isErr()) {
-			await reportResourceError(resourceOptions, context, committedEnvelope.error);
-			return committedEnvelope;
-		}
-
-		await callHook(() => resourceOptions?.telemetry?.success?.(context, committedEnvelope.value.metrics ?? []));
-		return ok(committedEnvelope.value);
-	} catch (cause) {
-		const errorValue = execution.exec.signal.aborted ? execution.getAbortError() : normalizeSyncError(cause);
-		await reportResourceError(resourceOptions, context, errorValue);
-		return err(errorValue);
-	} finally {
-		execution.cleanup();
-	}
+		return commitSourceIfNeeded(envelopeResult.value, options, execution.exec);
+	});
 }
 
-async function commitSourceIfNeeded(
-	value: ResourceHandlerOk<unknown>,
-	options: OperationOptions | undefined,
-	execution: ResourceExecution
-): Promise<SyncResult<ResourceHandlerOk<unknown>, SyncError>> {
-	if (!value.sourceCommit || shouldDeferSourceCommit(options)) {
-		return ok(value);
+interface Committable {
+	readonly sourceCommit?: ResourceCommit;
+	readonly metrics?: readonly CostMetric[];
+}
+
+export interface CommittedSource<TValue> {
+	readonly value: TValue;
+	readonly syncPersisted: boolean;
+}
+
+const executionByCommitContext = new WeakMap<ResourceCommitContext, OperationExecution>();
+
+export function executionForCommit(context: ResourceCommitContext): OperationExecution | undefined {
+	return executionByCommitContext.get(context);
+}
+
+// The write is committed here unless the manager defers it to commit together with its sync record.
+export async function commitSource<TValue extends Committable>(
+	value: TValue,
+	context: ResourceCommitContext,
+	execution: OperationExecution
+): Promise<SyncResult<CommittedSource<TValue>, SyncError>> {
+	if (!value.sourceCommit) {
+		return ok({ value, syncPersisted: false });
 	}
 
-	const result = await value.sourceCommit.commit(withCommitExecution({}, execution));
+	executionByCommitContext.set(context, execution);
+	// Plain commits observe cancellation through this property, which keeps the public record shape unchanged.
+	Object.defineProperty(context, 'signal', { enumerable: false, value: execution.signal });
+	const result = await value.sourceCommit.commit(context);
 	if (result.isErr()) {
 		return result;
 	}
 
 	return ok({
-		...value,
-		metrics: mergeMetrics(value.metrics, result.value?.metrics),
-		sourceCommit: undefined
+		value: { ...value, metrics: mergeMetrics(value.metrics, result.value?.metrics), sourceCommit: undefined },
+		syncPersisted: result.value?.syncPersisted === true
 	});
 }
 
-function shouldDeferSourceCommit(options: InternalOperationOptions | undefined): boolean {
-	return options?.deferSourceCommit === true;
+async function commitSourceIfNeeded<TValue extends Committable>(
+	value: TValue,
+	options: InternalOperationOptions | undefined,
+	execution: ResourceExecution
+): Promise<SyncResult<TValue, SyncError>> {
+	if (options?.deferSourceCommit === true) {
+		return ok(value);
+	}
+	const committed = await commitSource(value, {}, execution);
+	return committed.isErr() ? committed : ok(committed.value.value);
 }
 
-export function mergeMetrics(
+function mergeMetrics(
 	first: readonly CostMetric[] | undefined,
 	second: readonly CostMetric[] | undefined
 ): readonly CostMetric[] | undefined {
@@ -1010,84 +940,16 @@ async function callHandler<TParams extends object>(
 	exec: ResourceExecution,
 	resourceOptions: ResourceOptions | undefined
 ): Promise<SyncResult<unknown, SyncError>> {
-	const context = createHandlerContext(exec);
-	const self = createResourceSelf(paramsSchema, methods, definition.kind, params, exec, resourceOptions);
-	switch (definition.kind) {
-		case 'get': {
-			if (!definition.query) {
-				return (definition as GetMethodDefinition<object, never, unknown>).handler({
-					params,
-					ctx: context,
-					self
-				});
-			}
-			const queryResult = parseSchema(definition.query, args.query, 'query');
-			if (queryResult.isErr()) {
-				return queryResult;
-			}
-			return definition.handler({ params, query: queryResult.value, ctx: context, self });
-		}
-		case 'list': {
-			if (!definition.query) {
-				return (definition as ListMethodDefinition<object, never, unknown>).handler({
-					params,
-					ctx: context,
-					self
-				});
-			}
-			const queryResult = parseSchema(definition.query, args.query, 'query');
-			if (queryResult.isErr()) {
-				return queryResult;
-			}
-			return definition.handler({ params, query: queryResult.value, ctx: context, self });
-		}
-		case 'add': {
-			const inputResult = parseSchema(definition.input, args.input, 'input');
-			if (inputResult.isErr()) {
-				return inputResult;
-			}
-			return definition.handler({ params, input: inputResult.value, ctx: context, self });
-		}
-		case 'mutate': {
-			const inputResult = parseSchema(definition.input, args.input, 'input');
-			if (inputResult.isErr()) {
-				return inputResult;
-			}
-			if (!definition.query) {
-				return (definition as MutateMethodDefinition<object, never, unknown, unknown>).handler({
-					params,
-					input: inputResult.value,
-					ctx: context,
-					self
-				});
-			}
-			const queryResult = parseSchema(definition.query, args.query, 'query');
-			if (queryResult.isErr()) {
-				return queryResult;
-			}
-			return definition.handler({
-				params,
-				query: queryResult.value,
-				input: inputResult.value,
-				ctx: context,
-				self
-			});
-		}
-		case 'delete': {
-			if (!definition.query) {
-				return (definition as DeleteMethodDefinition<object, never, unknown>).handler({
-					params,
-					ctx: context,
-					self
-				});
-			}
-			const queryResult = parseSchema(definition.query, args.query, 'query');
-			if (queryResult.isErr()) {
-				return queryResult;
-			}
-			return definition.handler({ params, query: queryResult.value, ctx: context, self });
-		}
+	const parsed = parseMethodArgs(definition, args);
+	if (parsed.isErr()) {
+		return parsed;
 	}
+	return definition.handler({
+		...parsed.value,
+		params,
+		ctx: createHandlerContext(exec),
+		self: createResourceSelf(paramsSchema, methods, definition.kind, params, exec, resourceOptions)
+	} as never);
 }
 
 function createResourceSelf<TParams extends object>(
@@ -1100,50 +962,20 @@ function createResourceSelf<TParams extends object>(
 ): RuntimeResourceCalls {
 	const self: RuntimeResourceCalls = {};
 	for (const kind of methodKinds(methods)) {
-		if (kind === currentKind) {
-			continue;
-		}
 		const definition = methods[kind];
-		if (!definition) {
+		if (kind === currentKind || !definition) {
 			continue;
 		}
-		if (isWriteMethodKind(kind)) {
-			if (kind === 'delete' && !methodHasQuery(definition)) {
-				self[kind] = <TArgs>(argsOrOptions?: TArgs) =>
-					executeWrite(
-						paramsSchema,
-						methods,
-						definition,
-						mergeParams(params, undefined),
-						mergeSelfOptions(exec, argsOrOptions as OperationOptions | undefined),
-						resourceOptions
-					);
-				continue;
-			}
-			self[kind] = <TArgs>(args: TArgs, options?: OperationOptions) =>
-				executeWrite(
-					paramsSchema,
-					methods,
-					definition,
-					mergeParams(params, args),
-					mergeSelfOptions(exec, options),
-					resourceOptions
-				);
-			continue;
-		}
-		self[kind] = <TArgs>(argsOrOptions?: TArgs, options?: OperationOptions) => {
-			const hasQuery = methodHasQuery(definition);
-			const args = hasQuery ? argsOrOptions : undefined;
-			const callOptions = hasQuery ? options : (argsOrOptions as OperationOptions | undefined);
-			return executeSingle(
+		const optionsOnly = takesOptionsOnly(kind, definition);
+		self[kind] = <TArgs>(argsOrOptions?: TArgs, options?: OperationOptions) =>
+			executeMethod(
 				paramsSchema,
 				methods,
 				definition,
-				mergeParams(params, args),
-				mergeSelfOptions(exec, callOptions),
+				mergeParams(params, optionsOnly ? undefined : argsOrOptions),
+				mergeSelfOptions(exec, optionsOnly ? (argsOrOptions as OperationOptions | undefined) : options),
 				resourceOptions
 			);
-		};
 	}
 	return self;
 }
@@ -1194,10 +1026,6 @@ export function combineAbortSignals(parent: AbortSignal, child: AbortSignal | un
 		return parent;
 	}
 	return AbortSignal.any([parent, child]);
-}
-
-function methodHasQuery(definition: RuntimeDefinition): boolean {
-	return 'query' in definition && definition.query !== undefined;
 }
 
 export function isWriteMethodKind(kind: MethodKind): boolean {

@@ -4,10 +4,10 @@ import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from 'e
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { httpSharedSyncConnect } from './connectBatch.js';
 import { isSyncError, normalizeSyncError, type SyncError } from './errors.js';
-import { executionForCommit } from './executionState.js';
 import { manager as plainManager, type CreateManagerOptions, type Manager as PlainManager } from './manager.js';
 import {
 	resource as plainResource,
+	executionForCommit,
 	methodKinds,
 	takesOptionsOnly,
 	type MethodKind,

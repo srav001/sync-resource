@@ -2,15 +2,16 @@ import { isCallable, isRecord, isString } from '../shared/guards.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { stableStringify } from '../shared/stableJson.ts';
 import { normalizeSyncError, syncError, type SyncError } from './errors.js';
-import { withCommitExecution } from './executionState.js';
 import { callHook } from './hook.js';
 import {
 	combineAbortSignals,
+	commitSource,
 	isWriteMethodKind,
-	mergeMetrics,
 	mergeParams,
 	methodKinds,
 	takesOptionsOnly,
+	type CommittedSource,
+	type InternalOperationOptions,
 	type MethodKind
 } from './resource.js';
 import {
@@ -160,16 +161,7 @@ interface ManagerExecutionSuccess {
 	readonly envelope?: SyncEnvelope;
 }
 
-type PublishEnvelope = (envelope: SyncEnvelope) => Promise<void>;
-
-interface InternalOperationOptions extends OperationOptions {
-	readonly deferSourceCommit?: boolean;
-}
-
-interface DeferredSourceCommitResult {
-	readonly raw: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>;
-	readonly syncPersisted: boolean;
-}
+type PublishEnvelope = (envelope: SyncEnvelope) => void;
 
 interface MutationIdentity {
 	readonly id: string;
@@ -266,8 +258,8 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 		const methods: Partial<Record<MethodKind, BoundRuntimeMethod>> = {};
 		for (const kind of methodKinds(runtimeMethods)) {
 			const optionsOnly = takesOptionsOnly(kind, runtimeMethods[kind]);
-			methods[kind] = <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) =>
-				executeManagerMethod(
+			methods[kind] = async <TArgs>(argsOrOptions?: TArgs, callOptions?: OperationOptions) => {
+				const result = await executeManagerResourceMethod(
 					managerOptions,
 					runtimeResource,
 					kind,
@@ -276,8 +268,10 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 					optionsOnly ? undefined : argsOrOptions,
 					optionsOnly ? (argsOrOptions as OperationOptions | undefined) : callOptions,
 					nextCursor,
-					recordAndPublish
+					publishEnvelope
 				);
+				return result.isErr() ? result : ok(result.value.output);
+			};
 		}
 
 		return {
@@ -297,7 +291,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 
 		for (const kind of methodKinds(runtimeMethods)) {
 			handlers[kind] = (args) =>
-				executeHttpMethod(managerOptions, runtimeResource, kind, args, nextCursor, recordAndPublish);
+				executeHttpMethod(managerOptions, runtimeResource, kind, args, nextCursor, publishEnvelope);
 		}
 
 		handlers.connect = async (args) => {
@@ -351,7 +345,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	}
 
 	// Writes persist their envelope with the mutation record before publishing, and signals are never persisted.
-	async function recordAndPublish(envelope: SyncEnvelope): Promise<void> {
+	function publishEnvelope(envelope: SyncEnvelope): void {
 		publishSharedStreamEnvelope(envelope);
 		publishToRealtimeBusBestEffort(envelope);
 	}
@@ -736,35 +730,6 @@ function withGeneratedMutationId(
 	};
 }
 
-async function executeManagerMethod<TContext, TParams extends object, TArgs>(
-	options: RuntimeManagerOptions<TContext, TParams>,
-	resource: RuntimeResource,
-	method: MethodKind,
-	params: TParams,
-	context: TContext | undefined,
-	args: TArgs,
-	callOptions: OperationOptions | undefined,
-	nextCursor: () => string,
-	publish: PublishEnvelope
-): Promise<SyncResult<unknown, SyncError>> {
-	const result = await executeManagerResourceMethod(
-		options,
-		resource,
-		method,
-		params,
-		context,
-		args,
-		callOptions,
-		nextCursor,
-		publish
-	);
-	if (result.isErr()) {
-		return result;
-	}
-
-	return ok(result.value.output);
-}
-
 async function executeManagerResourceMethod<TContext, TParams extends object, TArgs>(
 	options: RuntimeManagerOptions<TContext, TParams>,
 	resource: RuntimeResource,
@@ -920,18 +885,18 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 				await reportManagerError(options, telemetryContext, commitResult.error);
 				return commitResult;
 			}
-			const raw = commitResult.value.raw;
+			const raw = commitResult.value.value;
 			const metrics = collectMetrics(raw);
 			if (mutationRecord && !commitResult.value.syncPersisted) {
 				await options.persistence.recordMutation({ ...mutationRecord, metrics }, execution);
 			}
 			if (envelope && isWriteMethodKind(method)) {
-				await publish(envelope);
+				publish(envelope);
 			}
 
 			const signalEnvelope = buildSignalEnvelope(options.key, scope, raw, nextCursor);
 			if (signalEnvelope) {
-				await publish(signalEnvelope);
+				publish(signalEnvelope);
 			}
 
 			await callHook(() => options.telemetry?.success?.(telemetryContext, metrics));
@@ -1298,32 +1263,18 @@ async function commitDeferredSourceWrite(
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>,
 	context: ResourceCommitContext,
 	execution: OperationExecution
-): Promise<SyncResult<DeferredSourceCommitResult, SyncError>> {
-	if (!value.sourceCommit) {
-		if (isBatchOutput(value) && batchHasSourceCommit(value)) {
-			return err(
-				syncError(
-					'bad_request',
-					'Deferred source commits are not supported for looped batch writes. Use a resource-level atomic batch handler.'
-				)
-			);
-		}
-		return ok({ raw: value, syncPersisted: false });
+): Promise<
+	SyncResult<CommittedSource<ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>>, SyncError>
+> {
+	if (!value.sourceCommit && isBatchOutput(value) && batchHasSourceCommit(value)) {
+		return err(
+			syncError(
+				'bad_request',
+				'Deferred source commits are not supported for looped batch writes. Use a resource-level atomic batch handler.'
+			)
+		);
 	}
-
-	const result = await value.sourceCommit.commit(withCommitExecution(context, execution));
-	if (result.isErr()) {
-		return result;
-	}
-
-	return ok({
-		raw: {
-			...value,
-			metrics: mergeMetrics(value.metrics, result.value?.metrics),
-			sourceCommit: undefined
-		},
-		syncPersisted: result.value?.syncPersisted === true
-	});
+	return commitSource(value, context, execution);
 }
 
 function batchHasSourceCommit(value: SyncBatchOutput<ResourceHandlerOk<unknown>>): boolean {
