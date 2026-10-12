@@ -2,6 +2,8 @@ import type { ResetManifest, SyncError } from '../shared/index.ts';
 import { err, ok, type SyncResult } from '../shared/result.ts';
 import type { PageState } from './types.ts';
 
+type RepairResult = SyncResult<void, SyncError>;
+
 type PageHealth = Pick<PageState, 'repairNeeded' | 'stale' | 'coverage'>;
 
 export type RepairKind = 'none' | 'page' | 'scope';
@@ -14,12 +16,12 @@ export interface RepairPlan {
 
 export interface RepairScheduler {
 	plan(pages: readonly PageHealth[], reset?: ResetManifest): RepairPlan;
-	request(run: () => Promise<SyncResult<void, SyncError>>): Promise<SyncResult<void, SyncError>>;
+	request(run: () => Promise<RepairResult>): Promise<RepairResult>;
 	dispose(): void;
 }
 
 export function createRepairScheduler(delayMs = 0): RepairScheduler {
-	let active: Promise<SyncResult<void, SyncError>> | undefined;
+	let active: Promise<RepairResult> | undefined;
 	let queued: QueuedRepair | undefined;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
@@ -65,15 +67,11 @@ export function createRepairScheduler(delayMs = 0): RepairScheduler {
 				return queued.promise;
 			}
 
-			let resolveQueued: (result: SyncResult<void, SyncError>) => void = () => {};
-			const promise = new Promise<SyncResult<void, SyncError>>((resolve) => {
+			let resolveQueued: QueuedRepair['resolve'] = () => {};
+			const promise = new Promise<RepairResult>((resolve) => {
 				resolveQueued = resolve;
 			});
-			queued = {
-				run,
-				promise,
-				resolve: resolveQueued
-			};
+			queued = { run, promise, resolve: resolveQueued };
 			if (!active) {
 				scheduleQueued();
 			}
@@ -81,10 +79,8 @@ export function createRepairScheduler(delayMs = 0): RepairScheduler {
 		},
 		dispose() {
 			disposed = true;
-			if (timeout) {
-				clearTimeout(timeout);
-				timeout = undefined;
-			}
+			clearTimeout(timeout);
+			timeout = undefined;
 			queued?.resolve(err('disposed', 'Repair scheduler was disposed.'));
 			active = undefined;
 			queued = undefined;
@@ -93,9 +89,9 @@ export function createRepairScheduler(delayMs = 0): RepairScheduler {
 }
 
 interface QueuedRepair {
-	readonly run: () => Promise<SyncResult<void, SyncError>>;
-	readonly promise: Promise<SyncResult<void, SyncError>>;
-	resolve(this: void, result: SyncResult<void, SyncError>): void;
+	readonly run: () => Promise<RepairResult>;
+	readonly promise: Promise<RepairResult>;
+	resolve(this: void, result: RepairResult): void;
 }
 
 export function planRepair(pages: readonly PageHealth[], reset?: ResetManifest): RepairPlan {
