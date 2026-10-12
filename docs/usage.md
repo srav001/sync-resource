@@ -1442,7 +1442,7 @@ type SyncErrorCode =
 
 type SyncRecoverySource = 'memory' | 'idb' | 'server';
 
-type SyncRecoveryMetadata =
+type SyncErrorRecovery =
 	| { readonly restored: true; readonly source: SyncRecoverySource }
 	| { readonly restored?: false; readonly source?: never };
 
@@ -1450,7 +1450,7 @@ class SyncError extends Error {
 	readonly code: SyncErrorCode;
 	readonly details?: unknown;
 	readonly cause?: unknown;
-	readonly recovery?: SyncRecoveryMetadata;
+	readonly recovery?: SyncErrorRecovery;
 }
 ```
 

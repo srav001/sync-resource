@@ -35,7 +35,6 @@ export {
 	type SyncErrorCode,
 	type SyncErrorOptions,
 	type SyncErrorRecovery,
-	type SyncRecoveryMetadata,
 	type SyncHttpError,
 	type SyncHttpOk,
 	type SyncHttpResult,

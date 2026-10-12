@@ -21,7 +21,6 @@ export type SyncRecoverySource = 'memory' | 'idb' | 'server';
 export type SyncErrorRecovery =
 	| { readonly restored: true; readonly source: SyncRecoverySource }
 	| { readonly restored?: false; readonly source?: never };
-export type SyncRecoveryMetadata = SyncErrorRecovery;
 
 export interface SyncProtocolError {
 	readonly code: SyncErrorCode;

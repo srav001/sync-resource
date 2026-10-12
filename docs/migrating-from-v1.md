@@ -285,6 +285,7 @@ Sync Resource no longer uses any of these. Remove them from your code.
   `stale` is the one staleness flag.
 - **Shared:** `isResetManifest`, `isSyncChange`, `isSyncErrorCode`, `isSyncErrorRecovery`, `isSyncProtocolError` and
   `isSyncSignal`. `isSyncEnvelope` and `isSyncHttpResult` remain.
+- **`SyncRecoveryMetadata`:** removed from every entry point; use `SyncErrorRecovery`.
 - **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.
 - **`RuntimeTransport.subscribe`:** the `url` and `streamUrl` options are removed, and `connectUrl`, `managerKey` and
   `scope` are required. The direct per-manager SSE subscription they served is gone with the `/events` route. The

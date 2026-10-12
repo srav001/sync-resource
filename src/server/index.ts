@@ -21,10 +21,10 @@ export {
 	type SyncEnvelope,
 	type SyncErrorCode,
 	type SyncErrorOptions,
+	type SyncErrorRecovery,
 	type SyncHttpError,
 	type SyncHttpOk,
 	type SyncHttpResult,
-	type SyncRecoveryMetadata,
 	type SyncRecoverySource,
 	type SyncSignal,
 	type Validator

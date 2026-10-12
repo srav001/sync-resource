@@ -24,7 +24,6 @@ export {
 	type SyncHttpOk,
 	type SyncHttpResult,
 	type SyncProtocolError,
-	type SyncRecoveryMetadata,
 	type SyncRecoverySource,
 	type SyncResetReason,
 	type SyncSignal
