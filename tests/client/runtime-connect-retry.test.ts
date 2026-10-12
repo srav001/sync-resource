@@ -99,6 +99,7 @@ describe('failed realtime registration', () => {
 		try {
 			expect((await subscribe(signal.signal)).isErr()).toBe(true);
 			signal.abort();
+			expect(vi.getTimerCount()).toBe(0);
 			await vi.advanceTimersByTimeAsync(60_000);
 			expect(connects()).toBe(1);
 		} finally {

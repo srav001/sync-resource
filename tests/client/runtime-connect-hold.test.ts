@@ -4,11 +4,14 @@ import {
 	configureSync,
 	createRuntime,
 	createStore,
+	ok,
 	resetSyncConfiguration,
 	type CacheAdapter,
 	type ManagerTypeShape,
-	type MethodType
+	type MethodType,
+	type RuntimeTransport
 } from '../../src/client/core.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface NotesManager extends ManagerTypeShape {
 	readonly key: 'notes';
@@ -111,6 +114,81 @@ describe('registration hold', () => {
 		} finally {
 			signal.abort();
 			runtime.dispose();
+		}
+	});
+});
+
+describe('store read registration hold', () => {
+	function createStoreWithSpyTransport(respond: () => Promise<Response>) {
+		const events: string[] = [];
+		const transport: RuntimeTransport = {
+			async subscribe() {
+				events.push('subscribe');
+				return ok(() => {});
+			},
+			holdRegistrations() {
+				events.push('hold');
+				return () => {
+					events.push('release');
+				};
+			}
+		};
+		configureSync({
+			cache: { adapter: cache },
+			transport,
+			fetch: async () => {
+				events.push('fetch');
+				return respond();
+			}
+		});
+		const store = createStore<NotesManager>({
+			key: 'notes',
+			getParams: () => ({ name: 'a' }),
+			getUrl: () => 'http://sync.test/a',
+			query: () => ({ limit: 10 })
+		});
+		return { events, store };
+	}
+
+	const okList = () => Response.json({ isOk: true, isError: false, value: { items: [] } });
+
+	it('holds registrations from the start of each read until it ends and releases once', async () => {
+		const gate = new Deferred<Response>();
+		let reads = 0;
+		const { events, store } = createStoreWithSpyTransport(() =>
+			++reads === 1 ? gate.promise : Promise.resolve(okList())
+		);
+		try {
+			const hydrating = store.hydrate();
+			await vi.waitFor(() => expect(events).toEqual(['hold', 'fetch']));
+			gate.resolve(okList());
+			expect((await hydrating).isOk()).toBe(true);
+			expect(events).toEqual(['hold', 'fetch', 'release', 'subscribe']);
+
+			expect((await store.refresh()).isOk()).toBe(true);
+			expect(events.slice(4)).toEqual(['hold', 'fetch', 'release']);
+		} finally {
+			store.dispose();
+		}
+	});
+
+	it('releases the hold once when a read fails and does not register', async () => {
+		const { events, store } = createStoreWithSpyTransport(async () => Response.json({ isOk: false }));
+		try {
+			expect((await store.hydrate()).isErr()).toBe(true);
+			expect(events).toEqual(['hold', 'fetch', 'release']);
+		} finally {
+			store.dispose();
+		}
+	});
+
+	it('releases the hold once when the request rejects', async () => {
+		const { events, store } = createStoreWithSpyTransport(() => Promise.reject(new Error('offline')));
+		try {
+			expect((await store.hydrate()).isErr()).toBe(true);
+			expect(events).toEqual(['hold', 'fetch', 'release']);
+		} finally {
+			store.dispose();
 		}
 	});
 });

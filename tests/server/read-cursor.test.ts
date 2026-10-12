@@ -7,6 +7,9 @@ import {
 	registerSharedStreamManager,
 	registerSharedStreamSubscription,
 	resource,
+	type ManagerOutbox,
+	type ManagerOutboxRead,
+	type OperationExecution,
 	type SyncEnvelope
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
@@ -132,5 +135,122 @@ describe('read sync cursor', () => {
 		const { envelope } = await list(outbox, () => outbox.append(env('c2')));
 		expect(envelope?.cursor).toBe('c1');
 		expect(await replayed(outbox, envelope?.cursor, 'c2')).toEqual(['c2']);
+	});
+});
+
+const noteOutput = { parse: (value: unknown) => value as { id: string } };
+const noteResource = resource({ parse: (value: unknown) => value as { workspaceId: string } }, (method) => ({
+	get: method.get({ output: noteOutput, handler: ({ ctx }) => ctx.ok({ id: 'ws' }) }),
+	list: method.list({
+		output: { parse: (value: unknown) => value as { items: readonly { id: string }[] } },
+		handler: ({ ctx }) => ctx.ok({ items: [{ id: 'n1' }] })
+	}),
+	add: method.add({
+		input: noteOutput,
+		output: noteOutput,
+		handler: ({ input, ctx }) =>
+			ctx.ok({ output: input, changes: [{ type: 'itemAdded' as const, id: input.id, value: input }] })
+	})
+}));
+
+function plainManager(outbox: ManagerOutbox, authorize: (...args: unknown[]) => boolean = () => true) {
+	return manager({
+		key: 'notes',
+		resource: noteResource,
+		authorize: (_context, _params, execution) => authorize(execution),
+		scope: (params) => params.workspaceId,
+		outbox
+	});
+}
+
+const params = { workspaceId: 'ws' };
+const emptyRead: ManagerOutboxRead = { envelopes: [], cursorFound: true, retainedEnvelopeCount: 0 };
+
+describe('custom outbox read cursor', () => {
+	it('uses the cursor of a plain outbox that implements latestCursor for list reads and the page cursor', async () => {
+		const notes = plainManager({ append: () => {}, readAfter: () => emptyRead, latestCursor: () => 'custom:7' });
+		const response = await notes.http.list!({ request: new Request('http://sync.test/list'), params });
+		const { envelope } = (await response.json()) as { envelope?: SyncEnvelope };
+		expect(envelope).toMatchObject({
+			cursor: 'custom:7',
+			changes: [{ type: 'pageLoaded', syncCursor: 'custom:7' }]
+		});
+	});
+
+	it('invents no cursor when a plain outbox cannot report one', async () => {
+		const notes = plainManager({ append: () => {}, readAfter: () => emptyRead });
+		for (const method of ['list', 'get'] as const) {
+			const response = await notes.http[method]!({ request: new Request(`http://sync.test/${method}`), params });
+			expect(response.status).toBe(200);
+			const body = (await response.json()) as { value: unknown; envelope?: SyncEnvelope };
+			expect(body.value).toBeDefined();
+			expect(body.envelope).toBeUndefined();
+		}
+	});
+});
+
+describe('operation execution', () => {
+	const calls: Record<string, OperationExecution | undefined> = {};
+	const recordingOutbox: ManagerOutbox = {
+		append: (_envelope, execution) => {
+			calls.append = execution;
+		},
+		readAfter: (_scope, _cursor, _limit, execution) => {
+			calls.readAfter = execution;
+			return emptyRead;
+		},
+		latestCursor: (_scope, execution) => {
+			calls.latestCursor = execution;
+			return 'c1';
+		}
+	};
+	const abort = new AbortController();
+	const request = (url: string, init?: RequestInit) => new Request(url, { ...init, signal: abort.signal });
+	const signalOf = (execution: OperationExecution | undefined) => {
+		expect(execution?.signal).toBeInstanceOf(AbortSignal);
+		return execution!.signal;
+	};
+
+	it('reaches the authorize hook and the outbox latestCursor, append and readAfter', async () => {
+		let authorized: OperationExecution | undefined;
+		const notes = plainManager(recordingOutbox, (execution) => {
+			authorized = execution as OperationExecution;
+			return true;
+		});
+		await notes.http.list!({ request: request('http://sync.test/list'), params });
+		const added = await notes.http.add!({
+			request: request('http://sync.test/add', { method: 'POST', body: JSON.stringify({ input: { id: 'n2' } }) }),
+			params
+		});
+		expect(added.status).toBe(200);
+		const events = await notes.http.events!({ request: request('http://sync.test/events?after=c1'), params });
+		const reader = events.body!.getReader();
+		while (!Object.hasOwn(calls, 'readAfter')) {
+			await reader.read();
+		}
+		await reader.cancel();
+
+		const signals = [authorized, calls.latestCursor, calls.append, calls.readAfter].map(signalOf);
+		abort.abort();
+		expect(signals.every((signal) => signal.aborted)).toBe(true);
+	});
+
+	it('reaches the outbox append when the write carries a mutation id', async () => {
+		let appended: OperationExecution | undefined;
+		const notes = plainManager({
+			append: (_envelope, execution) => {
+				appended = execution;
+			},
+			readAfter: () => emptyRead
+		});
+		const added = await notes.http.add!({
+			request: new Request('http://sync.test/add?mutationId=m1', {
+				method: 'POST',
+				body: JSON.stringify({ input: { id: 'n3' } })
+			}),
+			params
+		});
+		expect(added.status).toBe(200);
+		expect(signalOf(appended)).toBeInstanceOf(AbortSignal);
 	});
 });

@@ -148,6 +148,29 @@ describe('client get and data', () => {
 		store.dispose();
 	});
 
+	it('lets a get read without an envelope replace the cursor an earlier read set', async () => {
+		const transport = new ManualTransport();
+		let reads = 0;
+		configureSync({
+			cache: { adapter: cache },
+			transport,
+			fetch: async () =>
+				++reads === 1
+					? syncResponse({ id: 'profile-1', name: 'First' }, envelope('cursor-7', []))
+					: syncResponse({ id: 'profile-1', name: 'Second' })
+		});
+		const store = createGetStore();
+		try {
+			await store.hydrate();
+			expect(transport.options?.getCursor?.()).toBe('cursor-7');
+			expect((await store.get()).isOk()).toBe(true);
+			expect(store.data()).toEqual({ id: 'profile-1', name: 'Second' });
+			expect(transport.options?.getCursor?.()).toBeUndefined();
+		} finally {
+			store.dispose();
+		}
+	});
+
 	it('replaces authoritative data from realtime and rebases a pending mutation over a later envelope', async () => {
 		const transport = new ManualTransport();
 		const writeResponse = deferred<Response>();

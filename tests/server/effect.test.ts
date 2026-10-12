@@ -327,6 +327,44 @@ describe('Effect server entrypoint', () => {
 		await web.dispose();
 	});
 
+	it('dispatches batched connects with the services of the batch request', async () => {
+		const Tenant = Context.Service<{ readonly id: string }>('sync-resource/test/Tenant');
+		const notes = resource(paramsSchema, (method) => ({
+			get: method.get({
+				output: noteSchema,
+				handler: ({ params }) => Effect.succeed({ id: params.workspaceId, title: 'one' })
+			})
+		}));
+		const notesManager = await Effect.runPromise(
+			manager({
+				key: 'batch-tenant',
+				resource: notes,
+				authorize: () => Effect.succeed(true),
+				scope: (p) => p.workspaceId
+			})
+		);
+		const routes = managerHttpRoutes<undefined, Params, never, { readonly id: string }, never>({
+			manager: notesManager,
+			path: '/tenant',
+			params: () => Effect.map(Tenant, ({ id }) => ({ workspaceId: id }))
+		});
+		const app = Layer.mergeAll(HttpRouter.addAll(routes), httpSharedSyncConnectRoute('/api/connect'));
+		const web = HttpRouter.toWebHandler(app, { disableLogger: true });
+		const response = await web.handler(
+			new Request('http://sync.test/api/connect', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', 'x-sync-transport-id': 'transport-tenant' },
+				body: JSON.stringify({ connects: ['/tenant/connect'] })
+			}),
+			Context.make(Tenant, { id: 'w-tenant' })
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			results: [{ status: 200, body: { isOk: true, value: { managerKey: 'batch-tenant' } } }]
+		});
+		await web.dispose();
+	});
+
 	it('adapts every resource method, self call, batch handler, and resource hook', async () => {
 		const events: string[] = [];
 		const notes = resource(
@@ -532,6 +570,77 @@ describe('Effect server entrypoint', () => {
 		});
 		const body = (await response.json()) as { readonly envelope?: { readonly cursor: string } };
 		expect(body.envelope?.cursor).toBe('latest:effect-read-cursor:w1');
+	});
+
+	it('forwards the outbox latest cursor to list reads only when the outbox implements it', async () => {
+		const notes = resource(paramsSchema, (method) => ({
+			list: method.list({
+				output: { parse: (value: unknown) => value as { readonly items: readonly Note[] } },
+				handler: () => Effect.succeed({ items: [{ id: 'n1', title: 'one' }] })
+			})
+		}));
+		const cursorOf = async (key: string, latestCursor?: (scope: string) => Effect.Effect<string>) => {
+			const notesManager = await Effect.runPromise(
+				manager({
+					key,
+					resource: notes,
+					authorize: () => Effect.succeed(true),
+					scope: (params) => params.workspaceId,
+					outbox: {
+						append: () => Effect.void,
+						readAfter: () => Effect.succeed({ cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 }),
+						...(latestCursor ? { latestCursor } : {})
+					}
+				})
+			);
+			const response = await notesManager.http.list!({
+				request: new Request('https://sync.test/list'),
+				params: { workspaceId: 'w1' }
+			});
+			return ((await response.json()) as { readonly envelope?: { readonly cursor: string } }).envelope?.cursor;
+		};
+		expect(await cursorOf('effect-outbox-cursor', (scope) => Effect.succeed(`latest:${scope}`))).toBe(
+			'latest:effect-outbox-cursor:w1'
+		);
+		expect(await cursorOf('effect-outbox-no-cursor')).toBeUndefined();
+	});
+
+	it('closes the scope of a realtime subscription that fails after acquiring a resource', async () => {
+		let finalized = false;
+		const notes = resource(paramsSchema, (method) => ({
+			get: method.get({
+				output: noteSchema,
+				handler: ({ params }) => Effect.succeed({ id: params.workspaceId, title: 'one' })
+			})
+		}));
+		const notesManager = await Effect.runPromise(
+			manager({
+				key: 'effect-failing-bus',
+				resource: notes,
+				authorize: () => Effect.succeed(true),
+				scope: (params) => params.workspaceId,
+				realtimeBus: {
+					publish: () => Effect.void,
+					subscribe: () =>
+						Effect.andThen(
+							Effect.addFinalizer(() =>
+								Effect.sync(() => {
+									finalized = true;
+								})
+							),
+							Effect.fail(syncError('internal', 'subscribe failed'))
+						)
+				}
+			})
+		);
+		const stream = await notesManager.http.events!({
+			request: new Request('https://sync.test/events'),
+			params: { workspaceId: 'w1' }
+		});
+		const reader = stream.body!.getReader();
+		await reader.read();
+		await reader.cancel();
+		await vi.waitFor(() => expect(finalized).toBe(true));
 	});
 
 	it('adapts the standalone outbox and shared-stream idle hook', async () => {

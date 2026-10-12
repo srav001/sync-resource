@@ -2,15 +2,20 @@ import { describe, expect, it, vi } from 'vite-plus/test';
 
 import { httpSharedSyncConnect } from '../../src/server/index.ts';
 
-function batchRequest(body: unknown): Request {
+function batchRequest(
+	body: unknown,
+	init?: { readonly headers?: Record<string, string>; readonly signal?: AbortSignal }
+): Request {
 	return new Request('http://sync.test/api/sync-resource/connect', {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',
 			'x-sync-transport-id': 'transport-1',
-			'x-client-id': 'client-1'
+			'x-client-id': 'client-1',
+			...init?.headers
 		},
-		body: typeof body === 'string' ? body : JSON.stringify(body)
+		body: typeof body === 'string' ? body : JSON.stringify(body),
+		signal: init?.signal
 	});
 }
 
@@ -28,7 +33,10 @@ describe('httpSharedSyncConnect', () => {
 		});
 
 		const response = await httpSharedSyncConnect(
-			batchRequest({ connects: ['/a/connect?after=c1', '/b/connect'] }),
+			batchRequest(
+				{ connects: ['/a/connect?after=c1', '/b/connect'] },
+				{ headers: { 'content-length': '2', 'transfer-encoding': 'identity', cookie: 'session=1' } }
+			),
 			dispatch
 		);
 
@@ -46,7 +54,24 @@ describe('httpSharedSyncConnect', () => {
 		expect(seen[0]?.headers.get('x-sync-transport-id')).toBe('transport-1');
 		expect(seen[0]?.headers.get('x-client-id')).toBe('client-1');
 		expect(seen[0]?.headers.has('content-type')).toBe(false);
+		expect(seen[0]?.headers.get('cookie')).toBe('session=1');
 		expect(seen[0]?.headers.has('content-length')).toBe(false);
+		expect(seen[0]?.headers.has('transfer-encoding')).toBe(false);
+	});
+
+	it('gives each dispatched connect the signal of the batch request', async () => {
+		const abort = new AbortController();
+		const seen: Request[] = [];
+		await httpSharedSyncConnect(
+			batchRequest({ connects: ['/a/connect', '/b/connect'] }, { signal: abort.signal }),
+			async (request) => {
+				seen.push(request);
+				return Response.json(null);
+			}
+		);
+		expect(seen.map((request) => request.signal.aborted)).toEqual([false, false]);
+		abort.abort();
+		expect(seen.map((request) => request.signal.aborted)).toEqual([true, true]);
 	});
 
 	it('turns a throwing dispatch into a 500 for that item only', async () => {
@@ -68,6 +93,7 @@ describe('httpSharedSyncConnect', () => {
 	it.each([
 		['an absolute URL', { connects: ['https://evil.test/a/connect'] }],
 		['a protocol-relative URL', { connects: ['//evil.test/a/connect'] }],
+		['a protocol-relative URL of the same host', { connects: ['//sync.test/a/connect'] }],
 		['a backslash host', { connects: ['/\\evil.test/a/connect'] }],
 		['a non-connect path', { connects: ['/a/get'] }],
 		['a non-string entry', { connects: [1] }],

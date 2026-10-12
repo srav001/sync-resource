@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vite-plus/test';
 
 import { resetSyncConfiguration } from '../../src/client/core.ts';
+import { manager, resource, type ManagerOutboxRead, type SyncEnvelope } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 import { createSyncTestSystem } from '../fixtures/syncSystem.ts';
@@ -112,5 +113,76 @@ describe('direct manager SSE', () => {
 			]
 		});
 		await resetReader?.cancel();
+	});
+
+	describe('replay from a custom outbox', () => {
+		const retained = (cursor: string): SyncEnvelope => ({
+			managerKey: 'notes',
+			scope: 'notes:ws',
+			cursor,
+			changes: [{ type: 'itemAdded', id: cursor, value: { id: cursor } }]
+		});
+
+		async function replayEvents(read: (limit: number) => ManagerOutboxRead) {
+			const limits: number[] = [];
+			const notes = manager({
+				key: 'notes',
+				resource: resource({ parse: (value: unknown) => value as { workspaceId: string } }, (method) => ({
+					get: method.get({
+						output: { parse: (value: unknown) => value as { id: string } },
+						handler: ({ ctx }) => ctx.ok({ id: 'ws' })
+					})
+				})),
+				authorize: () => true,
+				scope: (params) => params.workspaceId,
+				replayLimit: 2,
+				outbox: {
+					append: () => {},
+					readAfter: (_scope, _cursor, limit) => {
+						limits.push(limit);
+						return read(limit);
+					}
+				}
+			});
+			const response = await notes.http.events!({
+				request: new Request('http://sync.test/events?after=old'),
+				params: { workspaceId: 'ws' }
+			});
+			const reader = response.body!.getReader();
+			await reader.read();
+			const event = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
+			await reader.cancel();
+			return { limits, envelope: JSON.parse(event.data) as SyncEnvelope };
+		}
+
+		it('resets an unknown cursor even when the outbox retains nothing', async () => {
+			const { envelope } = await replayEvents(() => ({
+				envelopes: [],
+				cursorFound: false,
+				retainedEnvelopeCount: 0
+			}));
+			expect(envelope.changes).toMatchObject([{ type: 'reset', manifest: { reason: 'retention_gap' } }]);
+		});
+
+		it('reads one envelope past the replay limit and resets instead of sending a truncated replay', async () => {
+			const all = ['c1', 'c2', 'c3', 'c4'].map(retained);
+			const { limits, envelope } = await replayEvents((limit) => ({
+				envelopes: all.slice(0, limit),
+				cursorFound: true,
+				retainedEnvelopeCount: all.length
+			}));
+			expect(limits).toEqual([3]);
+			expect(envelope.changes).toMatchObject([{ type: 'reset', manifest: { reason: 'retention_gap' } }]);
+		});
+
+		it('replays without a reset when the pending envelopes exactly fill the replay limit', async () => {
+			const all = ['c1', 'c2'].map(retained);
+			const { envelope } = await replayEvents((limit) => ({
+				envelopes: all.slice(0, limit),
+				cursorFound: true,
+				retainedEnvelopeCount: all.length
+			}));
+			expect(envelope.cursor).toBe('c1');
+		});
 	});
 });

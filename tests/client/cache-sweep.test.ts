@@ -63,6 +63,10 @@ describe('library cache sweep', () => {
 		createRuntime({ cache: adapter, transport });
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(listed).toHaveLength(1);
+		vi.setSystemTime(Date.now() + DAY_MS - 180_000);
+		createRuntime({ cache: adapter, transport });
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(listed).toHaveLength(1);
 		vi.setSystemTime(Date.now() + DAY_MS);
 		createRuntime({ cache: adapter, transport });
 		await vi.advanceTimersByTimeAsync(60_000);

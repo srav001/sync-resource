@@ -44,11 +44,13 @@ function createHarness(
 	const requests: ConnectRequest[] = [];
 	let streamController!: ReadableStreamDefaultController<Uint8Array>;
 	let batchStatus = 200;
+	let streamRequests = 0;
 	const fetchImpl: typeof fetch = async (input, init) => {
 		const request = new Request(typeof input === 'string' ? new URL(input, 'http://sync.test') : input, init);
 		const url = new URL(request.url);
 		const headers = request.headers;
 		if (url.pathname === '/api/sync-resource/stream') {
+			streamRequests += 1;
 			return new Response(
 				new ReadableStream<Uint8Array>({
 					start(controller) {
@@ -76,6 +78,10 @@ function createHarness(
 		requests,
 		setBatchStatus(status: number) {
 			batchStatus = status;
+		},
+		streamRequests: () => streamRequests,
+		closeStream() {
+			streamController.close();
 		},
 		push(envelope: SyncEnvelope) {
 			streamController.enqueue(encodeSseFrame('sync', envelope));
@@ -286,6 +292,38 @@ describe('batched realtime registration', () => {
 			expect(harness.requests.map((request) => request.connects ?? request.url)).toEqual([
 				'http://other.test/b/connect?after=cursor-b',
 				['/a/connect?after=cursor-a']
+			]);
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+
+	it('re-registers every subscription with its latest cursor in one batch when the shared stream reconnects', async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, 'random').mockReturnValue(0.5);
+		const harness = createHarness();
+		const signal = new AbortController();
+		const cursors: Record<string, string> = { a: 'a-1', b: 'b-1' };
+		try {
+			const results = await Promise.all(
+				['a', 'b'].map((manager) =>
+					register(harness.runtime, manager, signal.signal, [], () => cursors[manager])
+				)
+			);
+			expect(results.every((result) => result.isOk())).toBe(true);
+			expect(harness.requests.map((request) => request.connects)).toEqual([
+				['/a/connect?after=a-1', '/b/connect?after=b-1']
+			]);
+
+			cursors.a = 'a-2';
+			cursors.b = 'b-2';
+			harness.closeStream();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(harness.streamRequests()).toBe(2);
+			expect(harness.requests.map((request) => request.connects)).toEqual([
+				['/a/connect?after=a-1', '/b/connect?after=b-1'],
+				['/a/connect?after=a-2', '/b/connect?after=b-2']
 			]);
 		} finally {
 			signal.abort();
