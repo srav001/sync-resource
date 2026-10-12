@@ -46,10 +46,75 @@ const list = async (outbox: MemoryManagerOutbox, duringRead?: () => void) => {
 	return (await response.json()) as { value: unknown; envelope?: SyncEnvelope };
 };
 
+async function replayed(outbox: MemoryManagerOutbox, afterCursor: string | undefined, until: string) {
+	registerSharedStreamManager({ key: 'notes' });
+	await registerSharedStreamSubscription({
+		request: new Request('http://x/connect', { method: 'POST', headers: { 'x-sync-transport-id': 't' } }),
+		managerKey: 'notes',
+		scope: SCOPE,
+		afterCursor,
+		replayLimit: 100,
+		persistence: outbox,
+		nextCursor: () => 'reset'
+	});
+	const stream = await httpSharedSyncStream(
+		new Request('http://x/stream', {
+			method: 'POST',
+			headers: { 'x-sync-transport-id': 't', 'x-forwarded-for': '1.1.1.1' }
+		})
+	);
+	const reader = stream.body!.getReader();
+	const seen: string[] = [];
+	while (!seen.includes(until)) {
+		const event = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
+		if (event.eventName === 'sync') {
+			seen.push(JSON.parse(event.data).cursor);
+		}
+	}
+	await reader.cancel();
+	return seen;
+}
+
 describe('read sync cursor', () => {
-	it('returns no cursor for a read on an empty scope', async () => {
-		const body = await list(new MemoryManagerOutbox());
-		expect(body.envelope).toBeUndefined();
+	it('gives a read of an empty scope the origin cursor, which replays the first envelope of the scope', async () => {
+		const outbox = new MemoryManagerOutbox();
+		const { envelope } = await list(outbox, () => outbox.append(env('c1')));
+		expect(envelope?.cursor).toMatch(/^origin:/);
+		expect(await replayed(outbox, envelope?.cursor, 'c1')).toEqual(['c1']);
+	});
+
+	it('resets an origin cursor once the scope may have been trimmed, or from another outbox', async () => {
+		const outbox = new MemoryManagerOutbox(2);
+		const origin = outbox.latestCursor(SCOPE);
+		outbox.append(env('c1'));
+		expect(outbox.readAfter(SCOPE, origin, 10)).toMatchObject({ cursorFound: true, envelopes: [{ cursor: 'c1' }] });
+		outbox.append(env('c2'));
+		expect(outbox.readAfter(SCOPE, origin, 10).cursorFound).toBe(false);
+		expect(new MemoryManagerOutbox().readAfter(SCOPE, origin, 10).cursorFound).toBe(false);
+	});
+
+	it('attaches the latest outbox cursor to a get read', async () => {
+		const outbox = new MemoryManagerOutbox();
+		outbox.append(env('c1'));
+		const notes = resource({ parse: (value: unknown) => value as { workspaceId: string } }, (method) => ({
+			get: method.get({
+				output: { parse: (value: unknown) => value as { id: string } },
+				handler: ({ ctx }) => ctx.ok({ id: 'ws' })
+			})
+		}));
+		const notesManager = manager({
+			key: 'notes',
+			resource: notes,
+			authorize: () => true,
+			scope: (params) => params.workspaceId,
+			outbox
+		});
+		const response = await notesManager.http.get!({
+			request: new Request('http://sync.test/get'),
+			params: { workspaceId: 'ws' }
+		});
+		const body = (await response.json()) as { envelope?: SyncEnvelope };
+		expect(body.envelope).toMatchObject({ cursor: 'c1', changes: [] });
 	});
 
 	it('attaches the latest outbox cursor to a read without a resource cursor', async () => {
@@ -66,33 +131,6 @@ describe('read sync cursor', () => {
 		outbox.append(env('c1'));
 		const { envelope } = await list(outbox, () => outbox.append(env('c2')));
 		expect(envelope?.cursor).toBe('c1');
-
-		registerSharedStreamManager({ key: 'notes' });
-		const connect = new Request('http://x/connect', { method: 'POST', headers: { 'x-sync-transport-id': 't' } });
-		await registerSharedStreamSubscription({
-			request: connect,
-			managerKey: 'notes',
-			scope: SCOPE,
-			afterCursor: envelope?.cursor,
-			replayLimit: 100,
-			persistence: outbox,
-			nextCursor: () => 'reset'
-		});
-		const stream = await httpSharedSyncStream(
-			new Request('http://x/stream', {
-				method: 'POST',
-				headers: { 'x-sync-transport-id': 't', 'x-forwarded-for': '1.1.1.1' }
-			})
-		);
-		const reader = stream.body!.getReader();
-		const seen: string[] = [];
-		while (!seen.includes('c2')) {
-			const event = parseSseEvent(new TextDecoder().decode((await reader.read()).value));
-			if (event.eventName === 'sync') {
-				seen.push(JSON.parse(event.data).cursor);
-			}
-		}
-		expect(seen).toEqual(['c2']);
-		await reader.cancel();
+		expect(await replayed(outbox, envelope?.cursor, 'c2')).toEqual(['c2']);
 	});
 });

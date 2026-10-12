@@ -334,7 +334,9 @@ return ok({
 Use explicit `changes` only when default inference is not enough. Use `metrics` for generic adapter cost reporting.
 Core sync does not attach database-specific meaning to those metrics.
 
-Read responses do not get synthetic replay cursors. A `list` read without a `syncCursor` gets the scope's latest outbox cursor when the outbox implements `latestCursor` (captured before the read handler runs); with no retained envelope, or an outbox without `latestCursor`, it returns no response envelope, so the client does not connect with a cursor that the outbox cannot replay. A resource can also return a real persisted cursor through `syncCursor` or explicit changes that include it. Writes with state changes get manager-generated cursors and are persisted through the outbox/finality path.
+Read responses do not get synthetic replay cursors. A `list` or `get` read without a `syncCursor` gets the scope's latest outbox cursor when the outbox implements `latestCursor` (captured before the read handler runs); a `get` read then returns an envelope with that cursor and no changes. With an outbox without `latestCursor`, a read returns no cursor. A resource can also return a real persisted cursor through `syncCursor` or explicit changes that include it. Writes with state changes get manager-generated cursors and are persisted through the outbox/finality path.
+
+The client store's cursor is the one its latest read returned, or the newest live envelope applied after that read started. A read without a cursor clears it, so a cursor restored from cache or set by a reset is never sent once a read has replaced the data it described.
 
 Handlers may also return live-only `signals`:
 
@@ -495,10 +497,10 @@ Cursor contract:
 - Cursors are opaque replay tokens scoped to one manager scope.
 - `readAfter(scope, cursor, limit)` must return envelopes strictly after that cursor when it is retained.
 - If the cursor is not retained, return `cursorFound: false` and the retained count; the stream always emits a reset for an unknown cursor, including when nothing is retained. The stream reads up to `replayLimit + 1` envelopes and emits a reset instead of a partial replay when more than `replayLimit` are pending.
-- `latestCursor(scope)` is optional and returns the cursor of the newest retained envelope of the scope, or `undefined` when there is none. It must return a cursor that `readAfter` can find. Effect outboxes and persistence take the same optional `latestCursor(scope)` returning an Effect.
+- `latestCursor(scope)` is optional and returns the cursor of the newest retained envelope of the scope. For a scope with no retained envelope it returns an origin cursor that `readAfter` accepts as the start of the scope's history until trimming may have dropped an envelope (`MemoryManagerOutbox` uses one origin per instance, so an origin from another process is unknown and resets). Return `undefined` only when the outbox cannot name a position. Every returned cursor must be one `readAfter` can find. Effect outboxes and persistence take the same optional `latestCursor(scope)` returning an Effect.
 - Manager-generated cursors include process entropy to avoid cross-process token collisions, but they are not a durable ordered sequence by themselves.
 - Durable persistence should make replay ordering stable across processes. If the backing store owns sequence numbers, the resource/commit path should return that persisted cursor through `syncCursor`.
-- Read/list responses must not invent replay cursors that are not present in durable persistence. When a `list` read returns no `syncCursor` and the outbox implements `latestCursor`, the manager attaches the scope's latest outbox cursor, captured before the read handler runs, so replay covers commits that land between the read and the stream registration.
+- Read/list responses must not invent replay cursors that are not present in durable persistence. When a `list` or `get` read returns no `syncCursor` and the outbox implements `latestCursor`, the manager attaches the scope's latest outbox cursor, captured before the read handler runs, so replay covers commits that land between the read and the stream registration.
 
 Use `sourceCommit` when a resource needs the manager-supplied mutation record and envelope before committing the source DB write:
 

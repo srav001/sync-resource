@@ -114,4 +114,38 @@ describe('reads racing live envelopes', () => {
 
 		expect(getCursor()).toBe('c2');
 	});
+	it('lets a read without a cursor replace the cursor an earlier read set', async () => {
+		let getCursor!: () => string | undefined;
+		const transport: RuntimeTransport = {
+			async subscribe(options) {
+				getCursor = options.getCursor!;
+				return ok(() => {});
+			}
+		};
+		let calls = 0;
+		configureSync({
+			cache: { adapter: cache },
+			transport,
+			fetch: async () => {
+				calls += 1;
+				return calls === 1
+					? listResponse('A', 'stale')
+					: Response.json({ isOk: true, isError: false, value: { items: [{ id: 'n1', title: 'B' }] } });
+			}
+		});
+		const store = createStore<RaceManager>({
+			key: 'read-live-race',
+			getParams: () => ({ workspaceId: 'workspace-1' }),
+			getUrl: () => 'http://sync.test/notes',
+			query: () => ({ limit: 10 })
+		});
+		try {
+			await store.hydrate();
+			expect(getCursor()).toBe('stale');
+			await store.refresh();
+			expect(getCursor()).toBeUndefined();
+		} finally {
+			store.dispose();
+		}
+	});
 });

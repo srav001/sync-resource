@@ -799,6 +799,8 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 }
 
 export class MemoryManagerOutbox implements ManagerSyncPersistence {
+	// Names the start of a scope's history in this outbox instance, so a read of an empty scope still gets a replay cursor.
+	private readonly origin = `origin:${createCursorSeed()}`;
 	private readonly scopes = new Map<string, SyncEnvelope[]>();
 	private readonly mutations = new MemoryMutationRecordStore();
 	private readonly maxEnvelopesPerScope: number;
@@ -820,14 +822,14 @@ export class MemoryManagerOutbox implements ManagerSyncPersistence {
 		}
 	}
 
-	latestCursor(scope: string): string | undefined {
-		return this.scopes.get(scope)?.at(-1)?.cursor;
+	latestCursor(scope: string): string {
+		return this.scopes.get(scope)?.at(-1)?.cursor ?? this.origin;
 	}
 
 	readAfter(scope: string, cursor: string, limit: number): ManagerOutboxRead {
 		const envelopes = this.scopes.get(scope) ?? [];
-		const cursorIndex = envelopes.findIndex((envelope) => envelope.cursor === cursor);
-		if (cursorIndex < 0) {
+		const start = this.replayStart(envelopes, cursor);
+		if (start === undefined) {
 			return {
 				envelopes: [],
 				cursorFound: false,
@@ -835,10 +837,19 @@ export class MemoryManagerOutbox implements ManagerSyncPersistence {
 			};
 		}
 		return {
-			envelopes: envelopes.slice(cursorIndex + 1, cursorIndex + 1 + limit),
+			envelopes: envelopes.slice(start, start + limit),
 			cursorFound: true,
 			retainedEnvelopeCount: envelopes.length
 		};
+	}
+
+	private replayStart(envelopes: readonly SyncEnvelope[], cursor: string): number | undefined {
+		// The origin is replayable until trimming may have dropped the scope's first envelope.
+		if (cursor === this.origin) {
+			return envelopes.length < this.maxEnvelopesPerScope ? 0 : undefined;
+		}
+		const index = envelopes.findIndex((envelope) => envelope.cursor === cursor);
+		return index < 0 ? undefined : index + 1;
 	}
 
 	readMutation(scope: string, mutationId: string): ManagerMutationRecord | undefined {
@@ -1198,8 +1209,9 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 
 		async function executeResourceAndPersist(): Promise<SyncResult<ManagerExecutionSuccess, SyncError>> {
 			// Captured before the read so replay from it covers every commit that lands while the read runs.
-			const readCursor =
-				method === 'list' ? await options.persistence.latestCursor?.(scope, execution) : undefined;
+			const readCursor = isWriteMethod(method)
+				? undefined
+				: await options.persistence.latestCursor?.(scope, execution);
 			const resourceArgs = mergeParams(params, args);
 			const result = await executeResource(resourceArgs, withDeferredSourceCommit(method, effectiveCallOptions));
 			if (result.isErr()) {
@@ -1752,7 +1764,7 @@ function buildEnvelope<TArgs>(
 ): SyncEnvelope | undefined {
 	const changes = collectChanges(method, args, value);
 	if (changes.length === 0) {
-		return undefined;
+		return readCursor ? { managerKey, scope, cursor: readCursor, changes } : undefined;
 	}
 
 	const replayCursor = getSyncCursor(value) ?? getChangesSyncCursor(changes) ?? readCursor;

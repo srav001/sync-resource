@@ -979,13 +979,14 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	// A read response predates every envelope applied since the read started, so those envelopes are re-applied over it.
+	// Otherwise the read defines the cursor, replacing one restored from cache or a reset that the server cannot replay.
 	private settleRead(liveStart: number, readEnvelope: SyncEnvelope | undefined): void {
 		const live = this.liveDuringReads.slice(liveStart);
 		for (const envelope of live) {
 			this.applyEnvelopeState(envelope);
 		}
-		if (live.length === 0 && readEnvelope) {
-			this.state.cursor = readEnvelope.cursor;
+		if (live.length === 0) {
+			this.state.cursor = readEnvelope?.cursor;
 		}
 	}
 
