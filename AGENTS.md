@@ -118,7 +118,7 @@ change or is proven infeasible, and document the deferred root cause.
 ## Commands
 
 ```bash
-pnpm run typecheck
+pnpm run check
 pnpm run lint
 pnpm run format
 pnpm run test

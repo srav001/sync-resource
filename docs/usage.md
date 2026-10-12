@@ -115,7 +115,7 @@ Use this rule for paginated metadata:
 
 ## Strict Results
 
-Sync methods return dependency-free discriminated unions with Better Result-style guards:
+Sync methods return dependency-free discriminated unions with `isOk()` and `isErr()` guards:
 
 ```ts
 type SyncResult<TValue, TError extends SyncError = SyncError> = SyncOk<TValue, TError> | SyncErr<TValue, TError>;
@@ -991,7 +991,7 @@ configureSync({
 	streamUrl: '/api/sync-resource/stream',
 	connectUrl: '/api/sync-resource/connect',
 	cache: {
-		adapter: new IndexedDbCacheAdapter('Sync Resource V1', 'store'),
+		adapter: new IndexedDbCacheAdapter('Sync Resource', 'store'),
 		ttlMs: 14 * DAY
 	}
 });
@@ -1360,8 +1360,8 @@ Use `on.signal(type, callback)` for live-only messages. Signal callbacks do not 
 The core emits only slots affected by an operation/envelope. For example, if only `hydrating` changes, item
 subscribers are not notified. Consumers own equality checks, batching, memoization, and deep/proxy reactivity.
 
-`snapshot()` and coarse `subscribe(snapshot)` exist for compatibility/debug use. Consumers should prefer typed event
-slots so unrelated UI subscriptions do not rerun.
+`snapshot()` and coarse `subscribe(snapshot)` read the whole state. Consumers should prefer typed event slots so
+unrelated UI subscriptions do not rerun.
 
 ## Cache-First Behavior
 
@@ -1491,7 +1491,7 @@ const notes = createStore<NotesManager>(config, (reconcile) =>
 `addPlacement: 'sorted'` is an opt-in for authoritative acknowledgements of the current browser's `add` writes. It
 uses the same `matchesQuery` and `compare` reconciliation as external realtime adds across every loaded query family,
 so a partially loaded page keeps its sorted window as later realtime changes arrive. Without this option, local add
-acknowledgements retain the legacy behavior of appending to the active family's first loaded page.
+acknowledgements append to the active family's first loaded page.
 
 `addPlacement: 'sorted'` requires `compare`; store construction throws when the option is supplied without an
 ordering function. The client does not infer an order or refetch to guess placement, so provide `compare` when sorted
