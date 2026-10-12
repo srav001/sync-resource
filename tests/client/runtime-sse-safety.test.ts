@@ -196,6 +196,36 @@ describe('browser runtime SSE safety', () => {
 		);
 	});
 
+	it('stops reading a complete frame that is within the bound by characters but above it by UTF-8 bytes', async () => {
+		await expectBoundedStreamRecovery(
+			`event: sync\ndata: ${'\u20ac'.repeat(Math.ceil(MAX_SSE_FRAME_BYTES / 3))}\n\n`,
+			'multibyte-frame'
+		);
+	});
+
+	it('delivers a complete frame above a third of the bound by characters but within it by bytes', async () => {
+		const harness = createDirectStreamHarness();
+		const runtime = createRuntime({ cache, fetch: harness.fetch, createId: (prefix) => `${prefix}-large-frame` });
+		const received: SyncEnvelope[] = [];
+		const abort = new AbortController();
+		try {
+			const subscription = await runtime.transport.subscribe({
+				url: '/events',
+				signal: abort.signal,
+				onEnvelope: (value) => received.push(value)
+			});
+			const large = envelope('cursor-large', 'x'.repeat(MAX_SSE_FRAME_BYTES / 4));
+			harness.controllers[0]?.enqueue(encodeSseFrame('sync', large));
+			await waitFor(() => received.length === 1);
+			expect(received).toEqual([large]);
+			if (subscription.isOk()) {
+				subscription.value();
+			}
+		} finally {
+			runtime.dispose();
+		}
+	});
+
 	it('stops reading an unterminated buffer above the frame bound and a new subscription can recover', async () => {
 		await expectBoundedStreamRecovery('x'.repeat(MAX_SSE_FRAME_BYTES + 1), 'stalled-buffer');
 	});

@@ -82,9 +82,7 @@ const CACHE_SWEEP_DELAY_MS = 60_000;
 const CACHE_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const CACHE_SWEEP_KEY = 'sync-resource:cache-sweep';
 const LOCK_NAME = 'sync-resource:transport';
-const MAX_SSE_BUFFER_BYTES = MAX_SSE_FRAME_BYTES;
 const MAX_PENDING_SYNC_CHUNKS = 32;
-const SSE_PING_PREFIX = 'event: ping\n';
 const sseTextEncoder = new TextEncoder();
 type BroadcastPayload =
 	| { readonly type: 'envelope'; readonly envelope: unknown }
@@ -977,7 +975,6 @@ async function readSseStream(
 	onTerminalFailure: () => void
 ): Promise<SyncResult<void, SyncError>> {
 	let buffer = '';
-	let bufferBytes = 0;
 	let terminalFailure = false;
 	const textDecoder = new TextDecoder('utf-8', { fatal: true });
 	const pendingSyncChunks = new Map<string, PendingSyncEnvelopeChunks>();
@@ -991,15 +988,12 @@ async function readSseStream(
 			if (chunk.done) {
 				return ok(undefined);
 			}
-			bufferBytes += chunk.value.byteLength;
 			buffer += textDecoder.decode(chunk.value, { stream: true });
 			let eventEnd = buffer.indexOf('\n\n');
 			while (eventEnd >= 0) {
 				const eventText = buffer.slice(0, eventEnd);
 				buffer = buffer.slice(eventEnd + 2);
-				const frameBytes = sseTextEncoder.encode(eventText).byteLength + 2;
-				bufferBytes = Math.max(0, bufferBytes - frameBytes);
-				if (frameBytes > MAX_SSE_BUFFER_BYTES) {
+				if (exceedsFrameBound(eventText, 2)) {
 					terminalFailure = true;
 					return err('payload_too_large', 'Sync SSE frame exceeded max size.');
 				}
@@ -1009,7 +1003,7 @@ async function readSseStream(
 				}
 				eventEnd = buffer.indexOf('\n\n');
 			}
-			if (bufferBytes > MAX_SSE_BUFFER_BYTES) {
+			if (exceedsFrameBound(buffer, 0)) {
 				// Bound malformed or stalled streams so a broken SSE response cannot grow memory without limit.
 				terminalFailure = true;
 				return err('payload_too_large', 'Sync SSE buffer exceeded max size.');
@@ -1041,19 +1035,19 @@ async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Pr
 	}
 }
 
+// UTF-8 takes at most 3 bytes per UTF-16 unit, so only a text above a third of the bound needs its exact byte length.
+function exceedsFrameBound(text: string, extraBytes: number): boolean {
+	return (
+		text.length * 3 + extraBytes > MAX_SSE_FRAME_BYTES &&
+		sseTextEncoder.encode(text).byteLength + extraBytes > MAX_SSE_FRAME_BYTES
+	);
+}
+
 function parseSseEnvelope(
 	eventText: string,
 	pendingSyncChunks: Map<string, PendingSyncEnvelopeChunks>
 ): SyncEnvelope | undefined {
-	if (eventText.startsWith(SSE_PING_PREFIX)) {
-		return undefined;
-	}
-
 	const { eventName, data } = parseSseEvent(eventText);
-
-	if (eventName === 'ping') {
-		return undefined;
-	}
 	if (!data) {
 		return undefined;
 	}
