@@ -139,7 +139,7 @@ describe('failed realtime registration', () => {
 			const hydrated = await store.hydrate();
 			expect(hydrated.isOk()).toBe(true);
 			await vi.advanceTimersByTimeAsync(0);
-			expect(store.error()).toBeDefined();
+			expect(store.error()).toMatchObject({ code: 'bad_request', message: 'Sync subscribe failed: 503' });
 			await vi.advanceTimersByTimeAsync(1300);
 			expect(connects).toBe(2);
 		} finally {

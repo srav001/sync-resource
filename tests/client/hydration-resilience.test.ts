@@ -122,9 +122,11 @@ describe('hydration resilience', () => {
 			}
 		});
 		const store = createHydrationStore();
+		const registrationFailed = new Deferred();
+		store.on.error((error) => error && registrationFailed.resolve());
 
 		expect((await store.hydrate()).isOk()).toBe(true);
-		await waitFor(() => store.error() !== undefined);
+		await registrationFailed.promise;
 		expect(store.error()?.message).toBe('transport unavailable');
 		expect((await store.hydrate()).isOk()).toBe(true);
 		expect({ reads, subscriptions }).toEqual({ reads: 1, subscriptions: 2 });

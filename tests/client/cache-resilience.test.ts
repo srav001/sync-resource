@@ -128,7 +128,6 @@ describe('cache scheduling resilience', () => {
 		const store = createCacheStore();
 		await store.hydrate();
 		await vi.advanceTimersByTimeAsync(250);
-		await waitFor(() => store.error() !== null);
 
 		expect(store.error()?.message).toBe('cache quota exceeded');
 		expect(store.items()).toEqual([{ id: 'note-1', title: 'Authoritative' }]);
@@ -180,14 +179,4 @@ function cachedTitle(item: CacheItem<unknown> | undefined, id: string): string |
 
 function syncResponse(value: unknown): Response {
 	return Response.json({ isOk: true, isError: false, value });
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
 }

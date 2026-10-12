@@ -125,6 +125,7 @@ async function settle(): Promise<void> {
 
 afterEach(() => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 });
 
 describe('batched realtime registration', () => {

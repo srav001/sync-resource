@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
 
 import {
 	configureSync,
@@ -13,6 +13,7 @@ import {
 	type SyncError,
 	type SyncResult
 } from '../../src/client/core.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface ScopeManager extends ManagerTypeShape {
 	readonly key: 'scope-change';
@@ -94,9 +95,11 @@ describe('realtime subscription follows the store scope', () => {
 			getUrl: () => `http://sync.test/${workspaceId}/notes`,
 			query: () => ({ limit: 10 })
 		});
+		const registrationFailed = new Deferred();
+		store.on.error((error) => error && registrationFailed.resolve());
 		try {
 			expect((await store.hydrate()).isOk()).toBe(true);
-			await vi.waitFor(() => expect(store.error()).toBeDefined());
+			await registrationFailed.promise;
 			workspaceId = 'w2';
 			expect((await store.hydrate()).isOk()).toBe(true);
 
@@ -109,7 +112,7 @@ describe('realtime subscription follows the store scope', () => {
 
 	it('ends an in-flight registration of the old scope when params change', async () => {
 		const events: string[] = [];
-		let finishW1: ((result: SyncResult<() => void, SyncError>) => void) | undefined;
+		const w1Subscribing = new Deferred<(result: SyncResult<() => void, SyncError>) => void>();
 		const transport: RuntimeTransport = {
 			subscribe(options) {
 				const url = options.connectUrl ?? '';
@@ -118,7 +121,7 @@ describe('realtime subscription follows the store scope', () => {
 				const unsubscribe = () => events.push(`unsubscribe ${url}`);
 				if (url.includes('/w1/')) {
 					return new Promise((resolve) => {
-						finishW1 = resolve;
+						w1Subscribing.resolve(resolve);
 					});
 				}
 				return Promise.resolve(ok(unsubscribe));
@@ -138,10 +141,10 @@ describe('realtime subscription follows the store scope', () => {
 		});
 		try {
 			const first = store.hydrate();
-			await vi.waitFor(() => expect(finishW1).toBeDefined());
+			const finishW1 = await w1Subscribing.promise;
 			workspaceId = 'w2';
 			await store.connect();
-			finishW1?.(ok(() => events.push('unsubscribe http://sync.test/w1/notes/connect')));
+			finishW1(ok(() => events.push('unsubscribe http://sync.test/w1/notes/connect')));
 			await first;
 
 			expect(events).toEqual([

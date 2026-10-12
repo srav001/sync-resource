@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 import { createRuntime, type CacheAdapter } from '../../src/client/core.ts';
 import type { SyncEnvelope } from '../../src/shared/protocol.ts';
 import { MAX_CHUNKED_SYNC_BYTES, encodeSseFrame, encodeSyncEnvelopeSseFrames } from '../../src/shared/sse.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 const cache: CacheAdapter = {
 	async get() {
@@ -296,17 +297,15 @@ describe('browser runtime registration order', () => {
 	}
 
 	it('registers logical subscriptions only after the shared stream opens and does not re-send them', async () => {
+		vi.useFakeTimers();
 		const order: string[] = [];
-		let openStream!: () => void;
-		const streamOpened = new Promise<void>((resolve) => {
-			openStream = resolve;
-		});
+		const streamOpened = new Deferred();
 		let hydrations = 0;
 		const fetchImpl: typeof fetch = async (input, init) => {
 			const request = toRequest(input, init);
 			if (request.url.endsWith('/api/sync-resource/stream')) {
 				order.push('stream');
-				await streamOpened;
+				await streamOpened.promise;
 				return sseResponse();
 			}
 			order.push(new URL(request.url).pathname);
@@ -324,9 +323,9 @@ describe('browser runtime registration order', () => {
 				subscribeTo(runtime, 'tasks', () => (hydrations += 1))
 			]);
 			await waitFor(() => order.length > 0);
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			await vi.advanceTimersByTimeAsync(1_000);
 			expect(order).toEqual(['stream']);
-			openStream();
+			streamOpened.resolve();
 			const results = await subscriptions;
 			expect(results.every((result) => result.isOk())).toBe(true);
 			expect(order).toEqual(['stream', '/notes/connect', '/tasks/connect']);
@@ -421,13 +420,15 @@ describe('browser runtime registration order', () => {
 		}
 
 		it('registers after the stream opens when the tab owns the Web Lock', async () => {
+			vi.useFakeTimers();
 			stubBrowser({ granted: true });
 			const order: string[] = [];
+			const streamOpened = new Deferred();
 			const fetchImpl: typeof fetch = async (input, init) => {
 				const request = toRequest(input, init);
 				if (request.url.endsWith('/api/sync-resource/stream')) {
 					order.push('stream');
-					await new Promise((resolve) => setTimeout(resolve, 20));
+					await streamOpened.promise;
 					return sseResponse();
 				}
 				order.push('connect');
@@ -440,8 +441,12 @@ describe('browser runtime registration order', () => {
 				createId: (prefix) => `${prefix}-owner`
 			});
 			try {
-				const subscription = await subscribeTo(runtime, 'notes');
-				expect(subscription.isOk()).toBe(true);
+				const subscription = subscribeTo(runtime, 'notes');
+				await waitFor(() => order.length > 0);
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(order).toEqual(['stream']);
+				streamOpened.resolve();
+				expect((await subscription).isOk()).toBe(true);
 				expect(order).toEqual(['stream', 'connect']);
 			} finally {
 				runtime.dispose();

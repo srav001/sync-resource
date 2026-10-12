@@ -33,7 +33,9 @@ const cache: CacheAdapter = {
 	async del() {}
 };
 
-function createFetch(readDelayMs: (path: string) => number = () => 0) {
+const okList = () => Response.json({ isOk: true, isError: false, value: { items: [] } });
+
+function createFetch(readResponse: (path: string) => Promise<Response> = async () => okList()) {
 	const batches: string[][] = [];
 	const fetchImpl: typeof fetch = async (input, init) => {
 		const request = new Request(typeof input === 'string' ? new URL(input, 'http://sync.test') : input, init);
@@ -53,8 +55,7 @@ function createFetch(readDelayMs: (path: string) => number = () => 0) {
 				}))
 			});
 		}
-		await new Promise((resolve) => setTimeout(resolve, readDelayMs(path)));
-		return Response.json({ isOk: true, isError: false, value: { items: [] } });
+		return readResponse(path);
 	};
 	return { fetchImpl, batches };
 }
@@ -66,9 +67,13 @@ afterEach(() => {
 
 describe('registration hold', () => {
 	it('sends the registrations of stores whose reads finish at different times as one request', async () => {
-		const { fetchImpl, batches } = createFetch(
-			(path) => ({ '/a/list': 5, '/b/list': 40, '/c/list': 90 })[path] ?? 0
-		);
+		vi.useFakeTimers();
+		const gates: Record<string, Deferred<Response>> = {
+			'/a/list': new Deferred(),
+			'/b/list': new Deferred(),
+			'/c/list': new Deferred()
+		};
+		const { fetchImpl, batches } = createFetch((path) => gates[path]!.promise);
 		configureSync({ cache: { adapter: cache }, fetch: fetchImpl });
 		const stores = ['a', 'b', 'c'].map((name) =>
 			createStore<NotesManager>({
@@ -79,10 +84,17 @@ describe('registration hold', () => {
 			})
 		);
 		try {
-			const results = await Promise.all(stores.map((store) => store.hydrate()));
+			const hydrations = stores.map((store) => store.hydrate());
+			gates['/a/list']!.resolve(okList());
+			gates['/b/list']!.resolve(okList());
+			await Promise.all(hydrations.slice(0, 2));
+			await vi.advanceTimersByTimeAsync(1_900);
+			expect(batches).toEqual([]);
+
+			gates['/c/list']!.resolve(okList());
+			const results = await Promise.all(hydrations);
 			expect(results.every((result) => result.isOk())).toBe(true);
-			await vi.waitFor(() => expect(batches).toHaveLength(1));
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			await vi.advanceTimersByTimeAsync(1);
 			expect(batches).toEqual([['/a/connect', '/b/connect', '/c/connect']]);
 		} finally {
 			for (const store of stores) {
@@ -121,6 +133,7 @@ describe('registration hold', () => {
 describe('store read registration hold', () => {
 	function createStoreWithSpyTransport(respond: () => Promise<Response>) {
 		const events: string[] = [];
+		const fetched = new Deferred();
 		const transport: RuntimeTransport = {
 			async subscribe() {
 				events.push('subscribe');
@@ -138,6 +151,7 @@ describe('store read registration hold', () => {
 			transport,
 			fetch: async () => {
 				events.push('fetch');
+				fetched.resolve();
 				return respond();
 			}
 		});
@@ -147,20 +161,19 @@ describe('store read registration hold', () => {
 			getUrl: () => 'http://sync.test/a',
 			query: () => ({ limit: 10 })
 		});
-		return { events, store };
+		return { events, store, fetched };
 	}
-
-	const okList = () => Response.json({ isOk: true, isError: false, value: { items: [] } });
 
 	it('holds registrations from the start of each read until it ends and releases once', async () => {
 		const gate = new Deferred<Response>();
 		let reads = 0;
-		const { events, store } = createStoreWithSpyTransport(() =>
+		const { events, store, fetched } = createStoreWithSpyTransport(() =>
 			++reads === 1 ? gate.promise : Promise.resolve(okList())
 		);
 		try {
 			const hydrating = store.hydrate();
-			await vi.waitFor(() => expect(events).toEqual(['hold', 'fetch']));
+			await fetched.promise;
+			expect(events).toEqual(['hold', 'fetch']);
 			gate.resolve(okList());
 			expect((await hydrating).isOk()).toBe(true);
 			expect(events).toEqual(['hold', 'fetch', 'release', 'subscribe']);
