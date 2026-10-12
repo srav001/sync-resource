@@ -634,24 +634,14 @@ function notifyScopeIdle(managerKey: string, scope: string): void {
 	registeredManagers.get(managerKey)?.onScopeIdle?.(scope);
 }
 
-async function reportSharedStreamError(
-	detail: SubscriptionDetail,
-	errorValue: SyncError
-): Promise<SyncResult<void, SyncError>> {
-	const manager = registeredManagers.get(detail.managerKey);
-	if (!manager?.handleError) {
-		return ok();
-	}
+async function reportSharedStreamError(detail: SubscriptionDetail, errorValue: SyncError): Promise<void> {
 	try {
-		await manager.handleError(errorValue, {
+		await registeredManagers.get(detail.managerKey)?.handleError?.(errorValue, {
 			manager: detail.managerKey,
 			method: 'stream.replay',
 			scope: detail.scope
 		});
-		return ok();
-	} catch (cause) {
-		return err(normalizeSyncError(cause));
-	}
+	} catch {}
 }
 
 function unrefTimer<TTimer extends ReturnType<typeof setTimeout>>(timer: TTimer): TTimer {

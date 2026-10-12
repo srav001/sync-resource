@@ -144,14 +144,8 @@ async function reportRealtimeBusError(
 	options: PubSubManagerRealtimeBusOptions,
 	errorValue: SyncError,
 	context: ManagerRealtimeBusErrorContext
-): Promise<SyncResult<void, SyncError>> {
-	if (!options.handleError) {
-		return ok();
-	}
+): Promise<void> {
 	try {
-		await options.handleError(errorValue, context);
-		return ok();
-	} catch (cause) {
-		return err(normalizeSyncError(cause));
-	}
+		await options.handleError?.(errorValue, context);
+	} catch {}
 }
