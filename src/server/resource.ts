@@ -63,16 +63,9 @@ type MutateBatchItem<TQuery, TInput> = [TQuery] extends [never]
 	: { readonly query: TQuery; readonly input: TInput };
 type DeleteBatchItem<TQuery> = [TQuery] extends [never] ? {} : { readonly query: TQuery };
 
-export interface GetMethodInput<TParams extends object, TQuery, TOutput, TSelf> {
+export interface ReadMethodInput<TParams extends object, TQuery, TOutput, TSelf> {
 	readonly output: AnySchema<TOutput>;
 	readonly query?: AnySchema<TQuery>;
-	readonly input?: never;
-	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
-}
-
-export interface ListMethodInput<TParams extends object, TQuery, TOutput, TSelf> {
-	readonly query?: AnySchema<TQuery>;
-	readonly output: AnySchema<TOutput>;
 	readonly input?: never;
 	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, TSelf>): ResourceHandlerResult<TOutput>;
 }
@@ -209,18 +202,18 @@ export type ResourceMethodMap = Partial<Record<MethodKind, { readonly kind: Meth
 
 export interface MethodBuilder<TParams extends object> {
 	get<TOutput>(
-		definition: GetMethodInput<TParams, never, TOutput, unknown>
+		definition: ReadMethodInput<TParams, never, TOutput, unknown>
 	): GetMethodDefinition<TParams, never, TOutput>;
 	get<TQuery, TOutput>(
-		definition: GetMethodInput<TParams, TQuery, TOutput, unknown> & {
+		definition: ReadMethodInput<TParams, TQuery, TOutput, unknown> & {
 			readonly query: AnySchema<TQuery>;
 		}
 	): GetMethodDefinition<TParams, TQuery, TOutput>;
 	list<TOutput>(
-		definition: ListMethodInput<TParams, never, TOutput, unknown>
+		definition: ReadMethodInput<TParams, never, TOutput, unknown>
 	): ListMethodDefinition<TParams, never, TOutput>;
 	list<TQuery, TOutput>(
-		definition: ListMethodInput<TParams, TQuery, TOutput, unknown>
+		definition: ReadMethodInput<TParams, TQuery, TOutput, unknown>
 	): ListMethodDefinition<TParams, TQuery, TOutput>;
 	add<TInput, TOutput = void>(
 		definition: AddMethodInput<TParams, TInput, TOutput, unknown>
@@ -397,7 +390,7 @@ type RuntimeResourceMethod = <TArgs>(
 
 const methodBuilder = {
 	get<TParams extends object, TQuery, TOutput>(
-		definition: GetMethodInput<TParams, TQuery, TOutput, unknown>
+		definition: ReadMethodInput<TParams, TQuery, TOutput, unknown>
 	): GetMethodDefinition<TParams, TQuery, TOutput> {
 		return {
 			kind: 'get',
@@ -408,7 +401,7 @@ const methodBuilder = {
 	},
 
 	list<TParams extends object, TQuery, TOutput>(
-		definition: ListMethodInput<TParams, TQuery, TOutput, unknown>
+		definition: ReadMethodInput<TParams, TQuery, TOutput, unknown>
 	): ListMethodDefinition<TParams, TQuery, TOutput> {
 		return {
 			kind: 'list',

@@ -283,6 +283,7 @@ Sync Resource no longer uses any of these. Remove them from your code.
   `on` and `subscribe`, plus `core`; every member it had is still there.
 - **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
   `stale` is the one staleness flag.
+- **Server:** `GetMethodInput` and `ListMethodInput` are one `ReadMethodInput`.
 - **Shared:** `isResetManifest`, `isSyncChange`, `isSyncErrorCode`, `isSyncErrorRecovery`, `isSyncProtocolError` and
   `isSyncSignal`. `isSyncEnvelope` and `isSyncHttpResult` remain.
 - **`normalizeSyncError(cause, fallbackMessage)`:** the second argument is gone; an `Error` with an empty message becomes
