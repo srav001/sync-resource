@@ -1,10 +1,18 @@
 import { Cause, Context, Effect, Exit, Layer, Predicate, Scope, Tracer } from 'effect';
 import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http';
 
-import { err, ok, type SyncResult } from '../shared/result.js';
-import { httpSharedSyncConnect } from './connectBatch.js';
-import { isSyncError, normalizeSyncError, type SyncError } from './errors.js';
-import { manager as plainManager, type CreateManagerOptions, type Manager as PlainManager } from './manager.js';
+import {
+	isSyncError,
+	normalizeSyncError,
+	type AnySchema,
+	type CostMetric,
+	type InferSchemaOutput,
+	type SyncEnvelope,
+	type SyncError
+} from '../shared/index.ts';
+import { err, ok, type SyncResult } from '../shared/result.ts';
+import { httpSharedSyncConnect } from './connectBatch.ts';
+import { manager as plainManager, type CreateManagerOptions, type Manager as PlainManager } from './manager.ts';
 import {
 	resource as plainResource,
 	executionForCommit,
@@ -13,13 +21,10 @@ import {
 	type MethodKind,
 	type Resource as PlainResource,
 	type ResourceMethodMap
-} from './resource.js';
-import { httpSharedSyncStream } from './streamMultiplexer.js';
+} from './resource.ts';
+import { httpSharedSyncStream } from './streamMultiplexer.ts';
 import type {
-	AnySchema,
 	AuthorizeResult,
-	CostMetric,
-	InferSchemaOutput,
 	ManagerHttpHandlers,
 	ManagerMutationRecord,
 	ManagerOutbox,
@@ -37,9 +42,8 @@ import type {
 	ResourceStateOk,
 	ResourceTelemetryContext,
 	ScopeValue,
-	SyncBatchOutput,
-	SyncEnvelope
-} from './types.js';
+	SyncBatchOutput
+} from './types.ts';
 
 const EffectEnvironmentTypeId: unique symbol = Symbol('@sync-resource/effect/environment');
 const PlainResourceTypeId: unique symbol = Symbol.for('@sync-resource/effect/plain-resource');

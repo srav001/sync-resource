@@ -7,36 +7,8 @@ import type {
 	SyncErrorOptions,
 	SyncSignal
 } from '../shared/index.ts';
-import type { SyncErr, SyncOk, SyncResult } from '../shared/result.js';
-import type { ResourceMethodMap } from './resource.js';
-
-export type {
-	CostMetric,
-	ItemAddedChange,
-	ItemDeletedChange,
-	ItemUpdatedChange,
-	PageLoadedChange,
-	ResetChange,
-	ResetManifest,
-	SyncChange,
-	SyncEnvelope,
-	SyncError,
-	SyncErrorCode,
-	SyncErrorRecovery,
-	SyncHttpError,
-	SyncHttpOk,
-	SyncHttpResult,
-	SyncProtocolError,
-	SyncRecoveryMetadata,
-	SyncRecoverySource,
-	SyncResetReason,
-	SyncSignal,
-	AnySchema,
-	InferSchemaOutput,
-	StandardSchema,
-	StandardSchemaValidationResult,
-	Validator
-} from '../shared/index.ts';
+import type { SyncErr, SyncOk, SyncResult } from '../shared/result.ts';
+import type { ResourceMethodMap } from './resource.ts';
 
 export type Awaitable<TValue> = TValue | Promise<TValue>;
 

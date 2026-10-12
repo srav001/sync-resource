@@ -5,7 +5,7 @@ import type {
 	PageLoadedChange,
 	ResetChange,
 	ResetManifest
-} from './types.js';
+} from '../shared/index.ts';
 
 export const change = {
 	pageLoaded<TItem>(input: {

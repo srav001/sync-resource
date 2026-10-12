@@ -1,15 +1,35 @@
-export { change } from './changes.js';
+export { change } from './changes.ts';
 export {
 	isSyncError,
 	normalizeSyncError,
+	normalizeValidator,
 	SyncError,
 	syncError,
 	syncErrorToHttpStatus,
+	type AnySchema,
+	type CostMetric,
+	type InferSchemaOutput,
+	type ItemAddedChange,
+	type ItemDeletedChange,
+	type ItemUpdatedChange,
+	type PageLoadedChange,
+	type ResetChange,
+	type ResetManifest,
+	type StandardSchema,
+	type StandardSchemaValidationResult,
+	type SyncChange,
+	type SyncEnvelope,
 	type SyncErrorCode,
 	type SyncErrorOptions,
+	type SyncHttpError,
+	type SyncHttpOk,
+	type SyncHttpResult,
 	type SyncRecoveryMetadata,
-	type SyncRecoverySource
-} from './errors.js';
+	type SyncRecoverySource,
+	type SyncSignal,
+	type Validator
+} from '../shared/index.ts';
+export { parseSchema } from './validator.ts';
 export {
 	encodeScope,
 	manager,
@@ -19,8 +39,8 @@ export {
 	type Manager,
 	type ManagerTypeFromResource,
 	type ManagerWriteMethod
-} from './manager.js';
-export { err, ok, SyncErr, SyncOk, type SyncResult } from '../shared/result.js';
+} from './manager.ts';
+export { err, ok, SyncErr, SyncOk, type SyncResult } from '../shared/result.ts';
 export {
 	resource,
 	type AddMethodDefinition,
@@ -33,10 +53,10 @@ export {
 	type DeleteResourceArgs,
 	type GetMethodDefinition,
 	type GetMethodInput,
+	type GetResourceArgs,
 	type ListMethodDefinition,
 	type ListMethodInput,
 	type ListResourceArgs,
-	type GetResourceArgs,
 	type MethodBuilder,
 	type MethodKind,
 	type MutateMethodDefinition,
@@ -50,14 +70,14 @@ export {
 	type ResourceMethodTypes,
 	type ResourceMethods,
 	type ResourceWriteMethod
-} from './resource.js';
-export { httpSharedSyncConnect } from './connectBatch.js';
-export { createPubSubManagerRealtimeBus } from './realtime.js';
+} from './resource.ts';
+export { httpSharedSyncConnect } from './connectBatch.ts';
+export { createPubSubManagerRealtimeBus } from './realtime.ts';
 export type {
 	ManagerRealtimeBusErrorContext,
 	ManagerRealtimePubSubTransport,
 	PubSubManagerRealtimeBusOptions
-} from './realtime.js';
+} from './realtime.ts';
 export {
 	getRegisteredSharedStreamManagerKeys,
 	getSharedStreamConfig,
@@ -65,25 +85,18 @@ export {
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
 	registerSharedStreamSubscription
-} from './streamMultiplexer.js';
-export { normalizeValidator, parseSchema } from './validator.js';
+} from './streamMultiplexer.ts';
 export type {
-	AnySchema,
 	AuthorizeHook,
 	AuthorizeResult,
 	Awaitable,
-	CostMetric,
-	InferSchemaOutput,
-	ItemAddedChange,
-	ItemDeletedChange,
-	ItemUpdatedChange,
 	ManagerHttpHandlerArgs,
 	ManagerHttpHandlers,
 	ManagerMutationRecord,
 	ManagerMutationStatus,
 	ManagerOutbox,
-	ManagerOutboxRead,
 	ManagerOptions,
+	ManagerOutboxRead,
 	ManagerRealtimeBus,
 	ManagerSyncPersistence,
 	ManagerTelemetry,
@@ -93,9 +106,6 @@ export type {
 	OperationMeta,
 	OperationExecution,
 	OperationOptions,
-	PageLoadedChange,
-	ResetChange,
-	ResetManifest,
 	ResourceCommit,
 	ResourceCommitContext,
 	ResourceCommitResult,
@@ -110,19 +120,10 @@ export type {
 	ResourceTelemetry,
 	ResourceTelemetryContext,
 	ScopeValue,
-	StandardSchema,
-	StandardSchemaValidationResult,
 	SyncActor,
 	SyncBatchErrorItem,
 	SyncBatchExecution,
 	SyncBatchItem,
 	SyncBatchOkItem,
-	SyncBatchOutput,
-	SyncChange,
-	SyncEnvelope,
-	SyncHttpError,
-	SyncHttpOk,
-	SyncHttpResult,
-	SyncSignal,
-	Validator
-} from './types.js';
+	SyncBatchOutput
+} from './types.ts';

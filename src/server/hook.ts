@@ -1,7 +1,7 @@
 import { isThenable } from '../shared/guards.ts';
-import { err, ok, type SyncResult } from '../shared/result.js';
-import { normalizeSyncError, type SyncError } from './errors.js';
-import type { Awaitable } from './types.js';
+import { normalizeSyncError, type SyncError } from '../shared/index.ts';
+import { err, ok, type SyncResult } from '../shared/result.ts';
+import type { Awaitable } from './types.ts';
 
 // Hooks are usually absent or synchronous, so only a thenable result costs an extra promise.
 export function callHook<TValue>(run: () => TValue): Awaitable<SyncResult<void, SyncError>> {

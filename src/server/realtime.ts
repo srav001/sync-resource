@@ -1,7 +1,6 @@
-import { isSyncEnvelope } from '../shared/index.ts';
-import { err, ok, type SyncResult } from '../shared/result.js';
-import { normalizeSyncError, syncError, type SyncError } from './errors.js';
-import type { Awaitable, ManagerRealtimeBus, OperationExecution, SyncEnvelope } from './types.js';
+import { isSyncEnvelope, normalizeSyncError, syncError, type SyncEnvelope, type SyncError } from '../shared/index.ts';
+import { err, ok, type SyncResult } from '../shared/result.ts';
+import type { Awaitable, ManagerRealtimeBus, OperationExecution } from './types.ts';
 
 export interface ManagerRealtimePubSubTransport {
 	publish(channel: string, payload: string): Awaitable<void>;

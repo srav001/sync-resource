@@ -1,8 +1,17 @@
 import { isCallable, isRecord, readString } from '../shared/guards.ts';
-import { err, ok, type SyncResult } from '../shared/result.js';
+import {
+	normalizeSyncError,
+	syncError,
+	type CostMetric,
+	type SyncChange,
+	type SyncEnvelope,
+	type SyncError,
+	type SyncHttpResult,
+	type SyncSignal
+} from '../shared/index.ts';
+import { err, ok, type SyncResult } from '../shared/result.ts';
 import { stableStringify } from '../shared/stableJson.ts';
-import { normalizeSyncError, syncError, type SyncError } from './errors.js';
-import { callHook } from './hook.js';
+import { callHook } from './hook.ts';
 import {
 	combineAbortSignals,
 	commitSource,
@@ -13,18 +22,17 @@ import {
 	type CommittedSource,
 	type InternalOperationOptions,
 	type MethodKind
-} from './resource.js';
+} from './resource.ts';
 import {
 	errorResponse,
 	jsonResponse,
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
 	registerSharedStreamSubscription
-} from './streamMultiplexer.js';
+} from './streamMultiplexer.ts';
 import type {
 	AuthorizeHook,
 	Awaitable,
-	CostMetric,
 	ManagerHttpHandlers,
 	ManagerMutationRecord,
 	ManagerOutbox,
@@ -40,12 +48,8 @@ import type {
 	ResourceCommitContext,
 	ResourceHandlerOk,
 	ScopeValue,
-	SyncBatchOutput,
-	SyncChange,
-	SyncEnvelope,
-	SyncSignal,
-	SyncHttpResult
-} from './types.js';
+	SyncBatchOutput
+} from './types.ts';
 
 // Body decoding never uses streaming state, so one decoder safely avoids per-request allocation.
 const textDecoder = new TextDecoder();

@@ -1,8 +1,5 @@
-import { normalizeValidator } from '../shared/index.ts';
-import { err, ok, type SyncResult } from '../shared/result.js';
-import type { AnySchema, SyncError } from './types.js';
-
-export { normalizeValidator } from '../shared/index.ts';
+import { normalizeValidator, type AnySchema, type SyncError } from '../shared/index.ts';
+import { err, ok, type SyncResult } from '../shared/result.ts';
 
 export function parseSchema<TValue, TInput>(
 	schema: AnySchema<TValue>,
