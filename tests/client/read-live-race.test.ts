@@ -114,6 +114,56 @@ describe('reads racing live envelopes', () => {
 
 		expect(getCursor()).toBe('c2');
 	});
+	it('takes the cursor from a cursor-only read envelope and the items from the read value', async () => {
+		let getCursor!: () => string | undefined;
+		const transport: RuntimeTransport = {
+			async subscribe(options) {
+				getCursor = options.getCursor!;
+				return ok(() => {});
+			}
+		};
+		const readResponse = (items: readonly Note[], cursor: string, pageCursor?: string) =>
+			Response.json({
+				isOk: true,
+				isError: false,
+				value: { items, ...(pageCursor ? { pageCursor } : {}) },
+				envelope: { managerKey: 'read-live-race', scope: 'workspace-1', cursor, changes: [] }
+			});
+		const first: readonly Note[] = [
+			{ id: 'n1', title: 'A' },
+			{ id: 'n2', title: 'B' }
+		];
+		const second: readonly Note[] = [{ id: 'n3', title: 'C' }];
+		configureSync({
+			cache: { adapter: cache },
+			transport,
+			fetch: async (input) => {
+				const query =
+					new URL(input instanceof Request ? input.url : String(input), 'http://sync.test').searchParams.get(
+						'query'
+					) ?? '';
+				return query.includes('"cursor":"p2"') ? readResponse(second, 'c2') : readResponse(first, 'c1', 'p2');
+			}
+		});
+		const store = createStore<RaceManager>({
+			key: 'read-live-race',
+			getParams: () => ({ workspaceId: 'workspace-1' }),
+			getUrl: () => 'http://sync.test/notes',
+			query: () => ({ limit: 10 })
+		});
+		try {
+			await store.hydrate();
+			expect(getCursor()).toBe('c1');
+			expect(store.items()).toEqual(first);
+			await store.loadMore();
+			expect(getCursor()).toBe('c2');
+			expect(store.items()).toEqual([...first, ...second]);
+			expect(store.pages().map((page) => page.ids)).toEqual([['n1', 'n2'], ['n3']]);
+		} finally {
+			store.dispose();
+		}
+	});
+
 	it('lets a read without a cursor replace the cursor an earlier read set', async () => {
 		let getCursor!: () => string | undefined;
 		const transport: RuntimeTransport = {
