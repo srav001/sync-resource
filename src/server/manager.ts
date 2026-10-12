@@ -731,6 +731,11 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 		...execution
 	};
 
+	const fail = async (errorValue: SyncError) => {
+		await reportManagerError(options, telemetryContext, errorValue);
+		return err(errorValue);
+	};
+
 	await callHook(() => options.telemetry?.start?.(telemetryContext));
 
 	const authResult = await authorize(options, context, params, telemetryContext);
@@ -754,14 +759,11 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 			const existing = await options.persistence.readMutation(scope, mutationIdentity.id, execution);
 			if (existing) {
 				if (existing.method !== method || existing.argsHash !== mutationIdentity.argsHash) {
-					const errorValue = syncError('conflict', 'Mutation id was already used with different arguments.', {
-						details: {
-							mutationId: mutationIdentity.id,
-							method
-						}
-					});
-					await reportManagerError(options, telemetryContext, errorValue);
-					return err(errorValue);
+					return fail(
+						syncError('conflict', 'Mutation id was already used with different arguments.', {
+							details: { mutationId: mutationIdentity.id, method }
+						})
+					);
 				}
 
 				await callHook(() => options.telemetry?.success?.(telemetryContext, existing.metrics ?? []));
@@ -781,25 +783,16 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 			const inFlight = options.inFlightMutations.get(inFlightKey);
 			if (inFlight) {
 				if (inFlight.method !== method || inFlight.argsHash !== mutationIdentity.argsHash) {
-					const errorValue = syncError(
-						'conflict',
-						'Mutation id is already in flight with different arguments.',
-						{
-							details: {
-								mutationId: mutationIdentity.id,
-								method
-							}
-						}
+					return fail(
+						syncError('conflict', 'Mutation id is already in flight with different arguments.', {
+							details: { mutationId: mutationIdentity.id, method }
+						})
 					);
-					await reportManagerError(options, telemetryContext, errorValue);
-					return err(errorValue);
 				}
 
 				const inFlightResult = await waitForInFlight(inFlight.promise, execution.signal);
 				if (!inFlightResult) {
-					const errorValue = syncError('aborted', 'Sync operation was aborted.');
-					await reportManagerError(options, telemetryContext, errorValue);
-					return err(errorValue);
+					return fail(syncError('aborted', 'Sync operation was aborted.'));
 				}
 				if (inFlightResult.isOk()) {
 					await callHook(() =>
@@ -834,8 +827,7 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 			const resourceArgs = mergeParams(params, args);
 			const result = await executeResource(resourceArgs, withDeferredSourceCommit(method, effectiveCallOptions));
 			if (result.isErr()) {
-				await reportManagerError(options, telemetryContext, result.error);
-				return result;
+				return fail(result.error);
 			}
 
 			const output = unwrapResourceValue(result.value);
@@ -861,8 +853,7 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 				: undefined;
 			const commitResult = await commitDeferredSourceWrite(result.value, { mutationRecord, envelope }, execution);
 			if (commitResult.isErr()) {
-				await reportManagerError(options, telemetryContext, commitResult.error);
-				return commitResult;
+				return fail(commitResult.error);
 			}
 			const raw = commitResult.value.value;
 			const metrics = collectMetrics(raw);
@@ -886,11 +877,9 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 			});
 		}
 	} catch (cause) {
-		const errorValue = execution.signal.aborted
-			? syncError('aborted', 'Sync operation was aborted.')
-			: normalizeSyncError(cause);
-		await reportManagerError(options, telemetryContext, errorValue);
-		return err(errorValue);
+		return fail(
+			execution.signal.aborted ? syncError('aborted', 'Sync operation was aborted.') : normalizeSyncError(cause)
+		);
 	}
 }
 
