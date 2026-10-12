@@ -299,6 +299,8 @@ import { isOk, Result } from 'sync-resource/client/core';
   `OperationExecution`) need no change.
 - `manager.http` is typed from the resource: each method the resource defines, plus `connect`, is a required handler,
   so existing `?.` and `!` calls keep working and can be dropped. Methods the resource does not define are not on the type.
+  Handler arguments are checked strictly, so a `managerHttpRoutes` `context` callback must produce the manager's context
+  type: `Effect.undefined`, not `Effect.void`, for a manager without context.
 
 ## Optional additions
 
