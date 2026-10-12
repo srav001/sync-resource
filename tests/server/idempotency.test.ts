@@ -30,6 +30,18 @@ describe('manager mutation idempotency', () => {
 		expect(second.isOk() && second.value).toEqual(first.isOk() && first.value);
 	});
 
+	it('skips the duplicate lookup and arguments hash for a generated mutation id', async () => {
+		const system = createSyncTestSystem();
+		const readMutation = vi.spyOn(system.persistence, 'readMutation');
+		const bound = system.manager.bind({ workspaceId: 'workspace-1' });
+		await bound.add({ input: { id: 'n1', title: 'one' } });
+		expect(readMutation).not.toHaveBeenCalled();
+		expect(system.persistence.mutationWrites[0]).toMatchObject({ argsHash: '', status: 'finalized' });
+		await bound.add({ input: { id: 'n2', title: 'two' } }, { mutationId: 'supplied' });
+		expect(readMutation).toHaveBeenCalledTimes(1);
+		expect(system.persistence.mutationWrites[1]?.argsHash).not.toBe('');
+	});
+
 	it('returns conflict for a reused mutation id with different method or args', async () => {
 		const system = createSyncTestSystem();
 		const bound = system.manager.bind({ workspaceId: 'workspace-1' });

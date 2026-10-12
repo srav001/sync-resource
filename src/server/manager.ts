@@ -1128,11 +1128,12 @@ async function executeManagerResourceMethod<TContext, TParams extends object, TA
 			isWriteMethod(method) && effectiveCallOptions?.mutationId
 				? {
 						id: effectiveCallOptions.mutationId,
-						argsHash: stableStringify(args)
+						argsHash: callOptions?.mutationId ? stableStringify(args) : ''
 					}
 				: undefined;
 
-		if (mutationIdentity) {
+		// A generated id cannot have a stored or in-flight record, so only a caller-supplied id is hashed and checked.
+		if (mutationIdentity && callOptions?.mutationId) {
 			const existing = await options.persistence.readMutation(scope, mutationIdentity.id, execution);
 			if (existing) {
 				if (existing.method !== method || existing.argsHash !== mutationIdentity.argsHash) {
