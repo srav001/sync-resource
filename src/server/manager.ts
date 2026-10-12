@@ -1114,25 +1114,24 @@ async function authorize<TContext, TParams extends object>(
 	params: TParams,
 	telemetryContext: ManagerTelemetryContext
 ): Promise<SyncResult<void, SyncError>> {
+	let failure: SyncError | undefined;
 	try {
 		const result = await options.authorize(context, params, telemetryContext);
 		if (result === false) {
-			const errorValue = syncError('forbidden', 'Forbidden.');
-			await reportManagerError(options, telemetryContext, errorValue);
-			return err(errorValue);
+			failure = syncError('forbidden', 'Forbidden.');
+		} else if (result && result !== true && result.isErr()) {
+			failure = result.error;
 		}
-		if (result && result !== true && result.isErr()) {
-			await reportManagerError(options, telemetryContext, result.error);
-			return result;
-		}
-		return ok();
 	} catch (cause) {
-		const errorValue = telemetryContext.signal.aborted
+		failure = telemetryContext.signal.aborted
 			? syncError('aborted', 'Sync operation was aborted.')
 			: normalizeSyncError(cause);
-		await reportManagerError(options, telemetryContext, errorValue);
-		return err(errorValue);
 	}
+	if (!failure) {
+		return ok();
+	}
+	await reportManagerError(options, telemetryContext, failure);
+	return err(failure);
 }
 
 function unwrapResourceValue<TValue>(value: ResourceHandlerOk<TValue> | SyncBatchOutput<ResourceHandlerOk<TValue>>) {
