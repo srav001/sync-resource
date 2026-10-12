@@ -976,6 +976,7 @@ Rules:
   stay on the request's origin, and end in `/connect`. The client sends a larger queue as several requests of at most 64.
 - An item aborted before the flush is not sent. An item aborted after the flush is still sent and its result is ignored.
 - The client sends each store URL on the batch route's origin as its path. A store URL on another origin connects directly.
+- While any store read is in flight the transport holds queued registrations (`RuntimeTransport.holdRegistrations`, optional for custom transports) and sends them together a task after the last read ends, or after two seconds. A boot whose stores finish their reads at different times still sends one request; each read's replay cursor covers the wait.
 - Registrations still wait for the owner's first stream attempt, so a boot sends one batch. Reconnect re-registrations
   batch the same way.
 - Set `batchConnect: false` in `configureSync(...)` to send one direct `POST <manager>/connect` per registration, and do

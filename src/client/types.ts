@@ -83,6 +83,7 @@ export interface RuntimeTransport {
 		onEnvelope(this: void, envelope: SyncEnvelope): void;
 		onReconnect?(this: void): void;
 	}): Promise<SyncResult<() => void, SyncError>>;
+	holdRegistrations?(): () => void;
 }
 
 export interface SyncRuntime {

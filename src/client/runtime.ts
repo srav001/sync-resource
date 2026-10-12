@@ -74,6 +74,7 @@ const OWNER_STORAGE_KEY = 'sync-resource:owner';
 const OWNER_HEARTBEAT_MS = 3000;
 const OWNER_EXPIRES_MS = 10_000;
 const LOGICAL_CONNECT_TIMEOUT_MS = 30_000;
+const MAX_REGISTRATION_HOLD_MS = 2_000;
 const MAX_STREAM_RECONNECT_MS = 60_000;
 const MAX_REGISTRATION_RETRY_MS = 30_000;
 const BROADCAST_CHANNEL = 'sync-resource:v1:transport';
@@ -135,6 +136,8 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	private readonly clientId: string;
 	private readonly subscriptions = new Map<string, LogicalSubscription>();
 	private queuedConnects: QueuedConnect[] = [];
+	private registrationHolds = 0;
+	private registrationHoldTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly tabId: string;
 	private started = false;
 	private disposed = false;
@@ -239,6 +242,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		}
 		this.disposed = true;
 		this.settleStreamAttempt();
+		clearTimeout(this.registrationHoldTimer);
 		this.streamAbort?.abort();
 		this.streamAbort = undefined;
 		if (this.reconnectTimer) {
@@ -418,16 +422,39 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		}
 	}
 
+	// Stores hold registrations while they read, so the registrations that follow a burst of reads go out together.
+	holdRegistrations(): () => void {
+		this.registrationHolds += 1;
+		let released = false;
+		return () => {
+			if (released) {
+				return;
+			}
+			released = true;
+			this.registrationHolds -= 1;
+			if (this.registrationHolds === 0) {
+				// A task later, so the registration a store queues right after its read joins this batch.
+				setTimeout(() => this.flushConnects(), 0);
+			}
+		};
+	}
+
 	private queueConnect(url: string, signal: AbortSignal): Promise<Response> {
 		return new Promise((resolve, reject) => {
 			this.queuedConnects.push({ url, signal, resolve, reject });
-			if (this.queuedConnects.length === 1) {
+			if (this.queuedConnects.length > 1) {
+				return;
+			}
+			if (this.registrationHolds === 0) {
 				queueMicrotask(() => this.flushConnects());
+			} else {
+				this.registrationHoldTimer = setTimeout(() => this.flushConnects(), MAX_REGISTRATION_HOLD_MS);
 			}
 		});
 	}
 
 	private flushConnects(): void {
+		clearTimeout(this.registrationHoldTimer);
 		const queued = this.queuedConnects;
 		this.queuedConnects = [];
 		const live: QueuedConnect[] = [];
