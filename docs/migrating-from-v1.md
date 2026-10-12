@@ -284,7 +284,7 @@ Sync Resource no longer uses any of these. Remove them from your code.
 - **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
   `stale` is the one staleness flag.
 - **Server:** `parseSchema`, `registerSharedStreamManager`, `registerSharedStreamSubscription`,
-  `publishSharedStreamEnvelope`, `getSharedStreamConfig` and `getRegisteredSharedStreamManagerKeys`. `GetMethodInput` and
+  `publishSharedStreamEnvelope`, `getSharedStreamConfig` and `getRegisteredSharedStreamManagerKeys`, and the types `ManagerOptions` and `ManagerType`. `GetMethodInput` and
   `ListMethodInput` are one `ReadMethodInput`. `GetResourceArgs`, `ListResourceArgs` and `DeleteResourceArgs` are no
   longer exported.
 - **Shared:** `isResetManifest`, `isSyncChange`, `isSyncErrorCode`, `isSyncErrorRecovery`, `isSyncProtocolError` and

@@ -43,7 +43,7 @@ repair, and framework-agnostic state events.
   are host-side only.
 - Worker-only code should avoid direct Sync Resource access where possible. If a worker truly needs persisted data
   access, the maximum allowed boundary is a resource, never a manager.
-- Use `createStore<ManagerType>(...)` for framework-agnostic frontend state.
+- Use `createStore<NotesManager>(...)` for framework-agnostic frontend state.
 - Frontend imports only exported manager types, never backend runtime objects.
 - There are no public resource modes such as `document`, `list`, or `event-stream`; method presence defines behavior.
 - Do not expose public string dispatch APIs such as `execute('mutate', ...)`.

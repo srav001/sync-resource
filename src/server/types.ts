@@ -184,12 +184,6 @@ export interface MethodType<TQuery, TInput, TOutput> {
 	readonly output: TOutput;
 }
 
-export interface ManagerType<TKey extends string, TParams, TMethods> {
-	readonly key: TKey;
-	readonly params: TParams;
-	readonly methods: TMethods;
-}
-
 export type ResourceHandlerResult<TOutput> = Awaitable<SyncResult<ResourceHandlerOk<TOutput> | TOutput, SyncError>>;
 
 export interface ResourceTelemetryContext extends OperationExecution {
@@ -232,21 +226,3 @@ export type AuthorizeHook<TContext, TParams> = (
 	params: TParams,
 	execution: OperationExecution
 ) => Awaitable<AuthorizeResult>;
-
-export interface ManagerOptions<TContext, TParams> {
-	readonly key: string;
-	readonly authorize: AuthorizeHook<TContext, TParams>;
-	scope(params: TParams): ScopeValue;
-	readonly replayLimit?: number;
-	readonly outbox?: ManagerOutbox;
-	readonly persistence?: ManagerSyncPersistence;
-	readonly realtimeBus?: ManagerRealtimeBus;
-	readonly telemetry?: ManagerTelemetry;
-	readonly stream?: {
-		readonly heartbeatMs?: number;
-		readonly idleTtlMs?: number;
-		readonly maxConnectionsPerIp?: number;
-		readonly maxEventBytes?: number;
-	};
-	handleError?(error: SyncError, context: ManagerTelemetryContext): Awaitable<void>;
-}
