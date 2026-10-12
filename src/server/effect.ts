@@ -43,7 +43,14 @@ import type {
 const EffectEnvironmentTypeId: unique symbol = Symbol('@sync-resource/effect/environment');
 const PlainResourceTypeId: unique symbol = Symbol.for('@sync-resource/effect/plain-resource');
 const unboundedSignal = new AbortController().signal;
-const managerHttpHandlerNames = ['get', 'list', 'add', 'mutate', 'delete', 'connect'] as const;
+const managerHttpMethods = [
+	['GET', 'get'],
+	['GET', 'list'],
+	['POST', 'add'],
+	['POST', 'mutate'],
+	['POST', 'delete'],
+	['POST', 'connect']
+] as const;
 
 export type EffectOperationOptions = Omit<OperationOptions, 'signal' | 'environment'>;
 export type EffectResourceSelf = Partial<
@@ -432,28 +439,12 @@ export function httpSharedSyncConnectRoute(path: `/${string}`): Layer.Layer<neve
 export function managerHttpRoutes<TContext, TParams, TError = never, R = never, ManagerR = never>(
 	options: EffectManagerRoutesOptions<TContext, TParams, TError, R, ManagerR>
 ): readonly HttpRouter.Route<TError, R | ManagerR>[] {
-	const routes: HttpRouter.Route<TError, R | ManagerR>[] = [];
-	addManagerRoute(routes, options, 'GET', 'get');
-	addManagerRoute(routes, options, 'GET', 'list');
-	addManagerRoute(routes, options, 'POST', 'add');
-	addManagerRoute(routes, options, 'POST', 'mutate');
-	addManagerRoute(routes, options, 'POST', 'delete');
-	addManagerRoute(routes, options, 'POST', 'connect');
-	return routes;
-}
-
-function addManagerRoute<TContext, TParams, TError, R, ManagerR>(
-	routes: HttpRouter.Route<TError, R | ManagerR>[],
-	options: EffectManagerRoutesOptions<TContext, TParams, TError, R, ManagerR>,
-	method: 'GET' | 'POST',
-	name: keyof ManagerHttpHandlers<TContext, TParams>
-): void {
-	const handler = options.manager.http[name];
-	if (!handler) {
-		return;
-	}
-	routes.push(
-		HttpRouter.route(method, `${options.path}/${name}` as `/${string}`, (request) =>
+	return managerHttpMethods.flatMap(([method, name]) => {
+		const handler = options.manager.http[name];
+		if (!handler) {
+			return [];
+		}
+		return HttpRouter.route(method, `${options.path}/${name}` as `/${string}`, (request) =>
 			Effect.gen(function* () {
 				const params = yield* options.params(request);
 				const context = options.context ? yield* options.context(request) : undefined;
@@ -467,8 +458,8 @@ function addManagerRoute<TContext, TParams, TError, R, ManagerR>(
 					})
 				);
 			})
-		)
-	);
+		);
+	});
 }
 
 function adaptResourceDefinitions(methods: EffectResourceMethodMap): ResourceMethodMap {
@@ -643,7 +634,7 @@ function wrapManager<TKey extends string, TResource extends EffectResourceLike, 
 		return context;
 	};
 	const http: Partial<ManagerHttpHandlers<TContext, ResourceParams<TResource>>> = {};
-	for (const name of managerHttpHandlerNames) {
+	for (const [, name] of managerHttpMethods) {
 		const handler = plain.http[name];
 		if (!handler) {
 			continue;
