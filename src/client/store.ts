@@ -4,6 +4,10 @@ import { err, ok, type SyncResult } from '../shared/result.ts';
 import { stableStringify } from '../shared/stableJson.ts';
 import {
 	ackPendingCommand,
+	activeItems,
+	activeListMeta,
+	activePageMetas,
+	activePages,
 	applyEnvelope as applyOptimisticEnvelope,
 	applyPageOutput,
 	captureOptimisticState,
@@ -12,14 +16,14 @@ import {
 	hasQueryFamily,
 	itemsForQueryFamily,
 	metaForQueryFamily,
-	pendingSnapshot,
+	pageMetasForQueryFamily,
 	pagesForQueryFamily,
-	rebuildVisible,
+	pendingSnapshot,
 	reconcileFromConfig,
+	refreshData,
 	restoreOptimisticState,
 	selectQueryFamily,
 	setBaseData,
-	updateVisibleItems,
 	type CachedOptimisticState,
 	type InternalPendingCommand,
 	type PendingCommand
@@ -307,16 +311,18 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly pendingCommands = new Map<string, InternalPendingCommand>();
 	private readonly repairScheduler: RepairScheduler = createRepairScheduler();
 	private readonly subscribers = new Set<StoreSubscriber<TManager>>();
-	private readonly dataSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['data']>>();
-	private readonly itemSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['items']>>();
-	private readonly listMetaSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['listMeta']>>();
-	private readonly pageSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['pages']>>();
+	private readonly eventSubscribers: Record<StoreEventKey, Set<StoreEventCallback<never>>> = {
+		data: new Set(),
+		items: new Set(),
+		listMeta: new Set(),
+		pages: new Set(),
+		pending: new Set(),
+		hydrating: new Set(),
+		refreshing: new Set(),
+		disposed: new Set(),
+		error: new Set()
+	};
 	private readonly signalSubscribers = new Map<string, Set<StoreSignalCallback>>();
-	private readonly pendingSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['pending']>>();
-	private readonly hydratingSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['hydrating']>>();
-	private readonly refreshingSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['refreshing']>>();
-	private readonly disposedSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['disposed']>>();
-	private readonly errorSubscribers = new Set<StoreEventCallback<StoreSnapshot<TManager>['error']>>();
 	private readonly abort = new AbortController();
 	private readonly inflightReads = new Map<string, Promise<SyncResult<unknown, SyncError>>>();
 	private readsInFlight = 0;
@@ -360,25 +366,25 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const api: StoreRuntimeMethods = {
 			on: {
 				data: (callback: StoreEventCallback<StoreSnapshot<TManager>['data']>) =>
-					this.subscribeEvent(this.dataSubscribers, callback),
+					this.subscribeEvent('data', callback),
 				items: (callback: StoreEventCallback<StoreSnapshot<TManager>['items']>) =>
-					this.subscribeEvent(this.itemSubscribers, callback),
+					this.subscribeEvent('items', callback),
 				listMeta: (callback: StoreEventCallback<StoreSnapshot<TManager>['listMeta']>) =>
-					this.subscribeEvent(this.listMetaSubscribers, callback),
+					this.subscribeEvent('listMeta', callback),
 				pages: (callback: StoreEventCallback<StoreSnapshot<TManager>['pages']>) =>
-					this.subscribeEvent(this.pageSubscribers, callback),
+					this.subscribeEvent('pages', callback),
 				signal: <TPayload>(type: string, callback: StoreSignalCallback<TPayload>) =>
 					this.subscribeSignal(type, callback as StoreSignalCallback),
 				pending: (callback: StoreEventCallback<StoreSnapshot<TManager>['pending']>) =>
-					this.subscribeEvent(this.pendingSubscribers, callback),
+					this.subscribeEvent('pending', callback),
 				hydrating: (callback: StoreEventCallback<StoreSnapshot<TManager>['hydrating']>) =>
-					this.subscribeEvent(this.hydratingSubscribers, callback),
+					this.subscribeEvent('hydrating', callback),
 				refreshing: (callback: StoreEventCallback<StoreSnapshot<TManager>['refreshing']>) =>
-					this.subscribeEvent(this.refreshingSubscribers, callback),
+					this.subscribeEvent('refreshing', callback),
 				disposed: (callback: StoreEventCallback<StoreSnapshot<TManager>['disposed']>) =>
-					this.subscribeEvent(this.disposedSubscribers, callback),
+					this.subscribeEvent('disposed', callback),
 				error: (callback: StoreEventCallback<StoreSnapshot<TManager>['error']>) =>
-					this.subscribeEvent(this.errorSubscribers, callback)
+					this.subscribeEvent('error', callback)
 			},
 			snapshot: () => this.snapshot(),
 			pending: () => this.pendingValue(),
@@ -396,8 +402,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			data: () => this.state.data,
 			list: <TQuery>(query: TQuery) => this.list(query),
 			items: () => this.visibleItems(),
-			listMeta: () => this.state.listMeta,
-			pages: () => this.state.pages,
+			listMeta: () => activeListMeta(this.state),
+			pages: () => activePages(this.state),
 			get: <TQuery>(args?: { readonly query?: TQuery }) => this.get(args?.query),
 			refresh: () => this.refresh(),
 			loadMore: () => this.loadMore(),
@@ -420,8 +426,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		return {
 			data: this.state.data,
 			items: this.visibleItems(),
-			listMeta: this.state.listMeta,
-			pages: this.state.pages,
+			listMeta: activeListMeta(this.state),
+			pages: activePages(this.state),
 			pending: this.pendingValue(),
 			hydrating: this.hydrating,
 			refreshing: this.refreshing,
@@ -620,7 +626,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const nextQuery = query ?? this.config.query?.();
 		this.activeQuery = nextQuery;
 		if (hasQueryFamily(this.state, nextQuery)) {
-			selectQueryFamily(this.state, nextQuery, this.reconcileIdentity(), this.pendingCommands.values());
+			selectQueryFamily(this.state, nextQuery);
 			this.emit('items', 'listMeta', 'pages');
 		}
 		return this.requestPage(nextQuery, nextQuery, true);
@@ -644,14 +650,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 				if (activate && stableStringify(this.activeQuery) !== stableStringify(viewQuery)) {
 					return ok(result.value.value);
 				}
-				applyPageOutput(
-					this.state,
-					result.value.value,
-					requestQuery,
-					this.reconcileIdentity(),
-					this.pendingCommands.values(),
-					activate
-				);
+				applyPageOutput(this.state, result.value.value, requestQuery, this.reconcileIdentity(), activate);
 				settleRead(result.value.envelope);
 				this.emit('items', 'listMeta', 'pages');
 				this.scheduleCachedRuntimeStateSave();
@@ -665,9 +664,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const activate = query === undefined;
 		if (activate) {
 			this.activeQuery = viewQuery;
-			selectQueryFamily(this.state, viewQuery, this.reconcileIdentity(), this.pendingCommands.values());
+			selectQueryFamily(this.state, viewQuery);
 		}
-		const pages = activate ? this.state.pages : pagesForQueryFamily(this.state, viewQuery);
+		const pages = activate ? activePageMetas(this.state) : pageMetasForQueryFamily(this.state, viewQuery);
 		const page = pages[pages.length - 1];
 		const requestQuery = mergeCursor(viewQuery, page?.cursorOut);
 		return this.requestPage(viewQuery, requestQuery, activate);
@@ -767,9 +766,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			const plan = this.repairRequested
 				? {
 						kind: 'scope' as const,
-						stalePageCount: this.state.pages.length
+						stalePageCount: activePageMetas(this.state).length
 					}
-				: this.repairScheduler.plan(this.state.pages);
+				: this.repairScheduler.plan(activePageMetas(this.state));
 			if (plan.kind === 'none') {
 				return noRepairNeeded();
 			}
@@ -779,7 +778,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 					this.refreshing = true;
 					this.emit('refreshing');
 					const result =
-						this.state.pages.length > 0 || this.activeQuery !== undefined || this.hasDefaultListQuery
+						activePageMetas(this.state).length > 0 ||
+						this.activeQuery !== undefined ||
+						this.hasDefaultListQuery
 							? await this.refresh(this.activeQuery)
 							: await this.get();
 					this.refreshing = false;
@@ -816,7 +817,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			const mutationId = this.runtime.createId('mutation');
 			const command = createPendingCommand(method, args, mutationId, this.reconcileIdentity());
 			this.pendingCommands.set(mutationId, command);
-			this.applyPendingWrite(method, command);
+			refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
 			this.emit(...this.writeOptimisticEvents(method));
 
 			const result = await this.request<TOutput>(method, 'POST', args, undefined, mutationId, options?.signal);
@@ -831,7 +832,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			let rebuiltVisible = isBatch;
 			if (isBatch) {
 				// Batched writes still finalize through envelopes; rebuild from base plus pending instead of restoring a full snapshot.
-				rebuildVisible(this.state, this.reconcileIdentity(), this.pendingCommands.values());
+				refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
 			}
 
 			const envelope = result.value.envelope
@@ -841,7 +842,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 				this.applyStateEnvelope(envelope);
 			} else {
 				this.pendingCommands.delete(mutationId);
-				rebuildVisible(this.state, this.reconcileIdentity(), this.pendingCommands.values());
+				refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
 				rebuiltVisible = true;
 			}
 			const events = envelope
@@ -1012,7 +1013,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			this.pendingCommands,
 			this.activeQuery
 		);
-		const plan = this.repairScheduler.plan(this.state.pages, envelope.reset);
+		const plan = this.repairScheduler.plan(activePageMetas(this.state), envelope.reset);
 		if (plan.kind !== 'none') {
 			this.repairRequested = true;
 			this.scheduleRepair();
@@ -1027,20 +1028,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		if (envelope.sourceMutationId) {
 			this.pendingCommands.delete(envelope.sourceMutationId);
 		}
-	}
-
-	private applyPendingWrite(method: 'add' | 'mutate' | 'delete', command: InternalPendingCommand): void {
-		if (method === 'mutate' && command.targetIds.length > 0) {
-			updateVisibleItems(
-				this.state,
-				new Set(command.targetIds),
-				this.reconcileIdentity(),
-				this.pendingCommands.values()
-			);
-			return;
-		}
-
-		rebuildVisible(this.state, this.reconcileIdentity(), this.pendingCommands.values());
 	}
 
 	private localPendingEnvelope(envelope: SyncEnvelope): SyncEnvelope {
@@ -1076,7 +1063,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private async rollback(originalError: SyncError): Promise<SyncError> {
-		rebuildVisible(this.state, this.reconcileIdentity(), this.pendingCommands.values());
+		refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
 		const recoveredError = this.withRecovery(originalError, 'memory');
 		this.lastError = recoveredError;
 		this.emit('data', 'items', 'pages', 'pending', 'error');
@@ -1180,7 +1167,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private cacheKey(): string {
-		return `${this.scopeCacheKey()}:view`;
+		return `${this.scopeCacheKey()}:view:v2`;
 	}
 
 	private scopeCacheKey(): string {
@@ -1308,51 +1295,41 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private emitEvent(event: StoreEventKey): void {
-		if (event === 'data') {
-			this.emitTo(this.dataSubscribers, this.state.data);
+		const subscribers = this.eventSubscribers[event];
+		if (subscribers.size === 0) {
 			return;
 		}
-		if (event === 'items') {
-			this.emitTo(this.itemSubscribers, this.visibleItems());
-			return;
-		}
-		if (event === 'listMeta') {
-			this.emitTo(this.listMetaSubscribers, this.state.listMeta);
-			return;
-		}
-		if (event === 'pages') {
-			this.emitTo(this.pageSubscribers, this.state.pages);
-			return;
-		}
-		if (event === 'pending') {
-			this.emitTo(this.pendingSubscribers, this.pendingValue());
-			return;
-		}
-		if (event === 'hydrating') {
-			this.emitTo(this.hydratingSubscribers, this.hydrating);
-			return;
-		}
-		if (event === 'refreshing') {
-			this.emitTo(this.refreshingSubscribers, this.refreshing);
-			return;
-		}
-		if (event === 'disposed') {
-			this.emitTo(this.disposedSubscribers, this.disposed);
-			return;
-		}
-		this.emitTo(this.errorSubscribers, this.lastError);
-	}
-
-	private emitTo<TValue>(subscribers: Set<StoreEventCallback<TValue>>, value: TValue): void {
+		const value = this.eventValue(event);
 		for (const subscriber of subscribers) {
-			subscriber(value);
+			subscriber(value as never);
 		}
 	}
 
-	private subscribeEvent<TValue>(
-		subscribers: Set<StoreEventCallback<TValue>>,
-		callback: StoreEventCallback<TValue>
-	): () => void {
+	private eventValue(event: StoreEventKey): unknown {
+		switch (event) {
+			case 'data':
+				return this.state.data;
+			case 'items':
+				return this.visibleItems();
+			case 'listMeta':
+				return activeListMeta(this.state);
+			case 'pages':
+				return activePages(this.state);
+			case 'pending':
+				return this.pendingValue();
+			case 'hydrating':
+				return this.hydrating;
+			case 'refreshing':
+				return this.refreshing;
+			case 'disposed':
+				return this.disposed;
+			case 'error':
+				return this.lastError;
+		}
+	}
+
+	private subscribeEvent(event: StoreEventKey, callback: StoreEventCallback<never>): () => void {
+		const subscribers = this.eventSubscribers[event];
 		subscribers.add(callback);
 		return () => {
 			subscribers.delete(callback);
@@ -1388,16 +1365,10 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private clearEventSubscribers(): void {
-		this.dataSubscribers.clear();
-		this.itemSubscribers.clear();
-		this.listMetaSubscribers.clear();
-		this.pageSubscribers.clear();
+		for (const subscribers of Object.values(this.eventSubscribers)) {
+			subscribers.clear();
+		}
 		this.signalSubscribers.clear();
-		this.pendingSubscribers.clear();
-		this.hydratingSubscribers.clear();
-		this.refreshingSubscribers.clear();
-		this.disposedSubscribers.clear();
-		this.errorSubscribers.clear();
 	}
 
 	private pendingValue(): readonly PendingCommand[] {
@@ -1406,7 +1377,11 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private visibleItems(): readonly CollectionItem<TManager>[] {
 		if (!this.visibleItemsCache) {
-			this.visibleItemsCache = [...this.state.items.values()];
+			this.visibleItemsCache = activeItems<CollectionItem<TManager>>(
+				this.state,
+				this.reconcileIdentity(),
+				this.pendingCommands.values()
+			);
 		}
 		return this.visibleItemsCache;
 	}

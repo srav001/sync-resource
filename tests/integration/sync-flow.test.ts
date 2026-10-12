@@ -106,7 +106,7 @@ describe('authoritative synchronization flow', () => {
 
 			store.dispose();
 			await Promise.resolve();
-			const cacheKey = 'sync-resource:notes:{"workspaceId":"workspace-1"}:view';
+			const cacheKey = 'sync-resource:notes:{"workspaceId":"workspace-1"}:view:v2';
 			expect(system.cache.peek(cacheKey)?.value).toBeDefined();
 		} finally {
 			store.dispose();

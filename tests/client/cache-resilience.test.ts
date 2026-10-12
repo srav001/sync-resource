@@ -166,14 +166,14 @@ function updateEnvelope(cursor: string, title: string): SyncEnvelope {
 }
 
 function cachedTitle(item: CacheItem<unknown> | undefined, id: string): string | undefined {
-	if (!item || typeof item.value !== 'object' || item.value === null || !('items' in item.value)) {
+	if (!item || typeof item.value !== 'object' || item.value === null || !('baseItems' in item.value)) {
 		return undefined;
 	}
 	const items = (
 		item.value as {
-			readonly items?: readonly { readonly id?: string; readonly title?: string }[];
+			readonly baseItems?: readonly { readonly id?: string; readonly title?: string }[];
 		}
-	).items;
+	).baseItems;
 	return items?.find((value) => value.id === id)?.title;
 }
 

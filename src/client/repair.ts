@@ -1,6 +1,8 @@
 import { err, ok, type SyncResult } from '../shared/result.ts';
 import type { PageState, ResetManifest, SyncError } from './types.ts';
 
+type PageHealth = Pick<PageState, 'repairNeeded' | 'stale' | 'coverage'>;
+
 export type RepairKind = 'none' | 'page' | 'scope';
 
 export interface RepairPlan {
@@ -10,7 +12,7 @@ export interface RepairPlan {
 }
 
 export interface RepairScheduler {
-	plan(pages: readonly PageState[], reset?: ResetManifest): RepairPlan;
+	plan(pages: readonly PageHealth[], reset?: ResetManifest): RepairPlan;
 	request(run: () => Promise<SyncResult<void, SyncError>>): Promise<SyncResult<void, SyncError>>;
 	dispose(): void;
 }
@@ -95,7 +97,7 @@ interface QueuedRepair {
 	resolve(this: void, result: SyncResult<void, SyncError>): void;
 }
 
-export function planRepair(pages: readonly PageState[], reset?: ResetManifest): RepairPlan {
+export function planRepair(pages: readonly PageHealth[], reset?: ResetManifest): RepairPlan {
 	const stalePageCount = countStalePages(pages);
 	if (reset) {
 		return {
@@ -122,7 +124,7 @@ export async function noRepairNeeded(): Promise<SyncResult<void, SyncError>> {
 	return ok(undefined);
 }
 
-function countStalePages(pages: readonly PageState[]): number {
+function countStalePages(pages: readonly PageHealth[]): number {
 	let count = 0;
 	for (const page of pages) {
 		if (page.repairNeeded || page.stale || page.coverage === 'stale') {

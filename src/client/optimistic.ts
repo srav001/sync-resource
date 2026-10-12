@@ -16,41 +16,57 @@ export interface InternalPendingCommand<TArgs = unknown> extends PendingCommand 
 	readonly args: TArgs;
 }
 
-export interface PageFamilyState<TQuery = unknown, TMeta = unknown> {
+interface PendingItems<TItem> {
+	get(id: string): TItem | undefined;
+	set(id: string, item: TItem): unknown;
+	delete(id: string): unknown;
+}
+
+interface PendingView<TItem = unknown> {
+	readonly items: PendingItems<TItem>;
+	data: unknown;
+}
+
+export interface PageMeta extends Omit<PageState, 'ids'> {
+	readonly count: number;
+}
+
+// A family keeps its loaded ids and items as two aligned flat arrays; pages only record how many ids each page owns.
+export interface PageFamilyState<TItem = unknown, TQuery = unknown, TMeta = unknown> {
 	readonly key: string;
 	query: TQuery;
-	pages: PageState[];
 	meta?: TMeta;
+	pages: readonly PageMeta[];
+	ids: string[];
+	items: TItem[];
+	sorted: boolean;
+	itemsView?: readonly TItem[];
+	pagesView?: readonly PageState[];
 }
 
 export interface OptimisticState<TItem = unknown, TData = unknown, TQuery = unknown, TMeta = unknown> {
 	data?: TData;
 	baseData?: TData;
-	readonly items: Map<string, TItem>;
 	readonly baseItems: Map<string, TItem>;
-	readonly families: Map<string, PageFamilyState<TQuery, TMeta>>;
+	readonly families: Map<string, PageFamilyState<TItem, TQuery, TMeta>>;
 	activeFamilyKey?: string;
-	pages: PageState[];
-	listMeta?: TMeta;
 	cursor?: string;
 }
 
 export interface CachedPageFamilyState<TQuery = unknown, TMeta = unknown> {
 	readonly key: string;
-	readonly query?: TQuery;
-	readonly pages: readonly PageState[];
+	readonly query: TQuery;
 	readonly meta?: TMeta;
+	readonly pages: readonly PageMeta[];
+	readonly ids: readonly string[];
+	readonly sorted: boolean;
 }
 
 export interface CachedOptimisticState<TItem = unknown, TData = unknown, TQuery = unknown, TMeta = unknown> {
-	readonly data?: TData;
 	readonly baseData?: TData;
-	readonly items: readonly TItem[];
-	readonly baseItems?: readonly TItem[];
-	readonly families?: readonly CachedPageFamilyState<TQuery, TMeta>[];
+	readonly baseItems: readonly TItem[];
+	readonly families: readonly CachedPageFamilyState<TQuery, TMeta>[];
 	readonly activeFamilyKey?: string;
-	readonly pages: readonly PageState[];
-	readonly listMeta?: TMeta;
 	readonly cursor?: string;
 }
 
@@ -64,10 +80,8 @@ export interface OptimisticReconcile<TItem = unknown, TQuery = unknown, TInput =
 
 export function createOptimisticState<TItem, TData, TQuery, TMeta>(): OptimisticState<TItem, TData, TQuery, TMeta> {
 	return {
-		items: new Map(),
 		baseItems: new Map(),
-		families: new Map(),
-		pages: []
+		families: new Map()
 	};
 }
 
@@ -81,26 +95,18 @@ export function pendingSnapshot(command: InternalPendingCommand): PendingCommand
 }
 
 export function captureOptimisticState(state: OptimisticState): CachedOptimisticState {
-	const baseItems =
-		state.families.size > 0 || state.pages.length > 0 ? pageItems(state) : [...state.baseItems.values()];
-	const families: CachedPageFamilyState[] = [];
-	for (const family of state.families.values()) {
-		families.push({
+	return {
+		baseData: state.baseData,
+		baseItems: state.families.size > 0 ? pageItems(state) : [...state.baseItems.values()],
+		families: [...state.families.values()].map((family) => ({
 			key: family.key,
 			query: family.query,
+			meta: family.meta,
 			pages: family.pages,
-			meta: family.meta
-		});
-	}
-	return {
-		data: state.baseData,
-		baseData: state.baseData,
-		items: baseItems,
-		baseItems,
-		families,
+			ids: [...family.ids],
+			sorted: family.sorted
+		})),
 		activeFamilyKey: state.activeFamilyKey,
-		pages: state.pages,
-		listMeta: state.listMeta,
 		cursor: state.cursor
 	};
 }
@@ -110,49 +116,28 @@ export function restoreOptimisticState(
 	snapshot: CachedOptimisticState,
 	reconcile: OptimisticReconcile
 ): void {
-	state.baseData = snapshot.baseData ?? snapshot.data;
+	state.baseData = snapshot.baseData;
 	state.data = state.baseData;
-	state.items.clear();
 	state.baseItems.clear();
 	state.families.clear();
 	state.activeFamilyKey = snapshot.activeFamilyKey;
-
-	const restoredItems = new Map<string, unknown>();
-	for (const item of snapshot.baseItems ?? snapshot.items) {
+	for (const item of snapshot.baseItems) {
 		const id = reconcile.itemId(item);
 		if (id) {
 			state.baseItems.set(id, item);
-			restoredItems.set(id, item);
 		}
 	}
-
-	if (snapshot.families) {
-		for (const family of snapshot.families) {
-			state.families.set(family.key, {
-				key: family.key,
-				query: family.query,
-				pages: [...family.pages],
-				meta: family.meta
-			});
-		}
-	}
-
-	const activeFamily = state.activeFamilyKey ? state.families.get(state.activeFamilyKey) : undefined;
-	state.pages = activeFamily ? activeFamily.pages : [...snapshot.pages];
-	state.listMeta = activeFamily ? activeFamily.meta : snapshot.listMeta;
-	if (state.pages.length > 0) {
-		for (const page of state.pages) {
-			for (const id of page.ids) {
-				const item = state.baseItems.get(id);
-				if (item) {
-					state.items.set(id, item);
-				}
-			}
-		}
-	} else {
-		for (const [id, item] of restoredItems) {
-			state.items.set(id, item);
-		}
+	for (const family of snapshot.families) {
+		const ids = [...family.ids];
+		state.families.set(family.key, {
+			key: family.key,
+			query: family.query,
+			meta: family.meta,
+			pages: family.pages,
+			ids,
+			items: ids.map((id) => state.baseItems.get(id)),
+			sorted: family.sorted
+		});
 	}
 	state.cursor = snapshot.cursor;
 }
@@ -162,7 +147,6 @@ export function applyPageOutput<TOutput, TQuery>(
 	output: TOutput,
 	query: TQuery,
 	reconcile: OptimisticReconcile,
-	pendingCommands: Iterable<InternalPendingCommand>,
 	activate = true
 ): void {
 	if (!isRecord(output) || !Array.isArray(output.items)) {
@@ -180,7 +164,6 @@ export function applyPageOutput<TOutput, TQuery>(
 		hasDefinedMeta,
 		'network',
 		reconcile,
-		pendingCommands,
 		activate
 	);
 }
@@ -192,21 +175,11 @@ export function setBaseData<TValue>(
 	pendingCommands: Iterable<InternalPendingCommand>
 ): void {
 	state.baseData = value;
-	rebuildVisible(state, reconcile, pendingCommands);
+	refreshData(state, reconcile, pendingCommands);
 }
 
-export function selectQueryFamily<TQuery>(
-	state: OptimisticState,
-	query: TQuery,
-	reconcile: OptimisticReconcile,
-	pendingCommands: Iterable<InternalPendingCommand>
-): void {
-	const familyKey = queryFamilyKey(query);
-	state.activeFamilyKey = familyKey;
-	const family = state.families.get(familyKey);
-	state.pages = family?.pages ?? [];
-	state.listMeta = family?.meta;
-	rebuildVisible(state, reconcile, pendingCommands);
+export function selectQueryFamily<TQuery>(state: OptimisticState, query: TQuery): void {
+	state.activeFamilyKey = queryFamilyKey(query);
 }
 
 export function hasQueryFamily<TQuery>(state: OptimisticState, query: TQuery): boolean {
@@ -243,29 +216,26 @@ export function applyEnvelope<TQuery>(
 	pendingCommands: Map<string, InternalPendingCommand>,
 	activeQuery: TQuery
 ): void {
-	if (envelope.changes.some((change) => change.type === 'pageLoaded' || change.type === 'reset')) {
-		applyEnvelopeWithRebuild(state, envelope, reconcile, pendingCommands, activeQuery);
-		return;
-	}
-
 	const sourceCommand = envelope.sourceMutationId ? pendingCommands.get(envelope.sourceMutationId) : undefined;
-	const affectedIds = new Set<string>();
 	for (const syncChange of envelope.changes) {
+		if (syncChange.type === 'pageLoaded') {
+			applyPageItems(
+				state,
+				syncChange.items,
+				activeQuery,
+				syncChange.pageCursor,
+				syncChange.syncCursor ?? envelope.cursor,
+				undefined,
+				false,
+				'network',
+				reconcile,
+				true
+			);
+		}
 		if (syncChange.type === 'itemAdded') {
 			state.baseItems.set(syncChange.id, syncChange.value);
-			if (sourceCommand?.method === 'add' && reconcile.addPlacement !== 'sorted') {
-				addToLoadedPage(state, syncChange.id);
-			} else {
-				for (const affectedId of reconcileAddedItemAcrossFamilies(
-					state,
-					syncChange.id,
-					syncChange.value,
-					reconcile
-				)) {
-					affectedIds.add(affectedId);
-				}
-			}
-			affectedIds.add(syncChange.id);
+			const appendToPage = sourceCommand?.method === 'add' && reconcile.addPlacement !== 'sorted';
+			reconcileAddedItemAcrossFamilies(state, syncChange.id, syncChange.value, reconcile, appendToPage);
 		}
 		if (syncChange.type === 'itemUpdated') {
 			const current = state.baseItems.get(syncChange.id);
@@ -274,13 +244,10 @@ export function applyEnvelope<TQuery>(
 
 			if (state.baseData && reconcile.itemId(state.baseData) === syncChange.id) {
 				state.baseData = syncChange.value ?? applyPatch(state.baseData, syncChange.patch);
-			} else if (state.pages.length === 0 && syncChange.value) {
+			} else if (activePageMetas(state).length === 0 && syncChange.value) {
 				state.baseData = syncChange.value;
 			}
-			for (const affectedId of reconcileUpdatedItemAcrossFamilies(state, syncChange.id, next, reconcile)) {
-				affectedIds.add(affectedId);
-			}
-			affectedIds.add(syncChange.id);
+			reconcileUpdatedItemAcrossFamilies(state, syncChange.id, next, reconcile);
 		}
 		if (syncChange.type === 'itemDeleted') {
 			state.baseItems.delete(syncChange.id);
@@ -288,49 +255,42 @@ export function applyEnvelope<TQuery>(
 				state.baseData = undefined;
 			}
 			removeIdFromFamilies(state, syncChange.id);
-			affectedIds.add(syncChange.id);
+		}
+		if (syncChange.type === 'reset') {
+			pendingCommands.clear();
+			markPagesStale(state, envelope.cursor);
 		}
 	}
 
 	state.cursor = envelope.cursor;
-	syncActivePages(state);
 	if (envelope.sourceMutationId) {
 		pendingCommands.delete(envelope.sourceMutationId);
 	}
-	for (const id of sourceCommand?.targetIds ?? []) {
-		affectedIds.add(id);
-	}
-	updateVisibleItems(state, affectedIds, reconcile, pendingCommands.values());
+	refreshData(state, reconcile, pendingCommands.values());
 }
 
-export function rebuildVisible(
+export function refreshData(
 	state: OptimisticState,
 	reconcile: OptimisticReconcile,
 	pendingCommands: Iterable<InternalPendingCommand>
 ): void {
-	state.items.clear();
-	if (state.pages.length > 0) {
-		for (const page of state.pages) {
-			for (const id of page.ids) {
-				const item = state.baseItems.get(id);
-				if (item) {
-					state.items.set(id, item);
-				}
-			}
-		}
-	} else if (!state.activeFamilyKey && state.families.size === 0) {
-		for (const [id, item] of state.baseItems) {
-			state.items.set(id, item);
-		}
-	}
-
-	state.data = state.baseData;
-
+	const view: PendingView = { items: new Map(), data: state.baseData };
 	for (const command of pendingCommands) {
-		applyPendingToVisible(state, command, reconcile);
+		applyPendingToView(view, command, reconcile);
 	}
+	state.data = view.data;
+}
 
-	sortVisibleItems(state, reconcile);
+export function activeItems<TItem>(
+	state: OptimisticState<TItem>,
+	reconcile: OptimisticReconcile<TItem>,
+	pendingCommands: Iterable<InternalPendingCommand>
+): readonly TItem[] {
+	const family = getActiveFamily(state);
+	if (family || state.activeFamilyKey || state.families.size > 0) {
+		return familyItems(family, reconcile, pendingCommands);
+	}
+	return overlayItems([...state.baseItems.keys()], [...state.baseItems.values()], reconcile, [...pendingCommands]);
 }
 
 export function itemsForQueryFamily<TItem, TQuery>(
@@ -338,40 +298,88 @@ export function itemsForQueryFamily<TItem, TQuery>(
 	query: TQuery,
 	reconcile: OptimisticReconcile<TItem>,
 	pendingCommands: Iterable<InternalPendingCommand>
-): TItem[] {
+): readonly TItem[] {
 	const family = state.families.get(queryFamilyKey(query));
 	if (!family) {
 		return [];
 	}
+	return familyItems(family, reconcile, pendingCommands, (item) =>
+		pendingItemMatchesQuery(item, family.query, reconcile)
+	);
+}
 
-	const scopedState: OptimisticState<TItem> = {
-		data: state.data,
-		baseData: state.baseData,
-		items: new Map(),
-		baseItems: state.baseItems,
-		families: new Map(),
-		pages: family.pages,
-		listMeta: family.meta,
-		cursor: state.cursor
-	};
-	for (const page of family.pages) {
-		for (const id of page.ids) {
-			const item = state.baseItems.get(id);
-			if (item) {
-				scopedState.items.set(id, item);
+// Without pending commands the family's own array is the answer; with them, the overlay is applied over a copy.
+function familyItems<TItem>(
+	family: PageFamilyState<TItem> | undefined,
+	reconcile: OptimisticReconcile<TItem>,
+	pendingCommands: Iterable<InternalPendingCommand>,
+	shouldApplyAdd?: (item: TItem) => boolean
+): readonly TItem[] {
+	const commands = [...pendingCommands];
+	if (commands.length === 0 && family) {
+		family.itemsView ??= family.sorted ? [...family.items] : [...family.items].sort(reconcile.compare);
+		return family.itemsView;
+	}
+	return overlayItems(family?.ids ?? [], family?.items ?? [], reconcile, commands, shouldApplyAdd);
+}
+
+// Pending commands are applied over a copy that is indexed only for the ids they target; a removed entry leaves a gap.
+function overlayItems<TItem>(
+	ids: readonly string[],
+	items: readonly TItem[],
+	reconcile: OptimisticReconcile<TItem>,
+	commands: readonly InternalPendingCommand[],
+	shouldApplyAdd?: (item: TItem) => boolean
+): TItem[] {
+	const targets = new Set(commands.flatMap((command) => command.targetIds));
+	const visible: (TItem | undefined)[] = [...items];
+	const index = new Map<string, number>();
+	ids.forEach((id, position) => targets.has(id) && index.set(id, position));
+	const overlay: PendingItems<TItem> = {
+		get: (id) => visible[index.get(id) ?? -1],
+		set(id, item) {
+			const position = index.get(id);
+			if (position === undefined) {
+				index.set(id, visible.length);
+				visible.push(item);
+			} else {
+				visible[position] = item;
+			}
+		},
+		delete(id) {
+			const position = index.get(id);
+			if (position !== undefined) {
+				visible[position] = undefined;
+				index.delete(id);
 			}
 		}
+	};
+	for (const command of commands) {
+		applyPendingToView({ items: overlay, data: undefined }, command, reconcile, shouldApplyAdd);
 	}
-	for (const command of pendingCommands) {
-		applyPendingToVisible(scopedState, command, reconcile, (item) =>
-			pendingItemMatchesQuery(item, family.query, reconcile)
-		);
-	}
-	sortVisibleItems(scopedState, reconcile);
-	return [...scopedState.items.values()];
+	const result = visible.filter((item) => item !== undefined);
+	return reconcile.compare ? result.sort(reconcile.compare) : result;
+}
+
+export function activePageMetas(state: OptimisticState): readonly PageMeta[] {
+	return getActiveFamily(state)?.pages ?? [];
+}
+
+export function activeListMeta<TMeta>(state: OptimisticState<unknown, unknown, unknown, TMeta>): TMeta | undefined {
+	return getActiveFamily(state)?.meta;
+}
+
+export function activePages(state: OptimisticState): readonly PageState[] {
+	const family = getActiveFamily(state);
+	return family ? pagesOf(family) : [];
 }
 
 export function pagesForQueryFamily<TQuery>(state: OptimisticState, query: TQuery): readonly PageState[] {
+	const family = state.families.get(queryFamilyKey(query));
+	return family ? pagesOf(family) : [];
+}
+
+export function pageMetasForQueryFamily<TQuery>(state: OptimisticState, query: TQuery): readonly PageMeta[] {
 	return state.families.get(queryFamilyKey(query))?.pages ?? [];
 }
 
@@ -380,6 +388,18 @@ export function metaForQueryFamily<TQuery, TMeta>(
 	query: TQuery
 ): TMeta | undefined {
 	return state.families.get(queryFamilyKey(query))?.meta;
+}
+
+function pagesOf(family: PageFamilyState): readonly PageState[] {
+	if (!family.pagesView) {
+		let start = 0;
+		family.pagesView = family.pages.map(({ count, ...page }) => {
+			const ids = family.ids.slice(start, start + count);
+			start += count;
+			return { ...page, ids };
+		});
+	}
+	return family.pagesView;
 }
 
 export function reconcileFromConfig<TItem, TQuery, TInput, TParams>(
@@ -476,7 +496,7 @@ function unsetPathMutable(target: ValueRecord, path: string): void {
 }
 
 function applyPageItems<TItem, TQuery, TMeta>(
-	state: OptimisticState,
+	state: OptimisticState<TItem>,
 	items: readonly TItem[],
 	query: TQuery,
 	pageCursor: string | undefined,
@@ -485,349 +505,288 @@ function applyPageItems<TItem, TQuery, TMeta>(
 	hasMeta: boolean,
 	source: 'cache' | 'network' | 'realtime',
 	reconcile: OptimisticReconcile<TItem, TQuery>,
-	pendingCommands: Iterable<InternalPendingCommand>,
 	activate: boolean
 ): void {
 	const familyKey = queryFamilyKey(query);
 	const family = getOrCreateFamily(state, familyKey, queryWithoutCursor(query));
-	const ids: string[] = [];
+	const cursorIn = readStringFromRecord(query, 'cursor');
+	let ids: string[] = [];
+	let pageValues: TItem[] = [];
+	let seenBefore = false;
 	for (const item of items) {
 		const id = reconcile.itemId(item);
 		if (!id) {
 			continue;
 		}
+		seenBefore ||= state.baseItems.has(id);
 		state.baseItems.set(id, item);
 		ids.push(id);
+		pageValues.push(item);
 	}
-	family.pages = nextPages(family.pages, {
-		cursorIn: readStringFromRecord(query, 'cursor'),
+	// The new page replaces the pages' range of ids in the flat arrays; without a cursor it replaces everything.
+	const found = cursorIn ? family.pages.findIndex((current) => current.cursorIn === cursorIn) : -1;
+	let replaceStart = cursorIn ? family.ids.length : 0;
+	let replaceEnd = family.ids.length;
+	if (found >= 0) {
+		replaceStart = family.pages.slice(0, found).reduce((total, current) => total + current.count, 0);
+		replaceEnd = replaceStart + (family.pages[found]?.count ?? 0);
+	}
+	if (cursorIn && seenBefore) {
+		// Loaded ids stay unique across a family's pages, so realtime-added items are not repeated by a later page.
+		const loaded = new Set([...family.ids.slice(0, replaceStart), ...family.ids.slice(replaceEnd)]);
+		const keep = ids.map((id) => !loaded.has(id));
+		pageValues = pageValues.filter((_, index) => keep[index]);
+		ids = ids.filter((_, index) => keep[index]);
+	}
+	const page: PageMeta = {
+		cursorIn,
 		cursorOut: pageCursor,
-		ids,
+		count: ids.length,
 		coverage: 'full',
 		complete: pageCursor === undefined,
 		stale: false,
 		repairNeeded: false,
 		lastSyncCursor: syncCursor,
 		source
-	});
+	};
+	family.ids = [...family.ids.slice(0, replaceStart), ...ids, ...family.ids.slice(replaceEnd)];
+	family.items = [...family.items.slice(0, replaceStart), ...pageValues, ...family.items.slice(replaceEnd)];
+	if (!cursorIn) {
+		family.pages = [page];
+	} else if (found >= 0) {
+		family.pages = family.pages.map((current, index) => (index === found ? page : current));
+	} else {
+		family.pages = [...family.pages, page];
+	}
+	if (seenBefore) {
+		refreshLoadedItems(state, reconcile);
+	}
 	if (hasMeta) {
 		family.meta = meta;
 	}
+	family.sorted = (cursorIn ? family.sorted : true) && isSortedFrom(family, replaceStart, reconcile.compare);
+	touch(family);
 	if (activate) {
 		state.activeFamilyKey = familyKey;
-		state.pages = family.pages;
-		state.listMeta = family.meta;
-	} else {
-		syncActivePages(state);
 	}
-	rebuildVisible(state, reconcile, pendingCommands);
 }
 
-function applyEnvelopeWithRebuild<TQuery>(
-	state: OptimisticState,
-	envelope: SyncEnvelope,
-	reconcile: OptimisticReconcile,
-	pendingCommands: Map<string, InternalPendingCommand>,
-	activeQuery: TQuery
-): void {
-	const sourceCommand = envelope.sourceMutationId ? pendingCommands.get(envelope.sourceMutationId) : undefined;
-	for (const syncChange of envelope.changes) {
-		if (syncChange.type === 'pageLoaded') {
-			applyPageItems(
-				state,
-				syncChange.items,
-				activeQuery,
-				syncChange.pageCursor,
-				syncChange.syncCursor ?? envelope.cursor,
-				undefined,
-				false,
-				'network',
-				reconcile,
-				pendingCommands.values(),
-				true
-			);
+// Reconcile operations keep ids in comparator order; a page that arrives out of order is sorted only in the visible view.
+function isSortedFrom(family: PageFamilyState, from: number, compare: OptimisticReconcile['compare']): boolean {
+	for (let index = Math.max(from, 1); index < family.items.length; index += 1) {
+		if ((compare?.(family.items[index - 1], family.items[index]) ?? 0) > 0) {
+			return false;
 		}
-		if (syncChange.type === 'itemAdded') {
-			state.baseItems.set(syncChange.id, syncChange.value);
-			if (sourceCommand?.method === 'add' && reconcile.addPlacement !== 'sorted') {
-				addToLoadedPage(state, syncChange.id);
-			} else {
-				reconcileAddedItemAcrossFamilies(state, syncChange.id, syncChange.value, reconcile);
+	}
+	return true;
+}
+
+// A page can carry newer values for ids other families (or this one, outside the page) already hold.
+function refreshLoadedItems<TItem>(state: OptimisticState<TItem>, reconcile: OptimisticReconcile<TItem>): void {
+	for (const family of state.families.values()) {
+		let changed = false;
+		family.ids.forEach((id, index) => {
+			const current = state.baseItems.get(id);
+			if (current !== family.items[index]) {
+				family.items[index] = current as TItem;
+				changed = true;
 			}
-		}
-		if (syncChange.type === 'itemUpdated') {
-			const current = state.baseItems.get(syncChange.id);
-			const next = syncChange.value ?? applyPatch(current, syncChange.patch);
-			state.baseItems.set(syncChange.id, next);
-
-			if (state.baseData && reconcile.itemId(state.baseData) === syncChange.id) {
-				state.baseData = syncChange.value ?? applyPatch(state.baseData, syncChange.patch);
-			} else if (state.pages.length === 0 && syncChange.value) {
-				state.baseData = syncChange.value;
-			}
-			reconcileUpdatedItemAcrossFamilies(state, syncChange.id, next, reconcile);
-		}
-		if (syncChange.type === 'itemDeleted') {
-			state.baseItems.delete(syncChange.id);
-			if (state.baseData && reconcile.itemId(state.baseData) === syncChange.id) {
-				state.baseData = undefined;
-			}
-			removeIdFromFamilies(state, syncChange.id);
-		}
-		if (syncChange.type === 'reset') {
-			pendingCommands.clear();
-			markPagesStale(state, envelope.cursor);
+		});
+		if (changed) {
+			family.itemsView = undefined;
+			family.sorted = family.sorted && isSortedFrom(family, 0, reconcile.compare);
 		}
 	}
-
-	state.cursor = envelope.cursor;
-	syncActivePages(state);
-	if (envelope.sourceMutationId) {
-		pendingCommands.delete(envelope.sourceMutationId);
-	}
-	rebuildVisible(state, reconcile, pendingCommands.values());
 }
 
-function nextPages(existing: readonly PageState[], page: PageState): PageState[] {
-	if (!page.cursorIn) {
-		return [page];
-	}
-
-	const pages: PageState[] = [];
-	let replaced = false;
-	for (const current of existing) {
-		if (current.cursorIn === page.cursorIn) {
-			pages.push(page);
-			replaced = true;
-		} else {
-			pages.push(current);
-		}
-	}
-	if (!replaced) {
-		pages.push(page);
-	}
-	return pages;
+function touch(family: PageFamilyState): void {
+	family.itemsView = undefined;
+	family.pagesView = undefined;
 }
 
-function addToLoadedPage(state: OptimisticState, id: string): void {
-	const family = getActiveFamily(state);
-	const pages = family?.pages ?? state.pages;
-	const firstPage = pages[0];
-	if (!firstPage || firstPage.ids.includes(id)) {
-		return;
-	}
-	const nextFamilyPages: PageState[] = [
-		{
-			...firstPage,
-			ids: [...firstPage.ids, id]
-		},
-		...pages.slice(1)
-	];
-	if (family) {
-		family.pages = nextFamilyPages;
-	}
-	state.pages = nextFamilyPages;
-}
-
+// An add for an id a family already holds only refreshes its value; the family order is left as it was.
 function reconcileAddedItemAcrossFamilies<TItem>(
-	state: OptimisticState,
+	state: OptimisticState<TItem>,
 	id: string,
 	item: TItem,
-	reconcile: OptimisticReconcile
-): readonly string[] {
-	const affectedIds: string[] = [];
-	for (const family of loadedFamilies(state)) {
-		for (const affectedId of reconcileAddedItemWithFamily(state, family, id, item, reconcile)) {
-			affectedIds.push(affectedId);
+	reconcile: OptimisticReconcile<TItem>,
+	appendToPage: boolean
+): void {
+	const active = getActiveFamily(state);
+	for (const family of state.families.values()) {
+		const index = family.ids.indexOf(id);
+		if (index >= 0) {
+			setLoadedItem(family, index, item, reconcile);
+		} else if (!appendToPage) {
+			reconcileAddedItemWithFamily(family, id, item, reconcile);
+		} else if (family === active && family.pages[0]) {
+			const firstPage = family.pages[0];
+			family.ids.splice(firstPage.count, 0, id);
+			family.items.splice(firstPage.count, 0, item);
+			family.pages = [{ ...firstPage, count: firstPage.count + 1 }, ...family.pages.slice(1)];
+			touch(family);
 		}
 	}
-	return affectedIds;
+}
+
+function setLoadedItem<TItem>(
+	family: PageFamilyState<TItem>,
+	index: number,
+	item: TItem,
+	reconcile: OptimisticReconcile<TItem>
+): void {
+	family.items[index] = item;
+	family.itemsView = undefined;
+	const compare = reconcile.compare;
+	if (compare && family.sorted) {
+		const previous = family.items[index - 1];
+		const next = family.items[index + 1];
+		family.sorted =
+			(previous === undefined || compare(previous, item) <= 0) &&
+			(next === undefined || compare(item, next) <= 0);
+	}
 }
 
 function reconcileAddedItemWithFamily<TItem>(
-	state: OptimisticState,
-	family: PageFamilyState,
+	family: PageFamilyState<TItem>,
 	id: string,
 	item: TItem,
-	reconcile: OptimisticReconcile
-): readonly string[] {
-	if (family.pages.length === 0 || isLoadedInPages(family.pages, id)) {
-		return [];
+	reconcile: OptimisticReconcile<TItem>
+): void {
+	if (family.pages.length === 0) {
+		return;
 	}
 	if (reconcile.matchesQuery && !reconcile.matchesQuery(item, family.query)) {
-		return [];
+		return;
 	}
 
-	const loadedIds = loadedPageIds(family.pages);
-	const existingCount = loadedIds.length;
+	const existingCount = family.ids.length;
 	if (existingCount === 0) {
 		const firstPage = family.pages[0];
 		if (
 			firstPage &&
 			family.pages.length === 1 &&
-			firstPage.ids.length === 0 &&
 			firstPage.complete &&
 			firstPage.coverage === 'full' &&
 			!firstPage.stale
 		) {
-			family.pages = [
-				{
-					...firstPage,
-					ids: [id],
-					source: 'realtime'
-				}
-			];
-			return [id];
+			family.ids = [id];
+			family.items = [item];
+			family.pages = [{ ...firstPage, count: 1, source: 'realtime' }];
+			touch(family);
 		}
-		return [];
+		return;
 	}
 	if (!reconcile.compare) {
-		return [];
+		return;
 	}
 
-	const insertedIndex = findInsertIndexByCompare(state, reconcile, loadedIds, id);
+	const insertedIndex = findInsertIndex(family, reconcile, item, id);
 	const familyComplete = family.pages[family.pages.length - 1]?.complete === true;
 	if (!familyComplete && insertedIndex >= existingCount) {
-		return [];
+		return;
 	}
 
-	let droppedId: string | undefined;
-	if (familyComplete || reconcile.addPlacement === 'sorted') {
-		// Sorted opt-in additions must keep the existing cursor boundary reachable by a later loadMore.
-		loadedIds.splice(insertedIndex, 0, id);
-	} else {
-		droppedId = loadedIds[existingCount - 1];
-		loadedIds.splice(insertedIndex, 0, id);
-		loadedIds.pop();
+	family.ids.splice(insertedIndex, 0, id);
+	family.items.splice(insertedIndex, 0, item);
+	// Sorted opt-in additions must keep the existing cursor boundary reachable by a later loadMore.
+	const dropped = !familyComplete && reconcile.addPlacement !== 'sorted';
+	if (dropped) {
+		family.ids.pop();
+		family.items.pop();
 	}
-	family.pages = distributeLoadedIdsToPages(family.pages, loadedIds);
-	if (droppedId) {
-		return [id, droppedId];
-	}
-	return [id];
+	touch(family);
+	setRealtimePages(family, dropped ? 0 : 1);
 }
 
 function reconcileUpdatedItemAcrossFamilies<TItem>(
-	state: OptimisticState,
+	state: OptimisticState<TItem>,
 	id: string,
 	item: TItem,
-	reconcile: OptimisticReconcile
-): readonly string[] {
-	const affectedIds: string[] = [];
-	for (const family of loadedFamilies(state)) {
-		const loaded = isLoadedInPages(family.pages, id);
+	reconcile: OptimisticReconcile<TItem>
+): void {
+	for (const family of state.families.values()) {
+		const index = family.ids.indexOf(id);
 		const matches = !reconcile.matchesQuery || reconcile.matchesQuery(item, family.query);
-		if (loaded && !matches) {
-			family.pages = removeIdFromPages(family.pages, id);
-			affectedIds.push(id);
-			continue;
-		}
-		if (!loaded && matches) {
-			for (const affectedId of reconcileAddedItemWithFamily(state, family, id, item, reconcile)) {
-				affectedIds.push(affectedId);
+		if (index >= 0 && !matches) {
+			removeAt(family, index);
+		} else if (index < 0 && matches) {
+			reconcileAddedItemWithFamily(family, id, item, reconcile);
+		} else if (index >= 0) {
+			family.items[index] = item;
+			family.itemsView = undefined;
+			if (reconcile.compare) {
+				moveByCompare(family, reconcile, index, item, id);
 			}
-			continue;
-		}
-		if (loaded && reconcile.compare) {
-			const loadedIds = loadedPageIds(family.pages);
-			moveLoadedIdByCompare(state, reconcile, loadedIds, id);
-			family.pages = distributeLoadedIdsToPages(family.pages, loadedIds);
-			affectedIds.push(id);
 		}
 	}
-	return affectedIds;
 }
 
 function removeIdFromFamilies(state: OptimisticState, id: string): void {
-	for (const family of loadedFamilies(state)) {
-		if (isLoadedInPages(family.pages, id)) {
-			family.pages = removeIdFromPages(family.pages, id);
+	for (const family of state.families.values()) {
+		const index = family.ids.indexOf(id);
+		if (index >= 0) {
+			removeAt(family, index);
 		}
 	}
 }
 
-function removeIdFromPages(pages: readonly PageState[], id: string): PageState[] {
-	const nextPages: PageState[] = [];
-	for (const page of pages) {
-		if (!page.ids.includes(id)) {
-			nextPages.push(page);
-			continue;
-		}
-		nextPages.push({
-			...page,
-			ids: page.ids.filter((candidate) => candidate !== id),
-			source: 'realtime'
-		});
-	}
-	return nextPages;
+function removeAt(family: PageFamilyState, index: number): void {
+	family.ids.splice(index, 1);
+	family.items.splice(index, 1);
+	let end = 0;
+	family.pages = family.pages.map((page) => {
+		const start = end;
+		end += page.count;
+		return index >= start && index < end ? { ...page, count: page.count - 1, source: 'realtime' } : page;
+	});
+	touch(family);
 }
 
-function isLoadedInPages(pages: readonly PageState[], id: string): boolean {
-	for (const page of pages) {
-		if (page.ids.includes(id)) {
-			return true;
-		}
+// Every page is marked realtime and the last page absorbs the size change, so the other pages keep their sizes.
+function setRealtimePages(family: PageFamilyState, lastPageGrowth: number): void {
+	if (lastPageGrowth === 0 && family.pages.every((page) => page.source === 'realtime')) {
+		return;
 	}
-	return false;
+	const last = family.pages.length - 1;
+	family.pages = family.pages.map((page, index) => ({
+		...page,
+		count: index === last ? page.count + lastPageGrowth : page.count,
+		source: 'realtime'
+	}));
+	family.pagesView = undefined;
 }
 
-function loadedFamilies(state: OptimisticState): Iterable<PageFamilyState> {
-	if (state.families.size > 0) {
-		return state.families.values();
+function moveByCompare<TItem>(
+	family: PageFamilyState<TItem>,
+	reconcile: OptimisticReconcile<TItem>,
+	index: number,
+	item: TItem,
+	id: string
+): void {
+	family.ids.splice(index, 1);
+	family.items.splice(index, 1);
+	const nextIndex = findInsertIndex(family, reconcile, item, id);
+	family.ids.splice(nextIndex, 0, id);
+	family.items.splice(nextIndex, 0, item);
+	if (nextIndex !== index) {
+		touch(family);
 	}
-	return [
-		{
-			key: queryFamilyKey(undefined),
-			query: undefined,
-			pages: state.pages
-		}
-	];
+	setRealtimePages(family, 0);
 }
 
-function loadedPageIds(pages: readonly PageState[]): string[] {
-	const ids: string[] = [];
-	const seen = new Set<string>();
-	for (const page of pages) {
-		for (const id of page.ids) {
-			if (seen.has(id)) {
-				continue;
-			}
-			seen.add(id);
-			ids.push(id);
-		}
-	}
-	return ids;
-}
-
-function compareItemsById(
-	state: OptimisticState,
-	reconcile: OptimisticReconcile,
-	leftId: string,
-	rightId: string
-): number {
-	const left = state.baseItems.get(leftId);
-	const right = state.baseItems.get(rightId);
-	if (left && right) {
-		const compared = reconcile.compare?.(left, right) ?? 0;
-		if (compared !== 0) {
-			return compared;
-		}
-	}
-	return leftId.localeCompare(rightId);
-}
-
-function findInsertIndexByCompare(
-	state: OptimisticState,
-	reconcile: OptimisticReconcile,
-	ids: readonly string[],
+function findInsertIndex<TItem>(
+	family: PageFamilyState<TItem>,
+	reconcile: OptimisticReconcile<TItem>,
+	item: TItem,
 	id: string
 ): number {
 	let low = 0;
-	let high = ids.length;
+	let high = family.ids.length;
 	while (low < high) {
 		const middle = Math.floor((low + high) / 2);
-		const candidate = ids[middle];
-		if (!candidate || compareItemsById(state, reconcile, id, candidate) <= 0) {
+		const compared = reconcile.compare?.(item, family.items[middle] as TItem) ?? 0;
+		if (compared < 0 || (compared === 0 && id.localeCompare(family.ids[middle] as string) <= 0)) {
 			high = middle;
 		} else {
 			low = middle + 1;
@@ -836,97 +795,41 @@ function findInsertIndexByCompare(
 	return low;
 }
 
-function moveLoadedIdByCompare(
-	state: OptimisticState,
-	reconcile: OptimisticReconcile,
-	ids: string[],
-	id: string
-): void {
-	const currentIndex = ids.indexOf(id);
-	if (currentIndex < 0) {
-		return;
-	}
-	ids.splice(currentIndex, 1);
-	const nextIndex = findInsertIndexByCompare(state, reconcile, ids, id);
-	ids.splice(nextIndex, 0, id);
-}
-
-function distributeLoadedIdsToPages(pages: readonly PageState[], ids: readonly string[]): PageState[] {
-	const nextPages: PageState[] = [];
-	let cursor = 0;
-	for (const page of pages) {
-		const pageIds: string[] = [];
-		for (let index = 0; index < page.ids.length && cursor < ids.length; index += 1) {
-			const id = ids[cursor];
-			cursor += 1;
-			if (id) {
-				pageIds.push(id);
-			}
-		}
-		nextPages.push({
-			...page,
-			ids: pageIds,
-			source: 'realtime'
-		});
-	}
-	const lastPage = nextPages.at(-1);
-	const lastPageIds = lastPage ? [...lastPage.ids] : undefined;
-	while (lastPageIds && cursor < ids.length) {
-		const id = ids[cursor];
-		cursor += 1;
-		if (id) {
-			lastPageIds.push(id);
-		}
-	}
-	if (lastPage && lastPageIds) {
-		nextPages[nextPages.length - 1] = { ...lastPage, ids: lastPageIds };
-	}
-	return nextPages;
-}
-
 function pageItems(state: OptimisticState): unknown[] {
 	const items: unknown[] = [];
 	const seen = new Set<string>();
-	for (const family of loadedFamilies(state)) {
-		for (const page of family.pages) {
-			for (const id of page.ids) {
-				if (seen.has(id)) {
-					continue;
-				}
-				seen.add(id);
-				const item = state.baseItems.get(id);
-				if (item) {
-					items.push(item);
-				}
+	for (const family of state.families.values()) {
+		for (const id of family.ids) {
+			if (seen.has(id)) {
+				continue;
+			}
+			seen.add(id);
+			const item = state.baseItems.get(id);
+			if (item) {
+				items.push(item);
 			}
 		}
 	}
 	return items;
 }
 
-function syncActivePages(state: OptimisticState): void {
-	const activeFamily = getActiveFamily(state);
-	if (activeFamily) {
-		state.pages = activeFamily.pages;
-		state.listMeta = activeFamily.meta;
-	}
-}
-
-function getActiveFamily(state: OptimisticState): PageFamilyState | undefined {
+function getActiveFamily<TItem, TQuery, TMeta>(
+	state: OptimisticState<TItem, unknown, TQuery, TMeta>
+): PageFamilyState<TItem, TQuery, TMeta> | undefined {
 	return state.activeFamilyKey ? state.families.get(state.activeFamilyKey) : undefined;
 }
 
-function getOrCreateFamily<TQuery>(state: OptimisticState, key: string, query: TQuery): PageFamilyState {
+function getOrCreateFamily<TItem, TQuery>(
+	state: OptimisticState<TItem>,
+	key: string,
+	query: TQuery
+): PageFamilyState<TItem> {
 	const existing = state.families.get(key);
 	if (existing) {
 		existing.query = query;
 		return existing;
 	}
-	const family: PageFamilyState = {
-		key,
-		query,
-		pages: []
-	};
+	const family: PageFamilyState<TItem> = { key, query, pages: [], ids: [], items: [], sorted: true };
 	state.families.set(key, family);
 	return family;
 }
@@ -952,8 +855,8 @@ function queryWithoutCursor<TQuery>(query: TQuery) {
 	return Object.fromEntries(entries);
 }
 
-function applyPendingToVisible<TItem>(
-	state: OptimisticState,
+function applyPendingToView<TItem>(
+	state: PendingView<TItem>,
 	command: InternalPendingCommand,
 	reconcile: OptimisticReconcile,
 	shouldApplyAdd?: (item: TItem) => boolean
@@ -995,7 +898,7 @@ function applyPendingToVisible<TItem>(
 			if (id) {
 				const current = state.items.get(id);
 				if (current) {
-					state.items.set(id, applyPatch(current, item.input));
+					state.items.set(id, applyPatch(current, item.input) as TItem);
 				}
 				if (state.data && reconcile.itemId(state.data) === id) {
 					state.data = applyPatch(state.data, item.input);
@@ -1040,126 +943,18 @@ function collectTargetIds<TArgs>(method: WriteMethod, args: TArgs, reconcile: Op
 	return targetIds;
 }
 
-export function updateVisibleItems(
-	state: OptimisticState,
-	affectedIds: ReadonlySet<string>,
-	reconcile: OptimisticReconcile,
-	pendingCommands: Iterable<InternalPendingCommand>
-): void {
-	if (affectedIds.size === 0) {
-		return;
-	}
-
-	const dataId = state.data ? reconcile.itemId(state.data) : undefined;
-	if (dataId && affectedIds.has(dataId)) {
-		state.data = state.baseData;
-	} else if (state.baseData) {
-		const baseDataId = reconcile.itemId(state.baseData);
-		if (baseDataId && affectedIds.has(baseDataId)) {
-			state.data = state.baseData;
-		}
-	}
-
-	for (const id of affectedIds) {
-		const next = state.baseItems.get(id);
-		if (!next || !isLoadedItem(state, id)) {
-			state.items.delete(id);
-			continue;
-		}
-		state.items.set(id, next);
-	}
-
-	for (const command of pendingCommands) {
-		if (command.targetIds.some((id) => affectedIds.has(id))) {
-			applyPendingToVisible(state, command, reconcile);
-		}
-	}
-
-	repositionVisibleItems(state, reconcile, affectedIds);
-}
-
-function sortVisibleItems(state: OptimisticState, reconcile: OptimisticReconcile): void {
-	if (!reconcile.compare || state.items.size < 2) {
-		return;
-	}
-
-	const sorted = [...state.items.entries()];
-	sorted.sort((left, right) => reconcile.compare?.(left[1], right[1]) ?? 0);
-	state.items.clear();
-	for (const [id, item] of sorted) {
-		state.items.set(id, item);
-	}
-}
-
-function repositionVisibleItems(
-	state: OptimisticState,
-	reconcile: OptimisticReconcile,
-	affectedIds: ReadonlySet<string>
-): void {
-	if (!reconcile.compare || state.items.size < 2 || affectedIds.size === 0) {
-		return;
-	}
-
-	const movedEntries: [string, unknown][] = [];
-	const stableEntries: [string, unknown][] = [];
-	for (const entry of state.items.entries()) {
-		if (affectedIds.has(entry[0])) {
-			movedEntries.push(entry);
-		} else {
-			stableEntries.push(entry);
-		}
-	}
-	if (movedEntries.length === 0) {
-		return;
-	}
-
-	movedEntries.sort((left, right) => reconcile.compare?.(left[1], right[1]) ?? 0);
-	const merged: [string, unknown][] = [];
-	let stableIndex = 0;
-	let movedIndex = 0;
-	while (stableIndex < stableEntries.length && movedIndex < movedEntries.length) {
-		if ((reconcile.compare?.(movedEntries[movedIndex]?.[1], stableEntries[stableIndex]?.[1]) ?? 0) <= 0) {
-			const moved = movedEntries[movedIndex];
-			if (moved) {
-				merged.push(moved);
-			}
-			movedIndex += 1;
-		} else {
-			const stable = stableEntries[stableIndex];
-			if (stable) {
-				merged.push(stable);
-			}
-			stableIndex += 1;
-		}
-	}
-	for (; stableIndex < stableEntries.length; stableIndex += 1) {
-		const stable = stableEntries[stableIndex];
-		if (stable) {
-			merged.push(stable);
-		}
-	}
-	for (; movedIndex < movedEntries.length; movedIndex += 1) {
-		const moved = movedEntries[movedIndex];
-		if (moved) {
-			merged.push(moved);
-		}
-	}
-
-	state.items.clear();
-	for (const [id, item] of merged) {
-		state.items.set(id, item);
-	}
-}
-
 function markPagesStale(state: OptimisticState, cursor: string): void {
-	if (state.families.size === 0) {
-		state.pages = markPageListStale(state.pages, cursor);
-		return;
-	}
 	for (const family of state.families.values()) {
-		family.pages = markPageListStale(family.pages, cursor);
+		family.pages = family.pages.map((page) => ({
+			...page,
+			coverage: 'stale',
+			stale: true,
+			repairNeeded: true,
+			lastSyncCursor: cursor,
+			source: 'realtime'
+		}));
+		family.pagesView = undefined;
 	}
-	syncActivePages(state);
 }
 
 function getDefaultId<TValue>(value: TValue): string | undefined {
@@ -1178,26 +973,4 @@ function readStringFromRecord<TValue>(value: TValue, key: string): string | unde
 		return undefined;
 	}
 	return readString(value[key]);
-}
-
-function isLoadedItem(state: OptimisticState, id: string): boolean {
-	if (state.pages.length === 0) {
-		return state.families.size === 0 && !state.activeFamilyKey;
-	}
-	return state.pages.some((page) => page.ids.includes(id));
-}
-
-function markPageListStale(pages: readonly PageState[], cursor: string): PageState[] {
-	const nextPages: PageState[] = [];
-	for (const page of pages) {
-		nextPages.push({
-			...page,
-			coverage: 'stale',
-			stale: true,
-			repairNeeded: true,
-			lastSyncCursor: cursor,
-			source: 'realtime'
-		});
-	}
-	return nextPages;
 }

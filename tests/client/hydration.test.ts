@@ -17,14 +17,9 @@ afterEach(() => {
 describe('client hydration and cache', () => {
 	it('deletes an expired authoritative snapshot instead of restoring it', async () => {
 		const system = createSyncTestSystem();
-		const cacheKey = 'sync-resource:notes:{"workspaceId":"workspace-1"}:view';
+		const cacheKey = 'sync-resource:notes:{"workspaceId":"workspace-1"}:view:v2';
 		await system.cache.set(cacheKey, {
-			value: {
-				items: [{ id: 'expired', title: 'Expired' }],
-				baseItems: [{ id: 'expired', title: 'Expired' }],
-				pages: [],
-				families: []
-			},
+			value: { baseItems: [{ id: 'expired', title: 'Expired' }], families: [] },
 			expiry: SYNC_TEST_NOW - 1
 		});
 		const store = system.createStore();
@@ -42,13 +37,8 @@ describe('client hydration and cache', () => {
 
 	it('keeps construction network-free and restores an authoritative cache snapshot', async () => {
 		const system = createSyncTestSystem();
-		await system.cache.set('sync-resource:notes:{"workspaceId":"workspace-1"}:view', {
-			value: {
-				items: [{ id: 'cached', title: 'Cached' }],
-				baseItems: [{ id: 'cached', title: 'Cached' }],
-				pages: [],
-				families: []
-			},
+		await system.cache.set('sync-resource:notes:{"workspaceId":"workspace-1"}:view:v2', {
+			value: { baseItems: [{ id: 'cached', title: 'Cached' }], families: [] },
 			expiry: SYNC_TEST_NOW + 60_000
 		});
 		const store = system.createStore();
@@ -58,6 +48,29 @@ describe('client hydration and cache', () => {
 			const restored = await store.restore();
 			expect(restored.isOk()).toBe(true);
 			expect(store.items()).toEqual([{ id: 'cached', title: 'Cached' }]);
+		} finally {
+			store.dispose();
+			await system.transport.close();
+		}
+	});
+
+	it('refetches instead of restoring a snapshot saved in an earlier format', async () => {
+		const system = createSyncTestSystem();
+		system.database.seed('workspace-1', [{ id: 'note-1', title: 'Fresh' }]);
+		await system.cache.set('sync-resource:notes:{"workspaceId":"workspace-1"}:view', {
+			value: {
+				items: [{ id: 'old', title: 'Old' }],
+				baseItems: [{ id: 'old', title: 'Old' }],
+				families: [{ key: 'q', query: {}, pages: [{ ids: ['old'], complete: true }] }],
+				pages: []
+			},
+			expiry: SYNC_TEST_NOW + 60_000
+		});
+		const store = system.createStore();
+		try {
+			expect((await store.hydrate()).isOk()).toBe(true);
+			expect(store.items()).toEqual([{ id: 'note-1', title: 'Fresh' }]);
+			expect(store.error()).toBeNull();
 		} finally {
 			store.dispose();
 			await system.transport.close();
