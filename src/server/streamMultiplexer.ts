@@ -180,7 +180,8 @@ export function publishSharedStreamEnvelope(envelope: SyncEnvelope): void {
 			stream.bufferedByScope.set(envelope.scope, buffered);
 			continue;
 		}
-		if (rememberSentCursor(stream, envelope.cursor)) {
+		// A live envelope reaches a stream once, so only replayed cursors need the window to drop a later live copy.
+		if (!stream.sentCursors.has(envelope.cursor)) {
 			sendFrames(stream, frames);
 		}
 	}
@@ -352,6 +353,11 @@ export function getRegisteredSharedStreamManagerKeys(): readonly string[] {
 		cachedManagerKeys = [...registeredManagers.keys()];
 	}
 	return cachedManagerKeys;
+}
+
+/** @internal Test inspection of a stream's replay dedup window. */
+export function sharedStreamSentCursorCount(transportId: string): number | undefined {
+	return streamsByTransportId.get(transportId)?.sentCursors.size;
 }
 
 /** @internal Test isolation for the maintained source-level Vitest suite. */

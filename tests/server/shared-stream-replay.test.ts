@@ -9,7 +9,7 @@ import {
 	type ManagerSyncPersistence,
 	type SyncEnvelope
 } from '../../src/server/index.ts';
-import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { resetSharedStreamForTests, sharedStreamSentCursorCount } from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
@@ -155,5 +155,41 @@ describe('shared stream replay gaps', () => {
 		const frames = await drain(reader, 300);
 		expect(frames).toHaveLength(100);
 		expect(frames.at(-1)).toBe('c100');
+	});
+});
+
+describe('shared stream sent-cursor window', () => {
+	it('holds no cursor for live envelopes however many are sent', async () => {
+		registerSharedStreamManager({ key: 'notes' });
+		const res = await httpSharedSyncStream(stream('t7'));
+		const reader = res.body!.getReader();
+		await reader.read();
+		await reg(
+			't7',
+			persistence(() => ({ cursorFound: true, retainedEnvelopeCount: 0, envelopes: [] }))
+		);
+		for (let index = 0; index < 1000; index += 1) {
+			publishSharedStreamEnvelope(env(`c${index}`));
+		}
+		expect(sharedStreamSentCursorCount('t7')).toBe(0);
+		expect(await drain(reader, 100)).toHaveLength(1000);
+	});
+
+	it('records replayed cursors only, which still drop a later live copy', async () => {
+		registerSharedStreamManager({ key: 'notes' });
+		const p = persistence(() => ({
+			cursorFound: true,
+			retainedEnvelopeCount: 2,
+			envelopes: [env('c1'), env('c2')]
+		}));
+		const res = await httpSharedSyncStream(stream('t8'));
+		const reader = res.body!.getReader();
+		await reader.read();
+		await reg('t8', p, 'c0');
+		expect(await drain(reader, 100)).toEqual(['c1', 'c2']);
+		publishSharedStreamEnvelope(env('c2'));
+		publishSharedStreamEnvelope(env('c3'));
+		expect(await drain(reader, 100)).toEqual(['c3']);
+		expect(sharedStreamSentCursorCount('t8')).toBe(2);
 	});
 });
