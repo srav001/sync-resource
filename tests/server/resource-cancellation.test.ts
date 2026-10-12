@@ -123,7 +123,7 @@ describe('resource operation cancellation', () => {
 		handlerOutput.resolve(ok({ id: 'late' }));
 		const result = await operation;
 
-		// DIVERGENCE: a handler that ignores its aborted signal can still publish a successful late output.
+		// Cancellation is cooperative: a handler that ignores its aborted signal still returns its late output.
 		expect(result.isOk()).toBe(true);
 		if (result.isOk()) {
 			expect(result.value).toEqual({ output: { id: 'late' } });

@@ -475,8 +475,9 @@ reconcile.defaults({
 });
 ```
 
-### `holdRegistrations` on a custom transport
+### `holdRegistrations` and `onRegistered` on a custom transport
 
 Only for apps that pass their own `transport` to `createRuntime`. Implement the optional
 `holdRegistrations(): () => void` and the store calls it while a read is in flight and releases it after, so queued
-registrations go out together. Without it, nothing changes; `connectUrl` applies only to the built-in transport.
+registrations go out together. Call the optional `onRegistered` subscribe callback when a background retry registers a
+subscription, so the store clears that registration error. Without it, nothing changes; `connectUrl` applies only to the built-in transport.

@@ -90,7 +90,8 @@ and concrete IndexedDB implementations do not belong in this package.
 - Resources own schemas, validation, domain/database IO, and output shaping.
 - Managers own authorization, scope, transport exposure, realtime fanout, outbox replay, idempotency, and finality.
 - Client stores own cache, hydration, optimistic state, rollback/rebase, realtime application, and repair.
-- HTTP success is not mutation finality; authoritative envelope or reset coverage is finality.
+- HTTP success is not mutation finality; authoritative envelope or reset coverage is finality for a write that changes
+  state.
 - Realtime delivery is not the sole correctness mechanism; cursor replay and repair must remain valid.
 - Browser cache adapters are application-owned. The package stores authoritative snapshots through `CacheAdapter` and
   does not implement IndexedDB directly.

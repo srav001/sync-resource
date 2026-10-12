@@ -290,7 +290,8 @@ interface ResourceHandlerContext {
 }
 ```
 
-Use `ctx.signal` for DB and network cancellation. `environment` is opaque server-owned execution state; application code
+Use `ctx.signal` for DB and network cancellation. Cancellation is cooperative: a handler that ignores `ctx.signal` runs
+to completion and its result is returned, because a write's side effects have already happened. `environment` is opaque server-owned execution state; application code
 must not inspect or populate it. Use `ctx.actor` for audit/permission-aware writes. Use `ctx.ok`, `ctx.error`, and
 `ctx.syncError` so plain handlers stay on the local result shape.
 
@@ -860,7 +861,7 @@ Rules:
 - The owner tab relays each envelope's JSON text to follower tabs on the `sync-resource:v2:transport` BroadcastChannel.
   A follower parses and validates it like a stream frame. Tabs running a different relay version use a different channel,
   so they share no envelopes until the older tab reloads.
-- A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. The error surfaces as the store error, not in `hydrate()`'s result. Its code is the one in the server's error body; a failure with no sync error body (such as a proxy answering 401 or 503) is classified by its HTTP status.
+- A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. The error surfaces as the store error, not in `hydrate()`'s result, and clears when a retry registers (a custom transport calls the optional `onRegistered` subscribe callback for that). Its code is the one in the server's error body; a failure with no sync error body (such as a proxy answering 401 or 503) is classified by its HTTP status.
 - Registrations are batched by default; see [Batched registration](#batched-registration).
 - Replay/reset remains per logical scope through durable outbox cursors. An unknown cursor, or more pending envelopes than
   `replayLimit`, produces a reset instead of a partial replay.
@@ -1406,13 +1407,16 @@ authoritative envelope settles finality
 rollback or repair on failure
 ```
 
-HTTP success is not finality. Finality means the client has authoritative delta/reset coverage for the write.
+HTTP success is not finality. Finality means the client has authoritative delta/reset coverage for the write. A write
+whose handler returns no changes has nothing to cover: the server records it as `acknowledged`, and its response settles
+it and rolls the optimistic change back.
 
 Rules:
 
 - Client can show optimistic state immediately.
 - Optimistic `add` needs a client-known item identity in the write input, or an explicit reconcile `itemId` that can derive it. If the server is the only place that creates the id, the authoritative response will add the item later but automatic optimistic insertion cannot happen.
-- Pending commands remain tracked until authoritative coverage arrives.
+- Pending commands remain tracked until authoritative coverage arrives, or until a response without an envelope settles a
+  write that changed nothing.
 - Client `mutate` writes with known target ids apply optimistic patches to only those visible items before re-positioning them in sorted collections.
 - Optimistic `mutate` is patch-based: the client applies the write `input` to the visible target item before the server responds.
 - If a mutation is expressed as a domain command such as `{ action: 'use' }`, the client cannot infer the UI patch from that command. Include the expected optimistic `$set` / `$unset` fields in `input`, or do not expect automatic optimistic UI.

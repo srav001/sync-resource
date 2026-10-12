@@ -100,7 +100,7 @@ describe('optimistic writes', () => {
 			const result = await store.add({ input: { id: 'note-1', title: 'Added' } });
 			expect(result.isOk()).toBe(true);
 			expect(store.isPending()).toBe(false);
-			// DIVERGENCE: a bare HTTP acknowledgement clears pending without authoritative envelope coverage.
+			// A write that changed nothing has no envelope, so its response settles it and rolls the optimistic add back.
 			expect(store.items()).toEqual([]);
 		} finally {
 			store.dispose();

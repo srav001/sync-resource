@@ -180,7 +180,8 @@ is applied; realtime registration continues in the background. The application o
 ## Guarantees
 
 - Synchronized writes flow through managers so persistence, outbox replay, realtime fanout, and finality stay aligned.
-- HTTP acknowledgement is not mutation finality; authoritative envelope or reset coverage settles a write.
+- HTTP acknowledgement is not mutation finality; authoritative envelope or reset coverage settles a write that changes
+  state.
 - Realtime is not the sole correctness mechanism; cursor replay and repair preserve convergence.
 - Framework adapters do not duplicate synchronization logic from the core store.
 - IndexedDB and other concrete cache implementations remain application-owned adapters.
