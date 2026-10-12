@@ -18,17 +18,9 @@ export const syncErrorCodes = [
 export type SyncErrorCode = (typeof syncErrorCodes)[number];
 export type SyncRecoverySource = 'memory' | 'idb' | 'server';
 
-export interface SyncRestoredRecovery {
-	readonly restored: true;
-	readonly source: SyncRecoverySource;
-}
-
-export interface SyncUnrestoredRecovery {
-	readonly restored?: false;
-	readonly source?: never;
-}
-
-export type SyncErrorRecovery = SyncRestoredRecovery | SyncUnrestoredRecovery;
+export type SyncErrorRecovery =
+	| { readonly restored: true; readonly source: SyncRecoverySource }
+	| { readonly restored?: false; readonly source?: never };
 export type SyncRecoveryMetadata = SyncErrorRecovery;
 
 export interface SyncProtocolError {
@@ -70,14 +62,17 @@ export interface CostMetric {
 	readonly unit: string;
 }
 
-export type SyncResetReason =
-	| 'retention_gap'
-	| 'manual'
-	| 'auth_changed'
-	| 'schema_changed'
-	| 'cache_policy_changed'
-	| 'repair'
-	| 'replay_failed';
+const syncResetReasons = [
+	'retention_gap',
+	'manual',
+	'auth_changed',
+	'schema_changed',
+	'cache_policy_changed',
+	'repair',
+	'replay_failed'
+] as const;
+
+export type SyncResetReason = (typeof syncResetReasons)[number];
 
 export interface ResetManifest {
 	readonly scope: string;
@@ -350,15 +345,7 @@ function isSyncRecoverySource(value: unknown): value is SyncRecoverySource {
 }
 
 function isSyncResetReason(value: unknown): value is SyncResetReason {
-	return (
-		value === 'retention_gap' ||
-		value === 'manual' ||
-		value === 'auth_changed' ||
-		value === 'schema_changed' ||
-		value === 'cache_policy_changed' ||
-		value === 'repair' ||
-		value === 'replay_failed'
-	);
+	return syncResetReasons.some((reason) => reason === value);
 }
 
 function isCostMetric(value: unknown): value is CostMetric {
