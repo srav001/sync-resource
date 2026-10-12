@@ -29,7 +29,6 @@ export {
 	type SyncSignal,
 	type Validator
 } from '../shared/index.ts';
-export { parseSchema } from './validator.ts';
 export {
 	encodeScope,
 	manager,

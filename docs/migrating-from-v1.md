@@ -283,7 +283,7 @@ Sync Resource no longer uses any of these. Remove them from your code.
   `on` and `subscribe`, plus `core`; every member it had is still there.
 - **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
   `stale` is the one staleness flag.
-- **Server:** `GetMethodInput` and `ListMethodInput` are one `ReadMethodInput`. `GetResourceArgs`, `ListResourceArgs` and
+- **Server:** `parseSchema`. `GetMethodInput` and `ListMethodInput` are one `ReadMethodInput`. `GetResourceArgs`, `ListResourceArgs` and
   `DeleteResourceArgs` are no longer exported.
 - **Shared:** `isResetManifest`, `isSyncChange`, `isSyncErrorCode`, `isSyncErrorRecovery`, `isSyncProtocolError` and
   `isSyncSignal`. `isSyncEnvelope` and `isSyncHttpResult` remain.
