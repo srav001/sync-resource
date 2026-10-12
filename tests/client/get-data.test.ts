@@ -231,7 +231,7 @@ describe('client get and data', () => {
 		expect(store.data()).toEqual({ id: 'profile-1', name: 'Initial' });
 	});
 
-	it('characterizes a transport invoking its captured envelope callback after disposal', async () => {
+	it('ignores a transport invoking its captured envelope callback after disposal', async () => {
 		const transport = new ManualTransport();
 		configureSync({
 			cache: { adapter: noopCache },
@@ -248,8 +248,7 @@ describe('client get and data', () => {
 			])
 		);
 
-		// DIVERGENCE: a transport violating unsubscribe can still mutate a disposed store through its captured callback.
-		expect(store.data()).toEqual({ id: 'profile-1', name: 'Late realtime' });
+		expect(store.data()).toEqual({ id: 'profile-1', name: 'Initial' });
 	});
 });
 

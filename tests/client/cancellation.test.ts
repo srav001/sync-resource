@@ -7,7 +7,7 @@ import {
 	type ManagerTypeShape,
 	type MethodType
 } from '../../src/client/core.ts';
-import { waitFor } from '../fixtures/async.ts';
+import { nextMacrotask, waitFor } from '../fixtures/async.ts';
 import { noopCache, noopTransport } from '../fixtures/clientRuntime.ts';
 import { syncResponse } from '../fixtures/responses.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
@@ -83,7 +83,7 @@ describe('client request cancellation', () => {
 		store.dispose();
 	});
 
-	it('characterizes a read response that arrives after store disposal', async () => {
+	it('ignores a read response that arrives after store disposal', async () => {
 		const response = new Deferred<Response>();
 		let requestSignal: AbortSignal | null | undefined;
 		const store = createGetStore(async (_input, init) => {
@@ -96,16 +96,40 @@ describe('client request cancellation', () => {
 		response.resolve(syncResponse({ id: 'note-1', title: 'Late' }));
 
 		const result = await operation;
-		// DIVERGENCE: a fetch implementation that ignores abort can return success and mutate a disposed store.
-		expect(result.isOk()).toBe(true);
-		if (result.isOk()) {
-			expect(result.value).toEqual({ id: 'note-1', title: 'Late' });
-		}
-		expect(store.data()).toEqual({ id: 'note-1', title: 'Late' });
+		expect(result.isErr() && result.error.code).toBe('aborted');
+		expect(store.data()).toBeUndefined();
 		expect(store.pending()).toEqual([]);
 	});
 
-	it('characterizes an optimistic write response that arrives after store disposal', async () => {
+	it('ignores a cached snapshot that is read after store disposal', async () => {
+		const cached = new Deferred<{ readonly value: unknown; readonly expiry: number } | undefined>();
+		configureSync({
+			cache: {
+				adapter: {
+					...noopCache,
+					get: <TValue>() => cached.promise as Promise<{ value: TValue; expiry: number }>
+				}
+			},
+			transport: noopTransport,
+			fetch: abortAwareFetch(),
+			createId: (prefix) => `${prefix}-1`
+		});
+		const store = createStore<GetManager>({
+			key: 'cancellation-get',
+			getParams: () => ({ workspaceId: 'workspace-1' }),
+			getUrl: () => 'http://sync.test/note'
+		});
+		store.dispose();
+		cached.resolve({
+			value: { baseData: { id: 'note-1', title: 'Cached' }, baseItems: [], families: [] },
+			expiry: 0
+		});
+		await nextMacrotask();
+
+		expect(store.data()).toBeUndefined();
+	});
+
+	it('ignores an optimistic write response that arrives after store disposal', async () => {
 		const response = new Deferred<Response>();
 		let requestSignal: AbortSignal | null | undefined;
 		const store = createListStore(async (_input, init) => {
@@ -119,11 +143,7 @@ describe('client request cancellation', () => {
 		response.resolve(syncResponse({ id: 'note-1', title: 'Committed' }));
 
 		const result = await operation;
-		// DIVERGENCE: a fetch that ignores abort can still make a disposed store report the write as successful.
-		expect(result.isOk()).toBe(true);
-		if (result.isOk()) {
-			expect(result.value).toEqual({ id: 'note-1', title: 'Committed' });
-		}
+		expect(result.isErr() && result.error.code).toBe('aborted');
 		expect(store.items()).toEqual([]);
 		expect(store.pending()).toEqual([]);
 	});

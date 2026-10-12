@@ -441,7 +441,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			if (!cached) {
 				return ok(undefined);
 			}
-			if (this.pendingCommands.size > 0) {
+			if (this.disposed || this.pendingCommands.size > 0) {
 				return ok(undefined);
 			}
 
@@ -881,6 +881,10 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 				signal: requestAbort.signal
 			});
 			const payload = await response.json();
+			// A fetch that ignores its abort signal must not apply a late response, such as to a disposed store.
+			if (requestAbort.signal.aborted) {
+				return err('aborted', 'Sync request was aborted.');
+			}
 			if (!isSyncHttpResult<TValue>(payload)) {
 				return err('validation', 'Sync response payload was malformed.', { details: payload });
 			}
@@ -967,6 +971,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	};
 
 	private readonly handleLiveEnvelope = (envelope: SyncEnvelope): void => {
+		if (this.disposed) {
+			return;
+		}
 		if (envelope.changes.length > 0) {
 			this.applyEnvelope(envelope);
 			this.scheduleCachedRuntimeStateSave();
