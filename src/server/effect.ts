@@ -716,12 +716,12 @@ function wrapSourceCommit<TValue>(value: TValue, context: Context.Context<unknow
 	};
 }
 
-async function lowerEffect<A>(
-	effect: Effect.Effect<A, SyncError, unknown>,
-	context: Context.Context<unknown>,
-	signal: AbortSignal
+async function lowerEffect<A, R>(
+	effect: Effect.Effect<A, SyncError, R>,
+	context: Context.Context<R>,
+	signal?: AbortSignal
 ): Promise<SyncResult<A, SyncError>> {
-	const exit = await Effect.runPromiseExitWith(context)(effect, { signal });
+	const exit = await Effect.runPromiseExitWith(context)(effect, signal ? { signal } : undefined);
 	if (Exit.isSuccess(exit)) {
 		return ok(exit.value);
 	}
@@ -789,15 +789,11 @@ async function runHook<A, R>(
 	context: Context.Context<R>,
 	signal?: AbortSignal
 ): Promise<A> {
-	const exit = await Effect.runPromiseExitWith(context)(effect, signal ? { signal } : undefined);
-	if (Exit.isSuccess(exit)) {
-		return exit.value;
+	const result = await lowerEffect(effect, context, signal);
+	if (result.isErr()) {
+		throw result.error;
 	}
-	const failure = syncErrorFromCause(exit.cause);
-	if (failure) {
-		throw failure;
-	}
-	throw new EffectHandlerDefect(exit.cause);
+	return result.value;
 }
 
 async function subscribeScoped<R>(
