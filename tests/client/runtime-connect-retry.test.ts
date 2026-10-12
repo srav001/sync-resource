@@ -24,6 +24,7 @@ interface NotesManager extends ManagerTypeShape {
 
 afterEach(() => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 	resetSyncConfiguration();
 });
 
@@ -31,19 +32,25 @@ function pathOf(input: URL | RequestInfo): string {
 	return typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
 }
 
-function createFailingConnectRuntime(failures: number) {
+function createFailingConnectRuntime(fails: (connect: number) => boolean) {
 	let connects = 0;
+	let streamController!: ReadableStreamDefaultController<Uint8Array>;
 	const runtime = createRuntime({
 		batchConnect: false,
 		cache: noopCache,
 		fetch: async (input) => {
 			if (pathOf(input).endsWith('/stream')) {
-				return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
-					headers: { 'content-type': 'text/event-stream' }
-				});
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							streamController = controller;
+						}
+					}),
+					{ headers: { 'content-type': 'text/event-stream' } }
+				);
 			}
 			connects += 1;
-			return connects <= failures
+			return fails(connects)
 				? new Response('unavailable', { status: 503 })
 				: Response.json({ isOk: true, isError: false, value: { scope: 'notes:workspace-1' } });
 		},
@@ -59,13 +66,13 @@ function createFailingConnectRuntime(failures: number) {
 			signal,
 			onEnvelope: () => {}
 		});
-	return { runtime, subscribe, connects: () => connects };
+	return { runtime, subscribe, connects: () => connects, closeStream: () => streamController.close() };
 }
 
 describe('failed realtime registration', () => {
 	it('keeps the subscription, retries with backoff and stops retrying once registered', async () => {
 		vi.useFakeTimers();
-		const { runtime, subscribe, connects } = createFailingConnectRuntime(2);
+		const { runtime, subscribe, connects } = createFailingConnectRuntime((connect) => connect <= 2);
 		const signal = new AbortController();
 		try {
 			const first = await subscribe(signal.signal);
@@ -84,9 +91,34 @@ describe('failed realtime registration', () => {
 		}
 	});
 
+	it('restarts the backoff from its base delay once a registration has succeeded', async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, 'random').mockReturnValue(0.5);
+		const { runtime, subscribe, connects, closeStream } = createFailingConnectRuntime((connect) =>
+			[1, 2, 4].includes(connect)
+		);
+		const signal = new AbortController();
+		try {
+			expect((await subscribe(signal.signal)).isErr()).toBe(true);
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(connects()).toBe(2);
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(connects()).toBe(3);
+
+			closeStream();
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(connects()).toBe(4);
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(connects()).toBe(5);
+		} finally {
+			signal.abort();
+			runtime.dispose();
+		}
+	});
+
 	it('stops retrying when the last subscriber leaves', async () => {
 		vi.useFakeTimers();
-		const { runtime, subscribe, connects } = createFailingConnectRuntime(Infinity);
+		const { runtime, subscribe, connects } = createFailingConnectRuntime(() => true);
 		const signal = new AbortController();
 		try {
 			expect((await subscribe(signal.signal)).isErr()).toBe(true);
