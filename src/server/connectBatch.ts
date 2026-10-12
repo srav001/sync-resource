@@ -1,11 +1,12 @@
 import { isRecord } from '../shared/guards.ts';
+import { syncError, type SyncErrorCode } from '../shared/index.ts';
+import { syncHttpError } from '../shared/protocol.ts';
 import { MAX_BATCH_CONNECTS } from '../shared/protocol.ts';
-import { syncError, toSyncProtocolError, type SyncErrorCode } from './errors.js';
 
 const SKIPPED_HEADERS = ['content-length', 'content-type', 'transfer-encoding'];
 
 function errorBody(code: SyncErrorCode, message: string) {
-	return { isOk: false, isError: true, error: toSyncProtocolError(syncError(code, message)) };
+	return syncHttpError(syncError(code, message));
 }
 
 function isConnectPath(path: unknown, origin: string): path is string {

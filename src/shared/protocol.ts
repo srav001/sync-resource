@@ -181,6 +181,10 @@ export function toSyncProtocolError(error: SyncError | SyncProtocolError): SyncP
 	};
 }
 
+export function syncHttpError(error: SyncError | SyncProtocolError): SyncHttpError {
+	return { isOk: false, isError: true, error: toSyncProtocolError(error) };
+}
+
 export function syncErrorToHttpStatus(error: Pick<SyncProtocolError, 'code'>): number {
 	switch (error.code) {
 		case 'bad_request':

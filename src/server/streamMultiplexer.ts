@@ -1,8 +1,16 @@
 import { isUnrefableTimer } from '../shared/guards.ts';
-import { err, ok, type SyncResult } from '../shared/result.js';
+import {
+	normalizeSyncError,
+	syncError,
+	syncErrorToHttpStatus,
+	type ResetManifest,
+	type SyncEnvelope,
+	type SyncError
+} from '../shared/index.ts';
+import { syncHttpError } from '../shared/protocol.ts';
+import { err, ok, type SyncResult } from '../shared/result.ts';
 import { encodeSseFrame, encodeSyncEnvelopeSseFrames, MAX_SSE_FRAME_BYTES } from '../shared/sse.ts';
-import { normalizeSyncError, syncError, toSyncProtocolError, type SyncError } from './errors.js';
-import type { ManagerSyncPersistence, ResetManifest, SyncEnvelope } from './types.js';
+import type { ManagerSyncPersistence } from './types.ts';
 
 // V1 keeps one physical browser-session stream and registers manager/scope subscriptions separately.
 // The durable outbox remains the correctness source; this module only multiplexes live delivery and replay.
@@ -197,27 +205,13 @@ export async function httpSharedSyncStream(request: Request): Promise<Response> 
 
 	const transportId = getTransportId(request);
 	if (!transportId) {
-		return jsonResponse(
-			{
-				isOk: false,
-				isError: true,
-				error: toSyncProtocolError(syncError('bad_request', 'Missing required header: x-sync-transport-id.'))
-			},
-			400
-		);
+		return errorResponse(syncError('bad_request', 'Missing required header: x-sync-transport-id.'));
 	}
 	const resolvedTransportId = transportId;
 
 	const ip = getClientIp(request);
 	if (!incrementIp(resolvedTransportId, ip)) {
-		return jsonResponse(
-			{
-				isOk: false,
-				isError: true,
-				error: toSyncProtocolError(syncError('rate_limited', 'Too many sync streams for this IP.'))
-			},
-			429
-		);
+		return errorResponse(syncError('rate_limited', 'Too many sync streams for this IP.'));
 	}
 	ipCounted = true;
 
@@ -672,4 +666,8 @@ export function jsonResponse<TBody>(body: TBody, status = 200): Response {
 		status,
 		headers: JSON_HEADERS
 	});
+}
+
+export function errorResponse(error: SyncError): Response {
+	return jsonResponse(syncHttpError(error), syncErrorToHttpStatus(error));
 }

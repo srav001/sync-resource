@@ -1,7 +1,7 @@
 import { isCallable, isRecord, isString } from '../shared/guards.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { stableStringify } from '../shared/stableJson.ts';
-import { normalizeSyncError, syncError, syncErrorToHttpStatus, toSyncProtocolError, type SyncError } from './errors.js';
+import { normalizeSyncError, syncError, type SyncError } from './errors.js';
 import { withCommitExecution } from './executionState.js';
 import { callHook } from './hook.js';
 import {
@@ -14,6 +14,7 @@ import {
 	type MethodKind
 } from './resource.js';
 import {
+	errorResponse,
 	jsonResponse,
 	publishSharedStreamEnvelope,
 	registerSharedStreamManager,
@@ -312,14 +313,13 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 			};
 			const authResult = await authorize(managerOptions, args.context, args.params, telemetryContext);
 			if (authResult.isErr()) {
-				return jsonResponse(syncHttpError(authResult.error), syncErrorToHttpStatus(authResult.error));
+				return errorResponse(authResult.error);
 			}
 
 			const releaseBus = await acquireBusSubscription(managerOptions, scope, execution.signal);
 			if (execution.signal.aborted) {
 				releaseBus?.();
-				const errorValue = syncError('aborted', 'Sync operation was aborted.');
-				return jsonResponse(syncHttpError(errorValue), syncErrorToHttpStatus(errorValue));
+				return errorResponse(syncError('aborted', 'Sync operation was aborted.'));
 			}
 			const subscriptionResult = await registerSharedStreamSubscription({
 				request: args.request,
@@ -332,10 +332,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 			});
 			if (subscriptionResult.isErr()) {
 				releaseBus?.();
-				return jsonResponse(
-					syncHttpError(subscriptionResult.error),
-					syncErrorToHttpStatus(subscriptionResult.error)
-				);
+				return errorResponse(subscriptionResult.error);
 			}
 			retainSharedBusSubscription(scope, releaseBus);
 
@@ -969,7 +966,7 @@ async function executeHttpMethod<TContext, TParams extends object>(
 	const definition = resource.definition.methods[method];
 	const parsedArgs = await parseHttpArgs(method, definition, args.request, options.maxPayloadBytes ?? 1024 * 1024);
 	if (parsedArgs.isErr()) {
-		return jsonResponse(syncHttpError(parsedArgs.error), syncErrorToHttpStatus(parsedArgs.error));
+		return errorResponse(parsedArgs.error);
 	}
 
 	const operationOptions = mergeOperationOptions(operationOptionsFromRequest(args.request), args.options);
@@ -986,12 +983,7 @@ async function executeHttpMethod<TContext, TParams extends object>(
 	);
 
 	if (result.isErr()) {
-		const body: SyncHttpResult<unknown> = {
-			isOk: false,
-			isError: true,
-			error: toSyncProtocolError(result.error)
-		};
-		return jsonResponse(body, syncErrorToHttpStatus(result.error));
+		return errorResponse(result.error);
 	}
 
 	const body: SyncHttpResult<unknown> = {
@@ -1595,12 +1587,4 @@ function prunePersistenceScope(persistence: ManagerSyncPersistence, scope: strin
 	if ('pruneScope' in persistence && isCallable(persistence.pruneScope)) {
 		persistence.pruneScope(scope);
 	}
-}
-
-function syncHttpError(errorValue: SyncError): SyncHttpResult<unknown> {
-	return {
-		isOk: false,
-		isError: true,
-		error: toSyncProtocolError(errorValue)
-	};
 }
