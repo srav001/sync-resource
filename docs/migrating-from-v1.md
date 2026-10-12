@@ -323,6 +323,8 @@ Sync Resource no longer uses any of these. Remove them from your code.
 - Adapters (`sync-resource/client/react`, `solid`, `vue`) are unchanged, except the Solid type names in [section 9](#9-removed-exports-options-and-fields).
 - TypeScript signatures that only widened (`Validator.parse`, `OperationMeta`, telemetry contexts now extend
   `OperationExecution`) need no change.
+- `GetMethodDefinition`, `ListMethodDefinition`, `AddMethodDefinition`, `MutateMethodDefinition` and `DeleteMethodDefinition`
+  are the matching method input type plus `kind`. They describe the same values.
 - `manager.http` is typed from the resource: each method the resource defines, plus `connect`, is a required handler,
   so existing `?.` and `!` calls keep working and can be dropped. Methods the resource does not define are not on the type.
   Handler arguments are checked strictly, so a `managerHttpRoutes` `context` callback must produce the manager's context

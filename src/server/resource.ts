@@ -123,73 +123,41 @@ export interface DeleteMethodInput<TParams extends object, TQuery, TOutput, TSel
 	): BatchResourceHandlerResult<TOutput>;
 }
 
-export interface GetMethodDefinition<TParams extends object, TQuery, TOutput> {
-	readonly kind: 'get';
-	readonly query?: AnySchema<TQuery>;
-	readonly output: AnySchema<TOutput>;
-	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
-}
+export type GetMethodDefinition<TParams extends object, TQuery, TOutput> = ReadMethodInput<
+	TParams,
+	TQuery,
+	TOutput,
+	unknown
+> & { readonly kind: 'get' };
 
-export interface ListMethodDefinition<TParams extends object, TQuery, TOutput> {
-	readonly kind: 'list';
-	readonly query?: AnySchema<TQuery>;
-	readonly output: AnySchema<TOutput>;
-	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
-}
+export type ListMethodDefinition<TParams extends object, TQuery, TOutput> = ReadMethodInput<
+	TParams,
+	TQuery,
+	TOutput,
+	unknown
+> & { readonly kind: 'list' };
 
-export interface AddMethodDefinition<TParams extends object, TInput, TOutput> {
-	readonly kind: 'add';
-	readonly input: AnySchema<TInput>;
-	readonly output?: AnySchema<TOutput>;
-	handler(
-		this: void,
-		args: {
-			readonly params: TParams;
-			readonly input: TInput;
-			readonly ctx: ResourceHandlerContext;
-			readonly self: unknown;
-		}
-	): ResourceHandlerResult<TOutput>;
-	batchHandler?(
-		this: void,
-		args: {
-			readonly params: TParams;
-			readonly items: readonly { readonly input: TInput }[];
-			readonly ctx: ResourceHandlerContext;
-		}
-	): BatchResourceHandlerResult<TOutput>;
-}
+export type AddMethodDefinition<TParams extends object, TInput, TOutput> = AddMethodInput<
+	TParams,
+	TInput,
+	TOutput,
+	unknown
+> & { readonly kind: 'add' };
 
-export interface MutateMethodDefinition<TParams extends object, TQuery, TInput, TOutput> {
-	readonly kind: 'mutate';
-	readonly query?: AnySchema<TQuery>;
-	readonly input: AnySchema<TInput>;
-	readonly output?: AnySchema<TOutput>;
-	handler(this: void, args: MutateHandlerArgs<TParams, TQuery, TInput, unknown>): ResourceHandlerResult<TOutput>;
-	batchHandler?(
-		this: void,
-		args: {
-			readonly params: TParams;
-			readonly items: readonly MutateBatchItem<TQuery, TInput>[];
-			readonly ctx: ResourceHandlerContext;
-		}
-	): BatchResourceHandlerResult<TOutput>;
-}
+export type MutateMethodDefinition<TParams extends object, TQuery, TInput, TOutput> = MutateMethodInput<
+	TParams,
+	TQuery,
+	TInput,
+	TOutput,
+	unknown
+> & { readonly kind: 'mutate' };
 
-export interface DeleteMethodDefinition<TParams extends object, TQuery, TOutput> {
-	readonly kind: 'delete';
-	readonly query?: AnySchema<TQuery>;
-	readonly output?: AnySchema<TOutput>;
-	handler(this: void, args: QueryHandlerArgs<TParams, TQuery, unknown>): ResourceHandlerResult<TOutput>;
-	batchHandler?(
-		this: void,
-		args: {
-			readonly params: TParams;
-			readonly items: readonly DeleteBatchItem<TQuery>[];
-			readonly ctx: ResourceHandlerContext;
-		}
-	): BatchResourceHandlerResult<TOutput>;
-}
+export type DeleteMethodDefinition<TParams extends object, TQuery, TOutput> = DeleteMethodInput<
+	TParams,
+	TQuery,
+	TOutput,
+	unknown
+> & { readonly kind: 'delete' };
 
 export type AnyResourceMethodDefinition<TParams extends object = object> =
 	| GetMethodDefinition<TParams, unknown, unknown>
