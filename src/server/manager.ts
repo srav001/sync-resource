@@ -1,4 +1,4 @@
-import { isCallable, isRecord, isString } from '../shared/guards.ts';
+import { isCallable, isRecord, readString } from '../shared/guards.ts';
 import { err, ok, type SyncResult } from '../shared/result.js';
 import { stableStringify } from '../shared/stableJson.ts';
 import { normalizeSyncError, syncError, type SyncError } from './errors.js';
@@ -298,7 +298,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 				request: args.request,
 				managerKey: managerOptions.key,
 				scope,
-				afterCursor: readAfterCursor(args.request),
+				afterCursor: new URL(args.request.url).searchParams.get('after') ?? undefined,
 				replayLimit: managerOptions.replayLimit ?? 1000,
 				persistence,
 				nextCursor
@@ -685,11 +685,7 @@ function mutationKey(scope: string, mutationId: string): string {
 }
 
 function createCursorSeed(): string {
-	const cryptoValue = globalThis.crypto;
-	if (cryptoValue?.randomUUID) {
-		return cryptoValue.randomUUID();
-	}
-	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+	return crypto.randomUUID();
 }
 
 function withGeneratedMutationId(
@@ -1103,11 +1099,6 @@ function readRequestMeta(request: Request): OperationMeta | undefined {
 	return undefined;
 }
 
-function readAfterCursor(request: Request): string | undefined {
-	const url = new URL(request.url);
-	return url.searchParams.get('after') ?? undefined;
-}
-
 async function authorize<TContext, TParams extends object>(
 	options: RuntimeManagerOptions<TContext, TParams>,
 	context: TContext | undefined,
@@ -1391,10 +1382,6 @@ function readStringField<TValue>(value: TValue, key: string): string | undefined
 	return isRecord(value) ? readString(value[key]) : undefined;
 }
 
-function readString<TValue>(value: TValue): string | undefined {
-	return isString(value) ? value : undefined;
-}
-
 function listReadCursor(
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>,
 	readCursor: string | undefined
@@ -1465,7 +1452,7 @@ function methodHasQuery(method: RuntimeMethodDefinition | undefined): boolean {
 function isBatchOutput(
 	value: ResourceHandlerOk<unknown> | SyncBatchOutput<ResourceHandlerOk<unknown>>
 ): value is SyncBatchOutput<ResourceHandlerOk<unknown>> {
-	return isRecord(value) && 'items' in value && Array.isArray(value.items);
+	return isRecord(value) && Array.isArray(value.items);
 }
 
 export function encodeScope(key: string, scope: ScopeValue): string {
