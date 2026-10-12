@@ -279,6 +279,8 @@ Sync Resource no longer uses any of these. Remove them from your code.
 - **Client core:** `createRepairScheduler`, `planRepair`, `noRepairNeeded`, `RepairPlan` and `RepairScheduler`. The store
   repairs itself after a reset or a stale page, and `repair()` is the manual call. The types `StoreActionMethodName`,
   `ParamsOf` and `PageOutputMeta` are no longer exported.
+- **Solid:** `SolidStoreListHandle` is removed; use `StoreListHandle`. `SolidClientStore` is the core store type without
+  `on` and `subscribe`, plus `core`; every member it had is still there.
 - **`PageState`:** `coverage`, `repairNeeded` and `lastSyncCursor` are removed, and `source` is `'network' | 'realtime'`.
   `stale` is the one staleness flag.
 - **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.
@@ -311,7 +313,7 @@ Sync Resource no longer uses any of these. Remove them from your code.
 - Effect manager routes answer JSON responses as buffered bodies with the same status and headers; only the shared stream
   stays a stream.
 - The cache snapshot format changed, so old browser caches are refetched once.
-- Adapters (`sync-resource/client/react`, `solid`, `vue`) are unchanged.
+- Adapters (`sync-resource/client/react`, `solid`, `vue`) are unchanged, except the Solid type names in [section 9](#9-removed-exports-options-and-fields).
 - TypeScript signatures that only widened (`Validator.parse`, `OperationMeta`, telemetry contexts now extend
   `OperationExecution`) need no change.
 - `manager.http` is typed from the resource: each method the resource defines, plus `connect`, is a required handler,

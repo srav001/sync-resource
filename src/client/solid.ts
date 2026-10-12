@@ -1,140 +1,22 @@
-import { createSignal, onCleanup, type Accessor } from 'solid-js';
+import { createSignal, onCleanup } from 'solid-js';
 
 import type { ValueRecord } from '../shared/guards.ts';
 import type {
 	ClientStore,
-	CollectionMeta,
-	CollectionItem,
-	InputOf,
 	ManagerTypeShape,
 	NeedsReconcile,
-	OutputOf,
-	QueryOf,
 	ReconcileBuilder,
 	ReconcileConfig,
 	StoreConfig,
 	StoreListHandle,
 	StoreSnapshot,
-	SyncError,
-	SyncResult
+	StoreWriteOptions
 } from './core.ts';
 import { createStoreRuntime } from './store.ts';
 
-type WriteOptions = {
-	readonly signal?: AbortSignal;
-};
-
-type SolidStoreWithGet<TManager extends ManagerTypeShape> = 'get' extends keyof TManager['methods']
-	? [QueryOf<TManager, 'get'>] extends [never]
-		? {
-				data(): OutputOf<TManager, 'get'> | undefined;
-				get(): Promise<SyncResult<OutputOf<TManager, 'get'>, SyncError>>;
-			}
-		: {
-				data(): OutputOf<TManager, 'get'> | undefined;
-				get(args: {
-					readonly query: QueryOf<TManager, 'get'>;
-				}): Promise<SyncResult<OutputOf<TManager, 'get'>, SyncError>>;
-			}
-	: {};
-
-type SolidStoreWithList<TManager extends ManagerTypeShape> = 'list' extends keyof TManager['methods']
-	? [QueryOf<TManager, 'list'>] extends [never]
-		? {
-				list(): SolidStoreListHandle<TManager>;
-				items(): readonly CollectionItem<TManager>[];
-				listMeta(): CollectionMeta<TManager> | undefined;
-				pages(): StoreSnapshot<TManager>['pages'];
-				refresh(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
-				loadMore(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
-			}
-		: {
-				list(query: QueryOf<TManager, 'list'>): SolidStoreListHandle<TManager>;
-				items(): readonly CollectionItem<TManager>[];
-				listMeta(): CollectionMeta<TManager> | undefined;
-				pages(): StoreSnapshot<TManager>['pages'];
-				refresh(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
-				loadMore(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
-			}
-	: {};
-
-export interface SolidStoreListHandle<TManager extends ManagerTypeShape> {
-	items(): readonly CollectionItem<TManager>[];
-	meta(): CollectionMeta<TManager> | undefined;
-	pages(): StoreSnapshot<TManager>['pages'];
-	refresh(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
-	loadMore(): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>>;
-}
-
-type SolidStoreWithAdd<TManager extends ManagerTypeShape> = 'add' extends keyof TManager['methods']
-	? {
-			add(
-				args: { readonly input: InputOf<TManager, 'add'> },
-				options?: WriteOptions
-			): Promise<SyncResult<OutputOf<TManager, 'add'>, SyncError>>;
-			add(
-				args: readonly { readonly input: InputOf<TManager, 'add'> }[],
-				options?: WriteOptions
-			): Promise<SyncResult<unknown, SyncError>>;
-		}
-	: {};
-
-type MutateArgs<TManager extends ManagerTypeShape> = [QueryOf<TManager, 'mutate'>] extends [never]
-	? { readonly input: InputOf<TManager, 'mutate'> }
-	: { readonly query: QueryOf<TManager, 'mutate'>; readonly input: InputOf<TManager, 'mutate'> };
-
-type SolidStoreWithMutate<TManager extends ManagerTypeShape> = 'mutate' extends keyof TManager['methods']
-	? {
-			mutate(
-				args: MutateArgs<TManager>,
-				options?: WriteOptions
-			): Promise<SyncResult<OutputOf<TManager, 'mutate'>, SyncError>>;
-			mutate(
-				args: readonly MutateArgs<TManager>[],
-				options?: WriteOptions
-			): Promise<SyncResult<unknown, SyncError>>;
-		}
-	: {};
-
-type DeleteArgs<TManager extends ManagerTypeShape> = [QueryOf<TManager, 'delete'>] extends [never]
-	? {}
-	: { readonly query: QueryOf<TManager, 'delete'> };
-
-type SolidStoreWithDelete<TManager extends ManagerTypeShape> = 'delete' extends keyof TManager['methods']
-	? [QueryOf<TManager, 'delete'>] extends [never]
-		? {
-				delete(options?: WriteOptions): Promise<SyncResult<OutputOf<TManager, 'delete'>, SyncError>>;
-			}
-		: {
-				delete(
-					args: DeleteArgs<TManager>,
-					options?: WriteOptions
-				): Promise<SyncResult<OutputOf<TManager, 'delete'>, SyncError>>;
-				delete(
-					args: readonly DeleteArgs<TManager>[],
-					options?: WriteOptions
-				): Promise<SyncResult<unknown, SyncError>>;
-			}
-	: {};
-
-export type SolidClientStore<TManager extends ManagerTypeShape> = {
+export type SolidClientStore<TManager extends ManagerTypeShape> = Omit<ClientStore<TManager>, 'on' | 'subscribe'> & {
 	readonly core: ClientStore<TManager>;
-	snapshot: Accessor<StoreSnapshot<TManager>>;
-	pending(): StoreSnapshot<TManager>['pending'];
-	error(): SyncError | null;
-	isHydrating(): boolean;
-	isRefreshing(): boolean;
-	isPending(): boolean;
-	restore(): ReturnType<ClientStore<TManager>['restore']>;
-	hydrate(): ReturnType<ClientStore<TManager>['hydrate']>;
-	connect(): ReturnType<ClientStore<TManager>['connect']>;
-	repair(): ReturnType<ClientStore<TManager>['repair']>;
-	dispose(): void;
-} & SolidStoreWithGet<TManager> &
-	SolidStoreWithList<TManager> &
-	SolidStoreWithAdd<TManager> &
-	SolidStoreWithMutate<TManager> &
-	SolidStoreWithDelete<TManager>;
+};
 
 export function createSolidStore<TManager extends ManagerTypeShape>(
 	config: StoreConfig<TManager>,
@@ -222,9 +104,9 @@ export function createSolidStore<TManager extends ManagerTypeShape>(
 		get: <TQuery>(args?: { readonly query?: TQuery }) => core.get(args),
 		refresh: () => core.refresh(),
 		loadMore: () => core.loadMore(),
-		add: <TArgs>(args: TArgs, options?: WriteOptions) => core.add(args, options),
-		mutate: <TArgs>(args: TArgs, options?: WriteOptions) => core.mutate(args, options),
-		delete: <TArgs>(args: TArgs, options?: WriteOptions) => core.delete(args, options)
+		add: <TArgs>(args: TArgs, options?: StoreWriteOptions) => core.add(args, options),
+		mutate: <TArgs>(args: TArgs, options?: StoreWriteOptions) => core.mutate(args, options),
+		delete: <TArgs>(args: TArgs, options?: StoreWriteOptions) => core.delete(args, options)
 	};
 
 	return api as SolidClientStore<TManager>;
@@ -240,7 +122,7 @@ export function createSolidStore<TManager extends ManagerTypeShape>(
 		setListHandleVersion((version) => version + 1);
 	}
 
-	function solidListHandle(handle: StoreListHandle<TManager>): SolidStoreListHandle<TManager> {
+	function solidListHandle(handle: StoreListHandle<TManager>): StoreListHandle<TManager> {
 		return {
 			items() {
 				listHandleVersion();
