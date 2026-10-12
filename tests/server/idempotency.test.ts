@@ -10,6 +10,7 @@ import {
 	type SyncEnvelope
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { idSchema, workspaceParams } from '../fixtures/schemas.ts';
 import { createSyncTestSystem } from '../fixtures/syncSystem.ts';
 
 afterEach(() => {
@@ -90,16 +91,6 @@ describe('manager mutation idempotency', () => {
 	});
 
 	it('awaits asynchronous persistence and propagates operation execution state', async () => {
-		const paramsSchema = {
-			parse(value: unknown): { workspaceId: string } {
-				return value as { workspaceId: string };
-			}
-		};
-		const noteSchema = {
-			parse(value: unknown): { id: string } {
-				return value as { id: string };
-			}
-		};
 		const records: ManagerMutationRecord[] = [];
 		const executions: OperationExecution[] = [];
 		const persistence: ManagerSyncPersistence = {
@@ -127,10 +118,10 @@ describe('manager mutation idempotency', () => {
 				}
 			}
 		};
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: noteSchema,
-				output: noteSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ input, ctx }) {
 					return ctx.ok({ id: input.id });
 				}
@@ -158,30 +149,10 @@ describe('manager mutation idempotency', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-23T00:00:00.000Z'));
 		let handlerCalls = 0;
-		const paramsSchema = {
-			parse(value: unknown): { workspaceId: string } {
-				if (
-					!value ||
-					typeof value !== 'object' ||
-					typeof (value as { workspaceId?: unknown }).workspaceId !== 'string'
-				) {
-					throw new Error('invalid params');
-				}
-				return value as { workspaceId: string };
-			}
-		};
-		const noteSchema = {
-			parse(value: unknown): { id: string } {
-				if (!value || typeof value !== 'object' || typeof (value as { id?: unknown }).id !== 'string') {
-					throw new Error('invalid note');
-				}
-				return value as { id: string };
-			}
-		};
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: noteSchema,
-				output: noteSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ input, ctx }) {
 					handlerCalls += 1;
 					return ctx.ok({ id: input.id });

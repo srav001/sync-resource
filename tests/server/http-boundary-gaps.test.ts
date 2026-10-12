@@ -11,19 +11,7 @@ import {
 	type SyncEnvelope
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
-
-const paramsSchema = {
-	parse(value: unknown): { workspaceId: string } {
-		if (
-			!value ||
-			typeof value !== 'object' ||
-			typeof (value as { workspaceId?: unknown }).workspaceId !== 'string'
-		) {
-			throw new Error('invalid params');
-		}
-		return value as { workspaceId: string };
-	}
-};
+import { workspaceParams } from '../fixtures/schemas.ts';
 
 const recordSchema = {
 	parse(value: unknown): Record<string, unknown> {
@@ -40,7 +28,7 @@ describe('manager authorization boundaries', () => {
 	it('denies direct and HTTP calls before the resource handler runs', async () => {
 		let handlerCalls = 0;
 		const reported: { code: string; method: string; scope: string }[] = [];
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			get: method.get({
 				output: recordSchema,
 				handler() {
@@ -104,7 +92,7 @@ describe('manager authorization boundaries', () => {
 				return () => {};
 			}
 		};
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
 				input: recordSchema,
 				output: recordSchema,
@@ -141,7 +129,7 @@ describe('manager authorization boundaries', () => {
 	it('maps a thrown authorize hook to internal while a throwing error hook cannot replace it', async () => {
 		let handlerCalls = 0;
 		let errorHookCalls = 0;
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			get: method.get({
 				output: recordSchema,
 				handler() {
@@ -179,7 +167,7 @@ describe('manager authorization boundaries', () => {
 describe('manager HTTP argument and metadata boundaries', () => {
 	it('uses encoded query JSON before URL fallback and excludes client mutation fields from fallback', async () => {
 		const seen: unknown[] = [];
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			list: method.list({
 				query: recordSchema,
 				output: recordSchema,
@@ -219,7 +207,7 @@ describe('manager HTTP argument and metadata boundaries', () => {
 
 	it('falls back to the delete URL query only when there is no JSON body', async () => {
 		const seen: unknown[] = [];
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			delete: method.delete({
 				query: recordSchema,
 				output: recordSchema,
@@ -253,7 +241,7 @@ describe('manager HTTP argument and metadata boundaries', () => {
 
 	it('merges request headers and JSON metadata with explicit operation options taking precedence', async () => {
 		const seen: unknown[] = [];
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
 				input: recordSchema,
 				output: recordSchema,
@@ -304,7 +292,7 @@ describe('manager HTTP argument and metadata boundaries', () => {
 	it('rejects a chunked body as soon as streamed bytes exceed the configured limit', async () => {
 		let handlerCalls = 0;
 		let cancelled = false;
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
 				input: recordSchema,
 				output: recordSchema,
@@ -350,7 +338,7 @@ describe('manager HTTP argument and metadata boundaries', () => {
 		const body = JSON.stringify({ input: { id: '😀' } });
 		const byteLength = new TextEncoder().encode(body).byteLength;
 		let handlerCalls = 0;
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
 				input: recordSchema,
 				output: recordSchema,
@@ -395,7 +383,7 @@ describe('manager HTTP argument and metadata boundaries', () => {
 			started = resolve;
 		});
 		let handlerSignal: AbortSignal | undefined;
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
 				input: recordSchema,
 				output: recordSchema,

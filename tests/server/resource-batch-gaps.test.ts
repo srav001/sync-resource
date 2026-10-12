@@ -1,45 +1,15 @@
 import { describe, expect, it } from 'vite-plus/test';
 
 import { err, ok, resource, syncError } from '../../src/server/index.ts';
-
-const paramsSchema = {
-	parse(value: unknown): { workspaceId: string } {
-		if (
-			!value ||
-			typeof value !== 'object' ||
-			typeof (value as { workspaceId?: unknown }).workspaceId !== 'string'
-		) {
-			throw new Error('invalid params');
-		}
-		return value as { workspaceId: string };
-	}
-};
-
-const inputSchema = {
-	parse(value: unknown): { id: string } {
-		if (!value || typeof value !== 'object' || typeof (value as { id?: unknown }).id !== 'string') {
-			throw new Error('invalid input');
-		}
-		return value as { id: string };
-	}
-};
-
-const outputSchema = {
-	parse(value: unknown): { id: string } {
-		if (!value || typeof value !== 'object' || typeof (value as { id?: unknown }).id !== 'string') {
-			throw new Error('invalid output');
-		}
-		return value as { id: string };
-	}
-};
+import { idSchema, workspaceParams } from '../fixtures/schemas.ts';
 
 describe('resource batch execution', () => {
 	it('awaits an asynchronous batch handler before validating its output', async () => {
 		let completed = false;
-		const notes = resource(paramsSchema, (method) => ({
+		const notes = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ ctx }) {
 					return ctx.error(ctx.syncError('internal', 'single handler should not run'));
 				},
@@ -65,10 +35,10 @@ describe('resource batch execution', () => {
 
 	it('validates one shared scope and invokes an atomic batch handler once with partial results', async () => {
 		let batchCalls = 0;
-		const notes = resource(paramsSchema, (method) => ({
+		const notes = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ ctx }) {
 					return ctx.error(ctx.syncError('internal', 'single handler should not run'));
 				},
@@ -111,10 +81,10 @@ describe('resource batch execution', () => {
 
 	it('continues loop batches after item errors and derives indexed mutation ids', async () => {
 		const seen: string[] = [];
-		const notes = resource(paramsSchema, (method) => ({
+		const notes = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ input, ctx }) {
 					seen.push(`${input.id}:${ctx.mutationId}`);
 					if (input.id === 'b') {
@@ -145,10 +115,10 @@ describe('resource batch execution', () => {
 
 	it('commits a resource-level atomic batch once and merges commit metrics', async () => {
 		const commitContexts: unknown[] = [];
-		const notes = resource(paramsSchema, (method) => ({
+		const notes = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ ctx }) {
 					return ctx.error(ctx.syncError('internal', 'single handler should not run'));
 				},
@@ -201,7 +171,7 @@ describe('resource output interpretation', () => {
 				return value as { output: string };
 			}
 		};
-		const notes = resource(paramsSchema, (method) => ({
+		const notes = resource(workspaceParams, (method) => ({
 			get: method.get<{ output: string }>({
 				output: nestedOutputSchema,
 				handler() {
@@ -209,7 +179,7 @@ describe('resource output interpretation', () => {
 				}
 			}),
 			list: method.list<{ id: string }>({
-				output: outputSchema,
+				output: idSchema,
 				handler() {
 					return ok({
 						output: { id: 'n1' },
@@ -230,10 +200,10 @@ describe('resource output interpretation', () => {
 
 	it('rejects invalid structured batch output before running its source commit', async () => {
 		let commits = 0;
-		const notes = resource(paramsSchema, (method) => ({
+		const notes = resource(workspaceParams, (method) => ({
 			add: method.add<{ id: string }, { id: string }>({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ ctx }) {
 					return ctx.ok({ id: 'unused' });
 				},

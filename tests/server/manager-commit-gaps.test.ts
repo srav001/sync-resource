@@ -14,38 +14,8 @@ import {
 	type SyncEnvelope
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { idSchema, workspaceParams } from '../fixtures/schemas.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
-
-const paramsSchema = {
-	parse(value: unknown): { workspaceId: string } {
-		if (
-			!value ||
-			typeof value !== 'object' ||
-			typeof (value as { workspaceId?: unknown }).workspaceId !== 'string'
-		) {
-			throw new Error('invalid params');
-		}
-		return value as { workspaceId: string };
-	}
-};
-
-const inputSchema = {
-	parse(value: unknown): { id: string } {
-		if (!value || typeof value !== 'object' || typeof (value as { id?: unknown }).id !== 'string') {
-			throw new Error('invalid input');
-		}
-		return value as { id: string };
-	}
-};
-
-const outputSchema = {
-	parse(value: unknown): { id: string } {
-		if (!value || typeof value !== 'object' || typeof (value as { id?: unknown }).id !== 'string') {
-			throw new Error('invalid output');
-		}
-		return value as { id: string };
-	}
-};
 
 class TrackingPersistence implements ManagerSyncPersistence {
 	readonly appended: SyncEnvelope[] = [];
@@ -95,10 +65,10 @@ describe('manager deferred source commits', () => {
 			const persistence = new TrackingPersistence();
 			const bus = new TrackingRealtimeBus();
 			const commits: ResourceCommitContext[] = [];
-			const repository = resource(paramsSchema, (method) => ({
+			const repository = resource(workspaceParams, (method) => ({
 				add: method.add({
-					input: inputSchema,
-					output: outputSchema,
+					input: idSchema,
+					output: idSchema,
 					handler({ input, ctx }) {
 						return ctx.ok({
 							output: { id: input.id },
@@ -151,10 +121,10 @@ describe('manager deferred source commits', () => {
 	it('returns a commit error without persistence or realtime publication', async () => {
 		const persistence = new TrackingPersistence();
 		const bus = new TrackingRealtimeBus();
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ input, ctx }) {
 					return ctx.ok({
 						output: { id: input.id },
@@ -185,9 +155,9 @@ describe('manager deferred source commits', () => {
 
 	it('records a successful write without changes as acknowledged rather than finalized', async () => {
 		const persistence = new TrackingPersistence();
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
+				input: idSchema,
 				output: {
 					parse(value: unknown): string {
 						if (typeof value !== 'string') {
@@ -224,9 +194,9 @@ describe('manager deferred source commits', () => {
 	it('publishes signals as transient envelopes without appending them to the outbox', async () => {
 		const persistence = new TrackingPersistence();
 		const bus = new TrackingRealtimeBus();
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
+				input: idSchema,
 				handler({ input, ctx }) {
 					return ctx.ok({ signals: [{ type: 'created', payload: { id: input.id } }] });
 				}
@@ -273,10 +243,10 @@ describe('manager deferred source commits', () => {
 				return () => {};
 			}
 		};
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ input, ctx }) {
 					committedIds.push(input.id);
 					return ctx.ok({ id: input.id });
@@ -318,10 +288,10 @@ describe('manager deferred source commits', () => {
 	it('commits a resource-level atomic batch once with the commit context and merges commit metrics', async () => {
 		const persistence = new TrackingPersistence();
 		const commits: ResourceCommitContext[] = [];
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ ctx }) {
 					return ctx.error(ctx.syncError('internal', 'single handler should not run'));
 				},
@@ -369,10 +339,10 @@ describe('manager deferred source commits', () => {
 	it('rejects per-item source commits deferred through a looped manager batch', async () => {
 		const persistence = new TrackingPersistence();
 		let commits = 0;
-		const repository = resource(paramsSchema, (method) => ({
+		const repository = resource(workspaceParams, (method) => ({
 			add: method.add({
-				input: inputSchema,
-				output: outputSchema,
+				input: idSchema,
+				output: idSchema,
 				handler({ input, ctx }) {
 					return ctx.ok({
 						output: { id: input.id },
