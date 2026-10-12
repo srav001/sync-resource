@@ -1405,7 +1405,7 @@ Rules:
 - `restore()` only loads authoritative cache. In-memory pending commands are preserved, but pending commands are not restored from IndexedDB.
 - `connect()` attaches realtime from the current cached cursor without forcing a server refresh.
 - IndexedDB stores only last-success authoritative state. Optimistic pending commands stay memory-only.
-- Cache writes use a trailing debounce with a max-wait cap, currently `delayMs: 50` and `maxWaitMs: 250`. Each dirty event resets the short delay so normal SSE bursts write once after they quiet down, but the first dirty event also starts the max-wait timer so continuous realtime traffic cannot postpone IndexedDB forever. Events that arrive during an in-flight write schedule the next debounce cycle after the current write completes. The store passes plain values to the cache adapter; the adapter/library owns IndexedDB storage details.
+- Cache writes use one timer, armed by the first dirty event and set to 250 ms. Later dirty events do not reset it, so bursts and continuous realtime traffic write at most once per 250 ms. Events that arrive during an in-flight write arm the next timer after the current write completes. The store passes plain values to the cache adapter; the adapter/library owns IndexedDB storage details.
 
 A common wrapper component can derive UI state from `data/items`, `isHydrating()`, `isRefreshing()`, `isPending()`, and `error()`. Do not duplicate derived booleans in the store unless there is a real runtime reason.
 

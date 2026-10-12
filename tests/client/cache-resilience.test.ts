@@ -60,7 +60,7 @@ function createCacheStore(): ReturnType<typeof createStore<CacheManager>> {
 }
 
 describe('cache scheduling resilience', () => {
-	it('enforces the 250ms maximum wait while repeated updates keep resetting the trailing delay', async () => {
+	it('writes once 250ms after the first dirty event while later updates do not postpone it', async () => {
 		const writes: CacheItem<unknown>[] = [];
 		const cache = cacheWithSet(async (value) => {
 			writes.push(value);
@@ -83,6 +83,7 @@ describe('cache scheduling resilience', () => {
 		expect(writes).toHaveLength(0);
 		await vi.advanceTimersByTimeAsync(1);
 		expect(writes).toHaveLength(1);
+		expect((writes[0] as CacheItem<{ readonly cursor: string }>).value.cursor).toBe('cursor-240');
 		store.dispose();
 	});
 
@@ -103,13 +104,13 @@ describe('cache scheduling resilience', () => {
 		});
 		const store = createCacheStore();
 		await store.hydrate();
-		await vi.advanceTimersByTimeAsync(50);
+		await vi.advanceTimersByTimeAsync(250);
 		expect(writes).toHaveLength(1);
 
 		transport.emit(updateEnvelope('cursor-new', 'Updated while saving'));
 		firstWrite.resolve(undefined);
 		await Promise.resolve();
-		await vi.advanceTimersByTimeAsync(50);
+		await vi.advanceTimersByTimeAsync(250);
 		expect(writes).toHaveLength(2);
 		expect(cachedTitle(writes[1], 'note-0')).toBe('Updated while saving');
 		store.dispose();
@@ -126,7 +127,7 @@ describe('cache scheduling resilience', () => {
 		});
 		const store = createCacheStore();
 		await store.hydrate();
-		await vi.advanceTimersByTimeAsync(50);
+		await vi.advanceTimersByTimeAsync(250);
 		await waitFor(() => store.error() !== null);
 
 		expect(store.error()?.message).toBe('cache quota exceeded');

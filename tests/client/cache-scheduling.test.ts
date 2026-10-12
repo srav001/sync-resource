@@ -17,14 +17,14 @@ afterEach(() => {
 });
 
 describe('authoritative cache scheduling', () => {
-	it('uses a trailing 50ms write after hydration', async () => {
+	it('writes 250ms after the first dirty event of a hydration', async () => {
 		const system = createSyncTestSystem();
 		system.database.seed('workspace-1', [{ id: 'note-1', title: 'Initial' }]);
 		const store = system.createStore();
 		try {
 			await store.hydrate();
 			expect(system.cache.writes).toHaveLength(0);
-			await vi.advanceTimersByTimeAsync(49);
+			await vi.advanceTimersByTimeAsync(249);
 			expect(system.cache.writes).toHaveLength(0);
 			await vi.advanceTimersByTimeAsync(1);
 			expect(system.cache.writes).toHaveLength(1);

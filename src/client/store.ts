@@ -76,8 +76,7 @@ type StoreEventKey =
 	| 'refreshing'
 	| 'disposed'
 	| 'error';
-const CACHE_SAVE_DELAY_MS = 50;
-const CACHE_SAVE_MAX_WAIT_MS = 250;
+const CACHE_SAVE_DELAY_MS = 250;
 
 export interface StoreSnapshot<TManager extends ManagerTypeShape> {
 	readonly data: OutputOf<TManager, 'get'> | undefined;
@@ -333,8 +332,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private realtime: RealtimeSubscription | undefined;
 	private visibleItemsCache: readonly CollectionItem<TManager>[] | undefined;
 	private readonly listItemsCache = new Map<string, readonly CollectionItem<TManager>[]>();
-	private cacheSaveTimeout: ReturnType<typeof setTimeout> | undefined;
-	private cacheSaveMaxWaitTimeout: ReturnType<typeof setTimeout> | undefined;
+	private cacheSaveTimer: ReturnType<typeof setTimeout> | undefined;
 	private cacheSaveInFlight = false;
 	private cacheSaveRequested = false;
 	private cachedScopeParamsText: string | undefined;
@@ -1091,48 +1089,29 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		return item.value;
 	}
 
-	private async saveCachedRuntimeState(): Promise<void> {
-		await this.saveCachedState();
-	}
-
 	private scheduleCachedRuntimeStateSave(): void {
 		if (this.disposed) {
 			return;
 		}
 		this.cacheSaveRequested = true;
-		if (this.cacheSaveInFlight) {
+		if (this.cacheSaveInFlight || this.cacheSaveTimer) {
 			return;
 		}
-		this.armCacheSaveDelayTimer();
-		if (!this.cacheSaveMaxWaitTimeout) {
-			this.armCacheSaveMaxWaitTimer();
-		}
-	}
-
-	private armCacheSaveDelayTimer(): void {
-		if (this.cacheSaveTimeout) {
-			clearTimeout(this.cacheSaveTimeout);
-		}
-		this.cacheSaveTimeout = setTimeout(() => {
+		this.cacheSaveTimer = setTimeout(() => {
 			this.runScheduledCachedRuntimeStateSave().catch((cause) => this.recordError(toStoreSyncError(cause)));
 		}, CACHE_SAVE_DELAY_MS);
 	}
 
-	private armCacheSaveMaxWaitTimer(): void {
-		this.cacheSaveMaxWaitTimeout = setTimeout(() => {
-			this.runScheduledCachedRuntimeStateSave().catch((cause) => this.recordError(toStoreSyncError(cause)));
-		}, CACHE_SAVE_MAX_WAIT_MS);
-	}
-
 	private async runScheduledCachedRuntimeStateSave(): Promise<void> {
-		this.clearCacheSaveTimers();
+		clearTimeout(this.cacheSaveTimer);
+		this.cacheSaveTimer = undefined;
 		if (this.disposed || this.cacheSaveInFlight || !this.cacheSaveRequested) {
 			return;
 		}
 		this.cacheSaveRequested = false;
 		this.cacheSaveInFlight = true;
 		try {
-			await this.saveCachedRuntimeState();
+			await this.saveCachedState();
 		} finally {
 			this.cacheSaveInFlight = false;
 			if (this.cacheSaveRequested && !this.disposed) {
@@ -1143,19 +1122,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private flushScheduledCachedRuntimeStateSave(): void {
 		this.cacheSaveRequested = true;
-		this.clearCacheSaveTimers();
 		this.runScheduledCachedRuntimeStateSave().catch((cause) => this.recordError(toStoreSyncError(cause)));
-	}
-
-	private clearCacheSaveTimers(): void {
-		if (this.cacheSaveTimeout) {
-			clearTimeout(this.cacheSaveTimeout);
-			this.cacheSaveTimeout = undefined;
-		}
-		if (this.cacheSaveMaxWaitTimeout) {
-			clearTimeout(this.cacheSaveMaxWaitTimeout);
-			this.cacheSaveMaxWaitTimeout = undefined;
-		}
 	}
 
 	private async saveCachedState(): Promise<void> {
