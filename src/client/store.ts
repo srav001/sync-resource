@@ -921,18 +921,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			scope: this.scopeCacheKey(),
 			signal: controller.signal,
 			getCursor: () => this.state.cursor,
-			onReconnect: () => {
-				// Reconnect is a correctness event, not just a transport event: every logical subscription must catch up.
-				this.runHydrate(true);
-			},
-			onEnvelope: (envelope) => {
-				if (envelope.changes.length > 0) {
-					this.applyEnvelope(envelope);
-					this.scheduleCachedRuntimeStateSave();
-					this.emit(...this.eventsForEnvelope(envelope));
-				}
-				this.emitSignals(envelope);
-			}
+			onReconnect: this.handleReconnect,
+			onEnvelope: this.handleLiveEnvelope
 		});
 		if (this.disposed) {
 			if (result.isOk()) {
@@ -948,6 +938,21 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		this.emit('error');
 		return result;
 	}
+
+	// Stable identities let the transport keep one subscriber when a failed registration is retried by connect().
+	private readonly handleReconnect = (): void => {
+		// Reconnect is a correctness event, not just a transport event: every logical subscription must catch up.
+		this.runHydrate(true);
+	};
+
+	private readonly handleLiveEnvelope = (envelope: SyncEnvelope): void => {
+		if (envelope.changes.length > 0) {
+			this.applyEnvelope(envelope);
+			this.scheduleCachedRuntimeStateSave();
+			this.emit(...this.eventsForEnvelope(envelope));
+		}
+		this.emitSignals(envelope);
+	};
 
 	private realtimeUrl(eventsUrl: string): string {
 		if (!this.state.cursor) {

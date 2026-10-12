@@ -837,6 +837,7 @@ Rules:
 - The tab that owns the physical stream sends its first `/connect` registrations after the first stream attempt
   resolves (opened or failed), so a registration is never sent twice for one stream. Follower tabs register immediately.
   A `subscribe` call therefore resolves no earlier than the owner's first stream response.
+- A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. `hydrate()` still reports the error.
 - Replay/reset remains per logical scope through durable outbox cursors.
 - A read response never overwrites newer realtime state: envelopes applied while a read was in flight are re-applied over
   its output in arrival order, and the cursor stays at the last of them.

@@ -38,6 +38,8 @@ interface LogicalSubscription {
 	scope: string;
 	scopeConfirmed: boolean;
 	registrationRevision: number;
+	retryAttempt: number;
+	retryTimer?: ReturnType<typeof setTimeout>;
 	getCursor?(this: void): string | undefined;
 	promise?: Promise<SyncResult<void, SyncError>>;
 	connectAbort?: AbortController;
@@ -55,6 +57,8 @@ const OWNER_STORAGE_KEY = 'sync-resource:owner';
 const OWNER_HEARTBEAT_MS = 3000;
 const OWNER_EXPIRES_MS = 10_000;
 const LOGICAL_CONNECT_TIMEOUT_MS = 30_000;
+const MAX_STREAM_RECONNECT_MS = 60_000;
+const MAX_REGISTRATION_RETRY_MS = 30_000;
 const BROADCAST_CHANNEL = 'sync-resource:v1:transport';
 const LOCK_NAME = 'sync-resource:transport';
 const MAX_SSE_BUFFER_BYTES = MAX_SSE_FRAME_BYTES;
@@ -72,6 +76,12 @@ function isBroadcastPayload<TValue>(value: TValue): value is TValue & BroadcastP
 			(value.type === 'reconnected' &&
 				(value.hydrate === undefined || value.hydrate === true || value.hydrate === false)))
 	);
+}
+
+function backoffDelay(attempt: number, maxMs: number): number {
+	const baseDelay = Math.min(1000 * Math.pow(2, attempt), maxMs);
+	const jitteredDelay = baseDelay + (Math.random() * 2 - 1) * baseDelay * 0.2;
+	return Math.max(0, Math.min(maxMs, Math.round(jitteredDelay)));
 }
 
 function isConnectScope<TValue>(value: TValue): value is TValue & { readonly scope?: string } {
@@ -172,8 +182,11 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return err('aborted', 'Realtime subscription was aborted.');
 		}
 		if (ready.isErr()) {
-			options.signal.removeEventListener('abort', abort);
-			this.unsubscribe(entry, options.onEnvelope, options.onReconnect);
+			// A failed registration keeps its subscriber so the transport retries it; the store's abort signal removes it.
+			if (ready.error.code === 'aborted') {
+				options.signal.removeEventListener('abort', abort);
+				this.unsubscribe(entry, options.onEnvelope, options.onReconnect);
+			}
 			return ready;
 		}
 
@@ -205,6 +218,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		this.releaseOwnerLock = undefined;
 		for (const entry of this.subscriptions.values()) {
 			entry.connectAbort?.abort();
+			clearTimeout(entry.retryTimer);
 		}
 		this.subscriptions.clear();
 	}
@@ -230,6 +244,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			scope: options.scope,
 			scopeConfirmed: false,
 			registrationRevision: 0,
+			retryAttempt: 0,
 			subscribers: new Set<(envelope: SyncEnvelope) => void>(),
 			reconnectHydrators: new Set<() => void>(),
 			getCursor: options.getCursor
@@ -243,9 +258,20 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return entry.promise;
 		}
 
+		clearTimeout(entry.retryTimer);
 		const promise = this.runLogicalSubscription(entry).then((result) => {
-			if (entry.promise === promise && result.isErr() && this.subscriptions.get(entry.key) === entry) {
-				entry.promise = undefined;
+			if (entry.promise === promise && this.subscriptions.get(entry.key) === entry) {
+				if (result.isOk()) {
+					entry.retryAttempt = 0;
+				} else {
+					entry.promise = undefined;
+					if (result.error.code !== 'aborted') {
+						entry.retryTimer = setTimeout(
+							() => this.ensureLogicalSubscription(entry),
+							backoffDelay(entry.retryAttempt++, MAX_REGISTRATION_RETRY_MS)
+						);
+					}
+				}
 			}
 			return result;
 		});
@@ -364,6 +390,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return;
 		}
 		this.subscriptions.delete(entry.key);
+		clearTimeout(entry.retryTimer);
 		entry.connectAbort?.abort();
 		entry.connectAbort = undefined;
 		this.stopOwnerStreamIfIdle();
@@ -551,15 +578,12 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		if (this.reconnectTimer || this.disposed || !this.isOwner) {
 			return;
 		}
-		const baseDelay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 60_000);
-		const jitteredDelay = baseDelay + (Math.random() * 2 - 1) * baseDelay * 0.2;
-		this.reconnectAttempt += 1;
 		this.reconnectTimer = setTimeout(
 			() => {
 				this.reconnectTimer = undefined;
 				this.connectOwnerStream();
 			},
-			Math.max(0, Math.min(60_000, Math.round(jitteredDelay)))
+			backoffDelay(this.reconnectAttempt++, MAX_STREAM_RECONNECT_MS)
 		);
 	}
 
