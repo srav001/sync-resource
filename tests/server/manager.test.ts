@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it } from 'vite-plus/test';
 
+import { resetSyncConfiguration } from '../../src/client/core.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { createSyncTestSystem, type SyncTestSystem } from '../fixtures/syncSystem.ts';
 
-afterEach(() => resetSharedStreamForTests());
+afterEach(() => {
+	resetSyncConfiguration();
+	resetSharedStreamForTests();
+});
 
 describe('manager execution and HTTP', () => {
 	it('infers add/mutate/delete changes and persists envelopes', async () => {

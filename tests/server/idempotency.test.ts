@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
+import { resetSyncConfiguration } from '../../src/client/core.ts';
 import {
 	manager,
 	resource,
@@ -15,6 +16,7 @@ import { createSyncTestSystem } from '../fixtures/syncSystem.ts';
 
 afterEach(() => {
 	vi.useRealTimers();
+	resetSyncConfiguration();
 	resetSharedStreamForTests();
 });
 
