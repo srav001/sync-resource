@@ -156,7 +156,7 @@ export interface ManagerMutationRecord {
 	readonly finalizedAt?: number;
 }
 
-export interface ManagerSyncPersistence extends ManagerOutbox {
+export interface ManagerSyncPersistence extends Omit<ManagerOutbox, 'append'> {
 	readMutation(
 		scope: string,
 		mutationId: string,

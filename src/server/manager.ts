@@ -630,10 +630,6 @@ class OutboxBackedManagerPersistence implements ManagerSyncPersistence {
 		this.outbox = outbox;
 	}
 
-	append(envelope: SyncEnvelope, execution?: OperationExecution): Promise<void> | void {
-		return this.outbox.append(envelope, execution);
-	}
-
 	readAfter(
 		scope: string,
 		cursor: string,
@@ -674,7 +670,7 @@ function resolveManagerPersistence(
 	return isManagerSyncPersistence(resolved) ? resolved : new OutboxBackedManagerPersistence(resolved);
 }
 
-function isManagerSyncPersistence(value: ManagerOutbox | undefined): value is ManagerSyncPersistence {
+function isManagerSyncPersistence(value: ManagerOutbox | undefined): value is ManagerOutbox & ManagerSyncPersistence {
 	return (
 		value !== undefined &&
 		'readMutation' in value &&

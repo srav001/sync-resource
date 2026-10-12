@@ -292,6 +292,8 @@ Sync Resource no longer uses any of these. Remove them from your code.
 - **`normalizeSyncError(cause, fallbackMessage)`:** the second argument is gone; an `Error` with an empty message becomes
   `Sync operation failed.`.
 - **`SyncRecoveryMetadata`:** removed from every entry point; use `SyncErrorRecovery`.
+- **`ManagerSyncPersistence`, including the Effect persistence:** `append` is removed. The manager never called it;
+  `recordMutation` stores the record and appends its envelope. The `outbox` option still takes `append`.
 - **`CacheAdapter.kind`:** removed; a class that still declares `kind` keeps compiling.
 - **Shared stream:** the transport id is read only from the `x-sync-transport-id` header; the `transportId` query
   parameter is gone. The browser client always sent the header.

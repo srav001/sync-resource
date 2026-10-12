@@ -472,7 +472,7 @@ interface ManagerOutbox {
 	latestCursor?(scope: string, execution?: OperationExecution): Awaitable<string | undefined>;
 }
 
-interface ManagerSyncPersistence extends ManagerOutbox {
+interface ManagerSyncPersistence extends Omit<ManagerOutbox, 'append'> {
 	readMutation(
 		scope: string,
 		mutationId: string,
@@ -481,6 +481,9 @@ interface ManagerSyncPersistence extends ManagerOutbox {
 	recordMutation(record: ManagerMutationRecord, execution?: OperationExecution): Awaitable<void>;
 }
 ```
+
+`recordMutation` stores the mutation record and appends its `envelope` when it has one; the manager never calls `append`
+on a persistence. `append` belongs to a plain `ManagerOutbox`, which the manager wraps with in-memory mutation records.
 
 `OperationExecution` carries the operation `signal` plus opaque server-owned execution state. Persistence implementations
 should observe the signal while reading. Finality writes that start after a successful source commit are allowed to finish

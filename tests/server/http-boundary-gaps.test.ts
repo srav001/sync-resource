@@ -68,9 +68,6 @@ describe('manager authorization boundaries', () => {
 		const persistenceCalls: string[] = [];
 		const realtimeCalls: string[] = [];
 		const persistence: ManagerSyncPersistence = {
-			append() {
-				persistenceCalls.push('append');
-			},
 			readAfter(): ManagerOutboxRead {
 				persistenceCalls.push('readAfter');
 				return { envelopes: [], cursorFound: false, retainedEnvelopeCount: 0 };

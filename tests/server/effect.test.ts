@@ -185,7 +185,6 @@ describe('Effect server entrypoint', () => {
 		});
 		const records: ManagerMutationRecord[] = [];
 		const persistence: EffectManagerPersistence<never> = {
-			append: () => Effect.void,
 			readAfter: () => Effect.succeed({ cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 }),
 			readMutation: () => Effect.succeed(undefined),
 			recordMutation: (record) =>
@@ -563,7 +562,6 @@ describe('Effect server entrypoint', () => {
 				authorize: () => Effect.sync(() => (events.push('authorize'), true)),
 				scope: (params) => params.workspaceId,
 				persistence: {
-					append: (envelope) => Effect.sync(() => envelopes.push(envelope)),
 					readAfter: (_scope, cursor) =>
 						Effect.succeed({
 							cursorFound: envelopes.some((envelope) => envelope.cursor === cursor),
@@ -648,7 +646,6 @@ describe('Effect server entrypoint', () => {
 				authorize: () => Effect.succeed(true),
 				scope: (params) => params.workspaceId,
 				persistence: {
-					append: () => Effect.void,
 					readAfter: () => Effect.succeed({ cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 }),
 					latestCursor: (scope) => Effect.succeed(`latest:${scope}`),
 					readMutation: () => Effect.succeed(undefined),

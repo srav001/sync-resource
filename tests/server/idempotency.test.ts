@@ -7,8 +7,7 @@ import {
 	type ManagerMutationRecord,
 	type ManagerOutboxRead,
 	type ManagerSyncPersistence,
-	type OperationExecution,
-	type SyncEnvelope
+	type OperationExecution
 } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { idSchema, workspaceParams } from '../fixtures/schemas.ts';
@@ -96,12 +95,6 @@ describe('manager mutation idempotency', () => {
 		const records: ManagerMutationRecord[] = [];
 		const executions: OperationExecution[] = [];
 		const persistence: ManagerSyncPersistence = {
-			async append(_envelope: SyncEnvelope, execution?: OperationExecution) {
-				await Promise.resolve();
-				if (execution) {
-					executions.push(execution);
-				}
-			},
 			async readAfter(): Promise<ManagerOutboxRead> {
 				return { cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 };
 			},

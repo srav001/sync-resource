@@ -39,7 +39,6 @@ export function outboxReading(
 	})
 ): ManagerSyncPersistence {
 	return {
-		async append() {},
 		readAfter,
 		async readMutation() {
 			return undefined;

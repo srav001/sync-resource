@@ -340,12 +340,14 @@ export interface EffectManager<TKey extends string, TResource, TContext = undefi
 	bind(params: ResourceParams<TResource>, context?: TContext): EffectBoundManager<TKey, TResource>;
 }
 
-export interface EffectManagerOutbox<R> {
-	append(this: void, envelope: SyncEnvelope): Effect.Effect<void, SyncError, R>;
+interface EffectOutboxReads<R> {
 	readAfter(this: void, scope: string, cursor: string, limit: number): Effect.Effect<ManagerOutboxRead, SyncError, R>;
 	latestCursor?(this: void, scope: string): Effect.Effect<string | undefined, SyncError, R>;
 }
-export interface EffectManagerPersistence<R> extends EffectManagerOutbox<R> {
+export interface EffectManagerOutbox<R> extends EffectOutboxReads<R> {
+	append(this: void, envelope: SyncEnvelope): Effect.Effect<void, SyncError, R>;
+}
+export interface EffectManagerPersistence<R> extends EffectOutboxReads<R> {
 	readMutation(
 		this: void,
 		scope: string,
@@ -541,10 +543,9 @@ function adaptManagerOptions<TKey extends string, TResource extends EffectResour
 		runHook(Effect.suspend(make), contextFromEnvironment(execution?.environment, base), execution?.signal);
 	const runFinal = <A>(make: () => Effect.Effect<A, SyncError, R>, execution?: OperationExecution) =>
 		runHook(Effect.suspend(make), contextFromEnvironment(execution?.environment, base));
-	const adaptOutbox = (outbox: EffectManagerOutbox<R>): ManagerOutbox => {
+	const adaptReads = (outbox: EffectOutboxReads<R>): Omit<ManagerOutbox, 'append'> => {
 		const latestCursor = outbox.latestCursor;
 		return {
-			append: (envelope, execution) => runFinal(() => outbox.append(envelope), execution),
 			readAfter: (scope, cursor, limit, execution) =>
 				run(() => outbox.readAfter(scope, cursor, limit), execution),
 			latestCursor: latestCursor && ((scope, execution) => run(() => latestCursor(scope), execution))
@@ -554,10 +555,13 @@ function adaptManagerOptions<TKey extends string, TResource extends EffectResour
 		...options,
 		resource: options.resource[PlainResourceTypeId] as PlainResource<object, ResourceMethodMap>,
 		authorize: (context, params, execution) => run(() => options.authorize(context, params), execution),
-		outbox: outbox && adaptOutbox(outbox),
+		outbox: outbox && {
+			...adaptReads(outbox),
+			append: (envelope, execution) => runFinal(() => outbox.append(envelope), execution)
+		},
 		persistence: persistence
 			? {
-					...adaptOutbox(persistence),
+					...adaptReads(persistence),
 					readMutation: (scope, mutationId, execution) =>
 						run(() => persistence.readMutation(scope, mutationId), execution),
 					recordMutation: (record, execution) => runFinal(() => persistence.recordMutation(record), execution)
