@@ -37,7 +37,10 @@ function managerOf(url: string): string {
 	return new URL(url, 'http://sync.test').pathname.split('/')[1] ?? '';
 }
 
-function createHarness(resultFor: (url: string) => ConnectResult = (url) => registered(managerOf(url))) {
+function createHarness(
+	resultFor: (url: string) => ConnectResult = (url) => registered(managerOf(url)),
+	connectUrl?: string
+) {
 	const requests: ConnectRequest[] = [];
 	let streamController!: ReadableStreamDefaultController<Uint8Array>;
 	let batchStatus = 200;
@@ -63,11 +66,11 @@ function createHarness(resultFor: (url: string) => ConnectResult = (url) => regi
 			}
 			return Response.json({ results: connects.map(resultFor) });
 		}
-		requests.push({ url: url.pathname + url.search, headers });
+		requests.push({ url: url.origin === 'http://sync.test' ? url.pathname + url.search : url.href, headers });
 		const result = resultFor(url.pathname + url.search);
 		return Response.json(result.body, { status: result.status });
 	};
-	const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-batch` });
+	const runtime = createRuntime({ cache, fetch: fetchImpl, connectUrl, createId: (prefix) => `${prefix}-batch` });
 	return {
 		runtime,
 		requests,
@@ -85,11 +88,12 @@ function register(
 	manager: string,
 	signal: AbortSignal,
 	received: SyncEnvelope[] = [],
-	getCursor?: () => string | undefined
+	getCursor?: () => string | undefined,
+	origin = ''
 ) {
 	return runtime.transport.subscribe({
-		url: `/${manager}/events`,
-		connectUrl: `/${manager}/connect`,
+		url: `${origin}/${manager}/events`,
+		connectUrl: `${origin}/${manager}/connect`,
 		managerKey: manager,
 		scope: `requested:${manager}`,
 		signal,
@@ -265,6 +269,24 @@ describe('batched realtime registration', () => {
 			);
 			expect(results.every((result) => result.isOk())).toBe(true);
 			expect(harness.requests.map((request) => request.connects?.length)).toEqual([64, 64, 22]);
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+	it('batches absolute store URLs on the batch route origin as paths and connects other origins directly', async () => {
+		const harness = createHarness(undefined, 'http://app.test/api/sync-resource/connect');
+		const signal = new AbortController();
+		try {
+			const results = await Promise.all([
+				register(harness.runtime, 'a', signal.signal, [], undefined, 'http://app.test'),
+				register(harness.runtime, 'b', signal.signal, [], undefined, 'http://other.test')
+			]);
+			expect(results.every((result) => result.isOk())).toBe(true);
+			expect(harness.requests.map((request) => request.connects ?? request.url)).toEqual([
+				'http://other.test/b/connect?after=cursor-b',
+				['/a/connect?after=cursor-a']
+			]);
 		} finally {
 			signal.abort();
 			harness.runtime.dispose();

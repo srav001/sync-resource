@@ -975,6 +975,7 @@ Rules:
 - A body is rejected with `400` unless `connects` is an array of 1 to 64 relative paths that start with a single `/`,
   stay on the request's origin, and end in `/connect`. The client sends a larger queue as several requests of at most 64.
 - An item aborted before the flush is not sent. An item aborted after the flush is still sent and its result is ignored.
+- The client sends each store URL on the batch route's origin as its path. A store URL on another origin connects directly.
 - Registrations still wait for the owner's first stream attempt, so a boot sends one batch. Reconnect re-registrations
   batch the same way.
 - Set `batchConnect: false` in `configureSync(...)` to send one direct `POST <manager>/connect` per registration, and do

@@ -373,8 +373,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
 			const url = urlWithCursor(entry.connectUrl, entry.getCursor?.());
-			const response = this.batchConnect
-				? await this.queueConnect(url, signal)
+			const path = this.batchConnect ? batchPath(url, this.connectUrl) : undefined;
+			const response = path
+				? await this.queueConnect(path, signal)
 				: await this.fetchImpl(url, {
 						method: 'POST',
 						headers: {
@@ -870,6 +871,13 @@ export function getSyncCacheOptions(): SyncCacheConfiguration {
 		throw new Error('Sync cache is not configured. Call configureSync(...) before creating sync stores.');
 	}
 	return configuredCache;
+}
+
+// The batch route dispatches each item on its own origin, so a store URL on another origin connects directly.
+function batchPath(urlText: string, connectUrl: string): string | undefined {
+	const base = new URL(connectUrl, globalThis.location?.href ?? 'http://sync.local');
+	const url = new URL(urlText, base);
+	return url.origin === base.origin ? url.pathname + url.search : undefined;
 }
 
 function urlWithCursor(urlText: string, cursor: string | undefined): string {
