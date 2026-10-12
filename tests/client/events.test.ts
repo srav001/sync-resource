@@ -3,16 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
-	type RuntimeTransport,
 	type SyncEnvelope,
 	type SyncError
 } from '../../src/client/core.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { waitFor } from '../fixtures/async.ts';
+import { ManualTransport, noopCache } from '../fixtures/clientRuntime.ts';
+import { syncErrorResponse, syncResponse } from '../fixtures/responses.ts';
 import { createSyncTestSystem, Deferred } from '../fixtures/syncSystem.ts';
 
 interface EventNote {
@@ -35,29 +35,6 @@ interface EventListManager extends ManagerTypeShape {
 		>;
 	};
 }
-
-class ManualTransport implements RuntimeTransport {
-	private onEnvelope: ((envelope: SyncEnvelope) => void) | undefined;
-
-	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]) {
-		this.onEnvelope = options.onEnvelope;
-		return ok(() => {
-			this.onEnvelope = undefined;
-		});
-	}
-
-	emit(envelope: SyncEnvelope): void {
-		this.onEnvelope?.(envelope);
-	}
-}
-
-const eventCache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 beforeEach(() => {
 	resetSyncConfiguration();
@@ -156,7 +133,7 @@ describe('client events and signals', () => {
 		const repairRead = new Deferred<Response>();
 		let reads = 0;
 		configureSync({
-			cache: { adapter: eventCache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => {
 				reads += 1;
@@ -213,18 +190,6 @@ describe('client events and signals', () => {
 	});
 });
 
-function syncResponse(value: unknown): Response {
-	return Response.json({ isOk: true, isError: false, value });
-}
-
-function syncErrorResponse(message: string): Response {
-	return Response.json({
-		isOk: false,
-		isError: true,
-		error: { code: 'internal', message }
-	});
-}
-
 function resetEnvelope(): SyncEnvelope {
 	const manifest = {
 		scope: 'workspace-1',
@@ -239,14 +204,4 @@ function resetEnvelope(): SyncEnvelope {
 		changes: [{ type: 'reset', manifest }],
 		reset: manifest
 	};
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
 }

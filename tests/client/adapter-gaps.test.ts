@@ -3,15 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
 	configureSync,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
-	type MethodType,
-	type RuntimeTransport
+	type MethodType
 } from '../../src/client/core.ts';
 import { createSolidStore } from '../../src/client/solid.ts';
 import { createVueStore } from '../../src/client/vue.ts';
+import { noopCache, noopTransport } from '../fixtures/clientRuntime.ts';
 
 interface NotesManager extends ManagerTypeShape {
 	readonly key: 'notes-gaps';
@@ -24,20 +22,6 @@ interface NotesManager extends ManagerTypeShape {
 		>;
 	};
 }
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-
-const transport: RuntimeTransport = {
-	async subscribe() {
-		return ok(() => {});
-	}
-};
 
 const config = {
 	key: 'notes-gaps' as const,
@@ -52,7 +36,7 @@ afterEach(() => {
 });
 
 function configureTestRuntime(): void {
-	configureSync({ cache: { adapter: cache }, transport });
+	configureSync({ cache: { adapter: noopCache }, transport: noopTransport });
 }
 
 describe('adapter lifecycle gaps', () => {

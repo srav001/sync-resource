@@ -1,17 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
-import { createRuntime, type CacheAdapter } from '../../src/client/core.ts';
+import { createRuntime } from '../../src/client/core.ts';
 import type { SyncEnvelope } from '../../src/shared/protocol.ts';
 import { MAX_CHUNKED_SYNC_BYTES, encodeSseFrame, encodeSyncEnvelopeSseFrames } from '../../src/shared/sse.ts';
+import { waitFor } from '../fixtures/async.ts';
+import { noopCache } from '../fixtures/clientRuntime.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -24,7 +18,7 @@ describe('browser runtime SSE transport', () => {
 		let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
 		let cancelled = 0;
 		const runtime = createRuntime({
-			cache,
+			cache: noopCache,
 			fetch: async (input, init) => {
 				request = toRequest(input, init);
 				return new Response(
@@ -78,7 +72,7 @@ describe('browser runtime SSE transport', () => {
 	it('reassembles duplicate out-of-order sync chunks exactly once', async () => {
 		let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
 		const runtime = createRuntime({
-			cache,
+			cache: noopCache,
 			fetch: async () =>
 				new Response(
 					new ReadableStream<Uint8Array>({
@@ -154,7 +148,7 @@ describe('browser runtime SSE transport', () => {
 		};
 		const runtime = createRuntime({
 			batchConnect: false,
-			cache,
+			cache: noopCache,
 			fetch: fetchImpl,
 			createId: (prefix) => `${prefix}-shared`
 		});
@@ -237,7 +231,7 @@ describe('browser runtime SSE transport', () => {
 		let catchUpHydrations = 0;
 		const runtime = createRuntime({
 			batchConnect: false,
-			cache,
+			cache: noopCache,
 			fetch: fetchImpl,
 			createId: (prefix) => `${prefix}-reconnect`
 		});
@@ -313,7 +307,7 @@ describe('browser runtime registration order', () => {
 		};
 		const runtime = createRuntime({
 			batchConnect: false,
-			cache,
+			cache: noopCache,
 			fetch: fetchImpl,
 			createId: (prefix) => `${prefix}-gate`
 		});
@@ -352,7 +346,7 @@ describe('browser runtime registration order', () => {
 		};
 		const runtime = createRuntime({
 			batchConnect: false,
-			cache,
+			cache: noopCache,
 			fetch: fetchImpl,
 			createId: (prefix) => `${prefix}-failed`
 		});
@@ -379,7 +373,7 @@ describe('browser runtime registration order', () => {
 				: connectResponse('notes:scope');
 		const runtime = createRuntime({
 			batchConnect: false,
-			cache,
+			cache: noopCache,
 			fetch: fetchImpl,
 			createId: (prefix) => `${prefix}-storage-owner`
 		});
@@ -436,7 +430,7 @@ describe('browser runtime registration order', () => {
 			};
 			const runtime = createRuntime({
 				batchConnect: false,
-				cache,
+				cache: noopCache,
 				fetch: fetchImpl,
 				createId: (prefix) => `${prefix}-owner`
 			});
@@ -464,7 +458,7 @@ describe('browser runtime registration order', () => {
 					: connectResponse('notes:scope');
 			const runtime = createRuntime({
 				batchConnect: false,
-				cache,
+				cache: noopCache,
 				fetch: fetchImpl,
 				createId: (prefix) => `${prefix}-lock-owner`
 			});
@@ -492,7 +486,7 @@ describe('browser runtime registration order', () => {
 			};
 			const runtime = createRuntime({
 				batchConnect: false,
-				cache,
+				cache: noopCache,
 				fetch: fetchImpl,
 				createId: (prefix) => `${prefix}-follower`
 			});
@@ -522,7 +516,7 @@ describe('browser runtime registration order', () => {
 			};
 			const runtime = createRuntime({
 				batchConnect: false,
-				cache,
+				cache: noopCache,
 				fetch: fetchImpl,
 				createId: (prefix) => `${prefix}-handover`
 			});
@@ -559,13 +553,13 @@ describe('browser runtime registration order', () => {
 					: connectResponse('notes:scope');
 			const owner = createRuntime({
 				batchConnect: false,
-				cache,
+				cache: noopCache,
 				fetch: fetchImpl,
 				createId: (p) => `${p}-owner`
 			});
 			const follower = createRuntime({
 				batchConnect: false,
-				cache,
+				cache: noopCache,
 				fetch: fetchImpl,
 				createId: (p) => `${p}-follower`
 			});
@@ -622,16 +616,6 @@ describe('browser runtime registration order', () => {
 
 function toRequest(input: URL | RequestInfo, init?: RequestInit): Request {
 	return new Request(input instanceof Request ? input : new URL(String(input), 'http://sync.test'), init);
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
 }
 
 class LoopbackBroadcastChannel {

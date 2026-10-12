@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test';
 
-import { createRuntime, type CacheAdapter } from '../../src/client/core.ts';
+import { createRuntime } from '../../src/client/core.ts';
 import type { SyncEnvelope } from '../../src/shared/protocol.ts';
 import {
 	encodeSseFrame,
@@ -8,21 +8,19 @@ import {
 	MAX_SSE_FRAME_BYTES,
 	type SyncEnvelopeChunk
 } from '../../src/shared/sse.ts';
+import { waitFor } from '../fixtures/async.ts';
+import { noopCache } from '../fixtures/clientRuntime.ts';
 
 const textEncoder = new TextEncoder();
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 describe('browser runtime SSE safety', () => {
 	it('rejects a pre-aborted direct subscription without starting fetch', async () => {
 		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({ cache, fetch: harness.fetch, createId: (prefix) => `${prefix}-pre-aborted` });
+		const runtime = createRuntime({
+			cache: noopCache,
+			fetch: harness.fetch,
+			createId: (prefix) => `${prefix}-pre-aborted`
+		});
 		const abort = new AbortController();
 		abort.abort();
 		try {
@@ -37,7 +35,7 @@ describe('browser runtime SSE safety', () => {
 	it('ignores malformed and out-of-range chunk metadata, then delivers a valid envelope', async () => {
 		const harness = createDirectStreamHarness();
 		const runtime = createRuntime({
-			cache,
+			cache: noopCache,
 			fetch: harness.fetch,
 			createId: (prefix) => `${prefix}-invalid-chunks`
 		});
@@ -111,7 +109,7 @@ describe('browser runtime SSE safety', () => {
 	it('drops chunk groups with inconsistent metadata or byte totals and recovers for a valid group', async () => {
 		const harness = createDirectStreamHarness();
 		const runtime = createRuntime({
-			cache,
+			cache: noopCache,
 			fetch: harness.fetch,
 			createId: (prefix) => `${prefix}-chunk-integrity`
 		});
@@ -153,7 +151,7 @@ describe('browser runtime SSE safety', () => {
 	it('bounds incomplete chunk groups by pruning the oldest of more than 32 ids', async () => {
 		const harness = createDirectStreamHarness();
 		const runtime = createRuntime({
-			cache,
+			cache: noopCache,
 			fetch: harness.fetch,
 			createId: (prefix) => `${prefix}-chunk-pruning`
 		});
@@ -205,7 +203,11 @@ describe('browser runtime SSE safety', () => {
 
 	it('delivers a complete frame above a third of the bound by characters but within it by bytes', async () => {
 		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({ cache, fetch: harness.fetch, createId: (prefix) => `${prefix}-large-frame` });
+		const runtime = createRuntime({
+			cache: noopCache,
+			fetch: harness.fetch,
+			createId: (prefix) => `${prefix}-large-frame`
+		});
 		const received: SyncEnvelope[] = [];
 		const abort = new AbortController();
 		try {
@@ -239,7 +241,11 @@ describe('browser runtime SSE safety', () => {
 
 	it('keeps stateful UTF-8 decoder state local to each concurrent stream', async () => {
 		const harness = createDirectStreamHarness();
-		const runtime = createRuntime({ cache, fetch: harness.fetch, createId: (prefix) => `${prefix}-local-decoder` });
+		const runtime = createRuntime({
+			cache: noopCache,
+			fetch: harness.fetch,
+			createId: (prefix) => `${prefix}-local-decoder`
+		});
 		const firstReceived: SyncEnvelope[] = [];
 		const secondReceived: SyncEnvelope[] = [];
 		const firstAbort = new AbortController();
@@ -344,7 +350,7 @@ function envelope(cursor: string, id: string): SyncEnvelope {
 async function expectBoundedStreamRecovery(malformedInput: string, suffix: string): Promise<void> {
 	const harness = createDirectStreamHarness();
 	const runtime = createRuntime({
-		cache,
+		cache: noopCache,
 		fetch: harness.fetch,
 		createId: (prefix) => `${prefix}-${suffix}`
 	});
@@ -390,14 +396,4 @@ async function flushMicrotasks(): Promise<void> {
 	for (let index = 0; index < 10; index += 1) {
 		await Promise.resolve();
 	}
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
 }

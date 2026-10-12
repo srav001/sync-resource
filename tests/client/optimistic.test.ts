@@ -3,14 +3,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test';
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
-	type MethodType,
-	type RuntimeTransport
+	type MethodType
 } from '../../src/client/core.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { noopCache, noopTransport } from '../fixtures/clientRuntime.ts';
 import { createSyncTestSystem } from '../fixtures/syncSystem.ts';
 
 interface BareAckManager extends ManagerTypeShape {
@@ -29,19 +27,6 @@ interface BareAckManager extends ManagerTypeShape {
 		>;
 	};
 }
-
-const bareAckCache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-const bareAckTransport: RuntimeTransport = {
-	async subscribe() {
-		return ok(() => {});
-	}
-};
 
 beforeEach(() => {
 	resetSyncConfiguration();
@@ -89,8 +74,8 @@ describe('optimistic writes', () => {
 	it('characterizes bare successful acknowledgements as immediate finality', async () => {
 		let listRead = true;
 		configureSync({
-			cache: { adapter: bareAckCache },
-			transport: bareAckTransport,
+			cache: { adapter: noopCache },
+			transport: noopTransport,
 			createId: (prefix) => `${prefix}-1`,
 			fetch: async (_input, init) => {
 				if (listRead) {

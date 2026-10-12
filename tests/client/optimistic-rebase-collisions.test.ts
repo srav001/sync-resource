@@ -3,14 +3,14 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
-	type RuntimeTransport,
 	type SyncEnvelope
 } from '../../src/client/core.ts';
+import { waitFor } from '../fixtures/async.ts';
+import { ManualTransport, noopCache } from '../fixtures/clientRuntime.ts';
+import { syncErrorResponse, syncResponse } from '../fixtures/responses.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface Note {
@@ -26,27 +26,6 @@ interface OptimisticManager extends ManagerTypeShape {
 		readonly mutate: MethodType<{ readonly id: string }, { readonly title: string }, Note>;
 	};
 }
-
-class ManualTransport implements RuntimeTransport {
-	private onEnvelope: ((envelope: SyncEnvelope) => void) | undefined;
-
-	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]) {
-		this.onEnvelope = options.onEnvelope;
-		return ok(() => {});
-	}
-
-	emit(envelope: SyncEnvelope): void {
-		this.onEnvelope?.(envelope);
-	}
-}
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 afterEach(() => {
 	resetSyncConfiguration();
@@ -65,7 +44,7 @@ describe('optimistic rebase and mutation identity', () => {
 	it('rebases a later pending write when an earlier write to the same item fails', async () => {
 		const writes: { readonly id: string; readonly response: Deferred<Response> }[] = [];
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport: new ManualTransport(),
 			fetch: async (_input, init) => {
 				if (init?.method !== 'POST') {
@@ -109,7 +88,7 @@ describe('optimistic rebase and mutation identity', () => {
 		const writeResponse = new Deferred<Response>();
 		let mutationId = '';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (_input, init) => {
 				if (init?.method !== 'POST') {
@@ -147,34 +126,4 @@ function finalityEnvelope(mutationId: string, sourceClientId: string, title: str
 		sourceClientId,
 		changes: [{ type: 'itemUpdated', id: 'note-1', value: { id: 'note-1', title } }]
 	};
-}
-
-function syncResponse(value: unknown, envelope?: SyncEnvelope): Response {
-	return Response.json({
-		isOk: true,
-		isError: false,
-		value,
-		...(envelope ? { envelope } : {})
-	});
-}
-
-function syncErrorResponse(message: string): Response {
-	return Response.json({
-		isOk: false,
-		isError: true,
-		error: {
-			code: 'internal',
-			message
-		}
-	});
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
 }

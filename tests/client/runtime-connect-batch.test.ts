@@ -1,16 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
-import { createRuntime, type CacheAdapter, type SyncRuntime } from '../../src/client/core.ts';
+import { createRuntime, type SyncRuntime } from '../../src/client/core.ts';
 import type { SyncEnvelope } from '../../src/shared/protocol.ts';
 import { encodeSseFrame } from '../../src/shared/sse.ts';
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
+import { noopCache } from '../fixtures/clientRuntime.ts';
 
 interface ConnectResult {
 	readonly status: number;
@@ -72,7 +65,12 @@ function createHarness(
 		const result = resultFor(url.pathname + url.search);
 		return Response.json(result.body, { status: result.status });
 	};
-	const runtime = createRuntime({ cache, fetch: fetchImpl, connectUrl, createId: (prefix) => `${prefix}-batch` });
+	const runtime = createRuntime({
+		cache: noopCache,
+		fetch: fetchImpl,
+		connectUrl,
+		createId: (prefix) => `${prefix}-batch`
+	});
 	return {
 		runtime,
 		requests,
@@ -164,7 +162,7 @@ describe('batched realtime registration', () => {
 	it('sends one direct request per registration when batchConnect is false', async () => {
 		const harness = createHarness();
 		const direct = createRuntime({
-			cache,
+			cache: noopCache,
 			batchConnect: false,
 			fetch: (...args) => harness.runtime.fetch(...args),
 			createId: (prefix) => `${prefix}-direct`

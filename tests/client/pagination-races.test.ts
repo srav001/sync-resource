@@ -3,14 +3,13 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
-	type RuntimeTransport,
 	type SyncEnvelope
 } from '../../src/client/core.ts';
+import { ManualTransport, noopCache, noopTransport } from '../fixtures/clientRuntime.ts';
+import { syncResponse } from '../fixtures/responses.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface Note {
@@ -41,27 +40,6 @@ interface PaginationManager extends ManagerTypeShape {
 	};
 }
 
-class ManualTransport implements RuntimeTransport {
-	private onEnvelope: ((envelope: SyncEnvelope) => void) | undefined;
-
-	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]) {
-		this.onEnvelope = options.onEnvelope;
-		return ok(() => {});
-	}
-
-	emit(envelope: SyncEnvelope): void {
-		this.onEnvelope?.(envelope);
-	}
-}
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-
 afterEach(() => {
 	resetSyncConfiguration();
 });
@@ -86,8 +64,8 @@ describe('pagination and query-family races', () => {
 	it('injects the page cursor, appends pages, and preserves first-page metadata when loadMore omits it', async () => {
 		const queries: ListQuery[] = [];
 		configureSync({
-			cache: { adapter: cache },
-			transport: successfulTransport(),
+			cache: { adapter: noopCache },
+			transport: noopTransport,
 			fetch: async (input) => {
 				const query = readQuery(input);
 				queries.push(query);
@@ -122,8 +100,8 @@ describe('pagination and query-family races', () => {
 
 	it('keeps independently loaded query families isolated', async () => {
 		configureSync({
-			cache: { adapter: cache },
-			transport: successfulTransport(),
+			cache: { adapter: noopCache },
+			transport: noopTransport,
 			fetch: async (input) => {
 				const query = readQuery(input);
 				return syncResponse({
@@ -156,8 +134,8 @@ describe('pagination and query-family races', () => {
 		const openResponse = new Deferred<Response>();
 		let activeStatus: 'open' | 'closed' = 'open';
 		configureSync({
-			cache: { adapter: cache },
-			transport: successfulTransport(),
+			cache: { adapter: noopCache },
+			transport: noopTransport,
 			fetch: async (input) => {
 				const query = readQuery(input);
 				if (query.status === 'open') {
@@ -205,7 +183,7 @@ describe('pagination and query-family races', () => {
 	it('places realtime additions only in matching families and keeps compare ordering', async () => {
 		const transport = new ManualTransport();
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (input) => {
 				const query = readQuery(input);
@@ -229,14 +207,6 @@ describe('pagination and query-family races', () => {
 	});
 });
 
-function successfulTransport(): RuntimeTransport {
-	return {
-		async subscribe() {
-			return ok(() => {});
-		}
-	};
-}
-
 function readQuery(input: RequestInfo | URL): ListQuery {
 	const url = new URL(input instanceof Request ? input.url : String(input));
 	return JSON.parse(url.searchParams.get('query') ?? '{}') as ListQuery;
@@ -249,8 +219,4 @@ function realtimeAdd(cursor: string, note: Note): SyncEnvelope {
 		cursor,
 		changes: [{ type: 'itemAdded', id: note.id, value: note }]
 	};
-}
-
-function syncResponse(value: unknown): Response {
-	return Response.json({ isOk: true, isError: false, value });
 }

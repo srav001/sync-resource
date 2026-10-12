@@ -3,14 +3,13 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
-	type RuntimeTransport,
 	type SyncEnvelope
 } from '../../src/client/core.ts';
+import { ManualTransport, noopCache } from '../fixtures/clientRuntime.ts';
+import { syncErrorResponse, syncResponse } from '../fixtures/responses.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface Message {
@@ -38,27 +37,6 @@ interface MessagesManager extends ManagerTypeShape {
 	};
 }
 
-class ManualTransport implements RuntimeTransport {
-	private onEnvelope: ((envelope: SyncEnvelope) => void) | undefined;
-
-	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]) {
-		this.onEnvelope = options.onEnvelope;
-		return ok(() => {});
-	}
-
-	emit(envelope: SyncEnvelope): void {
-		this.onEnvelope?.(envelope);
-	}
-}
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-
 afterEach(() => {
 	resetSyncConfiguration();
 });
@@ -68,7 +46,7 @@ describe('sorted add acknowledgement reconciliation', () => {
 		const transport = new ManualTransport();
 		let mutationId = '';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			createId: (prefix) => `${prefix}-local`,
 			fetch: async (_input, init) => {
@@ -135,7 +113,7 @@ describe('sorted add acknowledgement reconciliation', () => {
 		const transport = new ManualTransport();
 		let mutationId = '';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (input, init) => {
 				if (init?.method === 'POST') {
@@ -183,7 +161,7 @@ describe('sorted add acknowledgement reconciliation', () => {
 	it('reconciles one own add across loaded pages and query families', async () => {
 		let mutationId = '';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport: new ManualTransport(),
 			fetch: async (input, init) => {
 				if (init?.method === 'POST') {
@@ -247,7 +225,7 @@ describe('sorted add acknowledgement reconciliation', () => {
 		const transport = new ManualTransport();
 		let mutationId = '';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (_input, init) =>
 				init?.method === 'POST'
@@ -279,7 +257,7 @@ describe('sorted add acknowledgement reconciliation', () => {
 	it('preserves default append handling for every itemAdded change in an own envelope', async () => {
 		let mutationId = '';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport: new ManualTransport(),
 			fetch: async (_input, init) => {
 				if (init?.method === 'POST') {
@@ -313,7 +291,7 @@ describe('sorted add acknowledgement reconciliation', () => {
 		const transport = new ManualTransport();
 		const postResponse = new Deferred<Response>();
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (_input, init) =>
 				init?.method === 'POST'
@@ -345,7 +323,7 @@ describe('sorted add acknowledgement reconciliation', () => {
 	});
 
 	it('rejects sorted placement without a comparator at store construction', () => {
-		configureSync({ cache: { adapter: cache }, transport: new ManualTransport() });
+		configureSync({ cache: { adapter: noopCache }, transport: new ManualTransport() });
 		expect(() => createSortedStore({ addPlacement: 'sorted' }, undefined)).toThrow(
 			"reconcile.addPlacement 'sorted' requires reconcile.compare."
 		);
@@ -389,12 +367,4 @@ function itemAddedEnvelope(cursor: string, sourceMutationId: string | undefined,
 function readQuery(input: RequestInfo | URL): MessageQuery {
 	const url = new URL(input instanceof Request ? input.url : String(input));
 	return JSON.parse(url.searchParams.get('query') ?? '{}') as MessageQuery;
-}
-
-function syncResponse(value: unknown, envelope?: SyncEnvelope): Response {
-	return Response.json({ isOk: true, isError: false, value, ...(envelope ? { envelope } : {}) });
-}
-
-function syncErrorResponse(message: string): Response {
-	return Response.json({ isOk: false, isError: true, error: { code: 'internal', message } });
 }

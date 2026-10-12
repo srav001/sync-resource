@@ -3,14 +3,12 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
-	type MethodType,
-	type RuntimeTransport
+	type MethodType
 } from '../../src/client/core.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
+import { noopCache, noopTransport } from '../fixtures/clientRuntime.ts';
 
 interface ReadManager extends ManagerTypeShape {
 	readonly key: 'read-tests';
@@ -24,26 +22,18 @@ interface ReadManager extends ManagerTypeShape {
 	};
 }
 
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-const transport: RuntimeTransport = {
-	async subscribe() {
-		return ok(() => {});
-	}
-};
-
 afterEach(() => {
 	resetSyncConfiguration();
 	resetSharedStreamForTests();
 });
 
 function createReadStore(fetchImpl: typeof fetch): ReturnType<typeof createStore<ReadManager>> {
-	configureSync({ fetch: fetchImpl, cache: { adapter: cache }, transport, createId: (prefix) => `${prefix}-1` });
+	configureSync({
+		fetch: fetchImpl,
+		cache: { adapter: noopCache },
+		transport: noopTransport,
+		createId: (prefix) => `${prefix}-1`
+	});
 	return createStore<ReadManager>({
 		key: 'read-tests',
 		getParams: () => ({ workspaceId: 'w1' }),

@@ -6,18 +6,11 @@ import {
 	getSyncRuntime,
 	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type RuntimeTransport
 } from '../../src/client/core.ts';
 import { encodeSseFrame } from '../../src/shared/sse.ts';
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
+import { waitFor } from '../fixtures/async.ts';
+import { noopCache } from '../fixtures/clientRuntime.ts';
 
 afterEach(() => {
 	resetSyncConfiguration();
@@ -35,7 +28,7 @@ describe('client runtime configuration', () => {
 				disposed += 1;
 			}
 		};
-		configureSync({ cache: { adapter: cache }, transport });
+		configureSync({ cache: { adapter: noopCache }, transport });
 		const first = getSyncRuntime();
 		expect(getSyncRuntime()).toBe(first);
 		expect(first.transport).toBe(transport);
@@ -81,7 +74,7 @@ describe('client runtime configuration', () => {
 		};
 		const runtime = createRuntime({
 			batchConnect: false,
-			cache,
+			cache: noopCache,
 			fetch: fetchImpl,
 			createId(prefix) {
 				id += 1;
@@ -128,13 +121,3 @@ describe('client runtime configuration', () => {
 		runtime.dispose();
 	});
 });
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
-}

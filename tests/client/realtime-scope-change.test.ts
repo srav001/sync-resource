@@ -6,13 +6,13 @@ import {
 	err,
 	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
 	type RuntimeTransport,
 	type SyncError,
 	type SyncResult
 } from '../../src/client/core.ts';
+import { noopCache } from '../fixtures/clientRuntime.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface ScopeManager extends ManagerTypeShape {
@@ -26,14 +26,6 @@ interface ScopeManager extends ManagerTypeShape {
 		>;
 	};
 }
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 afterEach(() => resetSyncConfiguration());
 
@@ -50,7 +42,7 @@ describe('realtime subscription follows the store scope', () => {
 		};
 		let workspaceId = 'w1';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => Response.json({ isOk: true, isError: false, value: { items: [] } })
 		});
@@ -85,7 +77,7 @@ describe('realtime subscription follows the store scope', () => {
 		};
 		let workspaceId = 'w1';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => Response.json({ isOk: true, isError: false, value: { items: [] } })
 		});
@@ -129,7 +121,7 @@ describe('realtime subscription follows the store scope', () => {
 		};
 		let workspaceId = 'w1';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => Response.json({ isOk: true, isError: false, value: { items: [] } })
 		});

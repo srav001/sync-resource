@@ -6,11 +6,11 @@ import {
 	createStore,
 	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
 	type RuntimeTransport
 } from '../../src/client/core.ts';
+import { noopCache } from '../fixtures/clientRuntime.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface NotesManager extends ManagerTypeShape {
@@ -24,14 +24,6 @@ interface NotesManager extends ManagerTypeShape {
 		>;
 	};
 }
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 const okList = () => Response.json({ isOk: true, isError: false, value: { items: [] } });
 
@@ -74,7 +66,7 @@ describe('registration hold', () => {
 			'/c/list': new Deferred()
 		};
 		const { fetchImpl, batches } = createFetch((path) => gates[path]!.promise);
-		configureSync({ cache: { adapter: cache }, fetch: fetchImpl });
+		configureSync({ cache: { adapter: noopCache }, fetch: fetchImpl });
 		const stores = ['a', 'b', 'c'].map((name) =>
 			createStore<NotesManager>({
 				key: 'notes',
@@ -106,7 +98,7 @@ describe('registration hold', () => {
 	it('sends held registrations after two seconds when a read never finishes', async () => {
 		vi.useFakeTimers();
 		const { fetchImpl, batches } = createFetch();
-		const runtime = createRuntime({ cache, fetch: fetchImpl, createId: (prefix) => `${prefix}-hold` });
+		const runtime = createRuntime({ cache: noopCache, fetch: fetchImpl, createId: (prefix) => `${prefix}-hold` });
 		const signal = new AbortController();
 		runtime.transport.holdRegistrations?.();
 		const registered = runtime.transport.subscribe({
@@ -147,7 +139,7 @@ describe('store read registration hold', () => {
 			}
 		};
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => {
 				events.push('fetch');

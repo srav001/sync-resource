@@ -3,14 +3,14 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
-	type RuntimeTransport,
 	type SyncEnvelope
 } from '../../src/client/core.ts';
+import { ManualTransport, noopCache } from '../fixtures/clientRuntime.ts';
+import { syncResponse } from '../fixtures/responses.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface Profile {
 	readonly id: string;
@@ -42,37 +42,6 @@ interface MutableGetManager extends ManagerTypeShape {
 	};
 }
 
-class ManualTransport implements RuntimeTransport {
-	options: Parameters<RuntimeTransport['subscribe']>[0] | undefined;
-	capturedOptions: Parameters<RuntimeTransport['subscribe']>[0] | undefined;
-	unsubscribeCount = 0;
-
-	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]) {
-		this.options = options;
-		this.capturedOptions = options;
-		return ok(() => {
-			this.unsubscribeCount += 1;
-			this.options = undefined;
-		});
-	}
-
-	emit(envelope: SyncEnvelope): void {
-		this.options?.onEnvelope(envelope);
-	}
-
-	emitCaptured(envelope: SyncEnvelope): void {
-		this.capturedOptions?.onEnvelope(envelope);
-	}
-}
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-
 afterEach(() => {
 	resetSyncConfiguration();
 });
@@ -82,7 +51,7 @@ describe('client get and data', () => {
 		const requests: Request[] = [];
 		const transport = new ManualTransport();
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (input, init) => {
 				requests.push(new Request(input, init));
@@ -109,7 +78,7 @@ describe('client get and data', () => {
 		const requests: Request[] = [];
 		const transport = new ManualTransport();
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (input, init) => {
 				requests.push(new Request(input, init));
@@ -128,7 +97,7 @@ describe('client get and data', () => {
 	it('hydrates data and carries the authoritative response cursor into realtime', async () => {
 		const transport = new ManualTransport();
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () =>
 				syncResponse(
@@ -152,7 +121,7 @@ describe('client get and data', () => {
 		const transport = new ManualTransport();
 		let reads = 0;
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () =>
 				++reads === 1
@@ -173,10 +142,10 @@ describe('client get and data', () => {
 
 	it('replaces authoritative data from realtime and rebases a pending mutation over a later envelope', async () => {
 		const transport = new ManualTransport();
-		const writeResponse = deferred<Response>();
+		const writeResponse = new Deferred<Response>();
 		let mutationId = '';
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			createId: (prefix) => `${prefix}-1`,
 			fetch: async (_input, init) => {
@@ -225,7 +194,7 @@ describe('client get and data', () => {
 		let requestCount = 0;
 		const transport = new ManualTransport();
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => {
 				requestCount += 1;
@@ -249,7 +218,7 @@ describe('client get and data', () => {
 	it('unsubscribes on disposal and retains the final data snapshot', async () => {
 		const transport = new ManualTransport();
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => syncResponse({ id: 'profile-1', name: 'Initial' })
 		});
@@ -265,7 +234,7 @@ describe('client get and data', () => {
 	it('characterizes a transport invoking its captured envelope callback after disposal', async () => {
 		const transport = new ManualTransport();
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => syncResponse({ id: 'profile-1', name: 'Initial' })
 		});
@@ -308,31 +277,11 @@ function createMutableGetStore(): ReturnType<typeof createStore<MutableGetManage
 	});
 }
 
-function syncResponse(value: unknown, responseEnvelope?: SyncEnvelope): Response {
-	return Response.json({
-		isOk: true,
-		isError: false,
-		value,
-		...(responseEnvelope ? { envelope: responseEnvelope } : {})
-	});
-}
-
 function envelope(cursor: string, changes: SyncEnvelope['changes']): SyncEnvelope {
 	return {
 		managerKey: 'get-data',
 		scope: 'workspace-1',
 		cursor,
 		changes
-	};
-}
-
-function deferred<TValue>() {
-	let resolvePromise!: (value: TValue | PromiseLike<TValue>) => void;
-	const promise = new Promise<TValue>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return {
-		promise,
-		resolve: resolvePromise
 	};
 }

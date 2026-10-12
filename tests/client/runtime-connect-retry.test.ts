@@ -5,10 +5,10 @@ import {
 	createRuntime,
 	createStore,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType
 } from '../../src/client/core.ts';
+import { noopCache } from '../fixtures/clientRuntime.ts';
 
 interface NotesManager extends ManagerTypeShape {
 	readonly key: 'notes';
@@ -21,14 +21,6 @@ interface NotesManager extends ManagerTypeShape {
 		>;
 	};
 }
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -43,7 +35,7 @@ function createFailingConnectRuntime(failures: number) {
 	let connects = 0;
 	const runtime = createRuntime({
 		batchConnect: false,
-		cache,
+		cache: noopCache,
 		fetch: async (input) => {
 			if (pathOf(input).endsWith('/stream')) {
 				return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
@@ -111,7 +103,7 @@ describe('failed realtime registration', () => {
 		vi.useFakeTimers();
 		let connects = 0;
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			fetch: async (input) => {
 				const path = pathOf(input);
 				if (path.endsWith('/stream')) {

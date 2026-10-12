@@ -3,14 +3,13 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
-	type RuntimeTransport,
 	type SyncEnvelope
 } from '../../src/client/core.ts';
+import { noopCache, noopTransport } from '../fixtures/clientRuntime.ts';
+import { syncResponse } from '../fixtures/responses.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface BatchNote {
@@ -29,20 +28,6 @@ interface BatchManager extends ManagerTypeShape {
 	};
 }
 
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-
-const transport: RuntimeTransport = {
-	async subscribe() {
-		return ok(() => {});
-	}
-};
-
 afterEach(() => {
 	resetSyncConfiguration();
 });
@@ -54,8 +39,8 @@ describe('client batch writes', () => {
 		const deleteResponse = new Deferred<Response>();
 		const requests: Request[] = [];
 		configureSync({
-			cache: { adapter: cache },
-			transport,
+			cache: { adapter: noopCache },
+			transport: noopTransport,
 			fetch: async (input, init) => {
 				const request = new Request(input, init);
 				requests.push(request.clone());
@@ -190,15 +175,6 @@ function createBatchStore() {
 		getParams: () => ({ workspaceId: 'workspace-1' }),
 		getUrl: () => 'http://sync.test/notes',
 		query: () => undefined
-	});
-}
-
-function syncResponse(value: unknown, responseEnvelope?: SyncEnvelope): Response {
-	return Response.json({
-		isOk: true,
-		isError: false,
-		value,
-		...(responseEnvelope ? { envelope: responseEnvelope } : {})
 	});
 }
 

@@ -3,14 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
-	type RuntimeTransport,
 	type SyncEnvelope
 } from '../../src/client/core.ts';
+import { waitFor } from '../fixtures/async.ts';
+import { ManualTransport, noopCache } from '../fixtures/clientRuntime.ts';
+import { syncErrorResponse, syncResponse } from '../fixtures/responses.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface RepairManager extends ManagerTypeShape {
@@ -25,27 +25,6 @@ interface RepairManager extends ManagerTypeShape {
 		>;
 	};
 }
-
-class ManualTransport implements RuntimeTransport {
-	private onEnvelope: ((envelope: SyncEnvelope) => void) | undefined;
-
-	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]) {
-		this.onEnvelope = options.onEnvelope;
-		return ok(() => {});
-	}
-
-	emit(envelope: SyncEnvelope): void {
-		this.onEnvelope?.(envelope);
-	}
-}
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 beforeEach(() => {
 	vi.useFakeTimers();
@@ -71,7 +50,7 @@ describe('store reset and repair', () => {
 		const writeResponse = new Deferred<Response>();
 		let reads = 0;
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (_input, init) => {
 				if (init?.method === 'POST') {
@@ -110,7 +89,7 @@ describe('store reset and repair', () => {
 		const transport = new ManualTransport();
 		let reads = 0;
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => {
 				reads += 1;
@@ -152,26 +131,4 @@ function resetEnvelope(): SyncEnvelope {
 		changes: [{ type: 'reset', manifest }],
 		reset: manifest
 	};
-}
-
-function syncResponse(value: unknown): Response {
-	return Response.json({ isOk: true, isError: false, value });
-}
-
-function syncErrorResponse(message: string): Response {
-	return Response.json({
-		isOk: false,
-		isError: true,
-		error: { code: 'internal', message }
-	});
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
 }

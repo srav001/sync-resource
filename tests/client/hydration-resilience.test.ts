@@ -12,6 +12,8 @@ import {
 	type MethodType,
 	type RuntimeTransport
 } from '../../src/client/core.ts';
+import { noopCache, noopTransport } from '../fixtures/clientRuntime.ts';
+import { syncResponse } from '../fixtures/responses.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface HydrationManager extends ManagerTypeShape {
@@ -30,14 +32,6 @@ interface HydrationManager extends ManagerTypeShape {
 		>;
 	};
 }
-
-const emptyCache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 afterEach(() => {
 	resetSyncConfiguration();
@@ -63,7 +57,7 @@ describe('hydration resilience', () => {
 		};
 		configureSync({
 			cache: { adapter: cache },
-			transport: successfulTransport()
+			transport: noopTransport
 		});
 		const store = createHydrationStore();
 
@@ -81,8 +75,8 @@ describe('hydration resilience', () => {
 	it('retries a failed authoritative read instead of caching the failed hydration', async () => {
 		let requests = 0;
 		configureSync({
-			cache: { adapter: emptyCache },
-			transport: successfulTransport(),
+			cache: { adapter: noopCache },
+			transport: noopTransport,
 			fetch: async () => {
 				requests += 1;
 				if (requests === 1) {
@@ -114,7 +108,7 @@ describe('hydration resilience', () => {
 			}
 		};
 		configureSync({
-			cache: { adapter: emptyCache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => {
 				reads += 1;
@@ -137,7 +131,7 @@ describe('hydration resilience', () => {
 	it('resolves hydrate once the read is applied while the realtime registration is still pending', async () => {
 		let subscriptions = 0;
 		configureSync({
-			cache: { adapter: emptyCache },
+			cache: { adapter: noopCache },
 			transport: {
 				subscribe() {
 					subscriptions += 1;
@@ -156,10 +150,10 @@ describe('hydration resilience', () => {
 
 	it('returns disposed when disposal interrupts an authoritative read and never connects', async () => {
 		const response = new Deferred<Response>();
-		let fetchStarted = false;
+		const fetchStarted = new Deferred();
 		let subscriptions = 0;
 		configureSync({
-			cache: { adapter: emptyCache },
+			cache: { adapter: noopCache },
 			transport: {
 				async subscribe() {
 					subscriptions += 1;
@@ -167,13 +161,13 @@ describe('hydration resilience', () => {
 				}
 			},
 			fetch: async () => {
-				fetchStarted = true;
+				fetchStarted.resolve();
 				return response.promise;
 			}
 		});
 		const store = createHydrationStore();
 		const hydration = store.hydrate();
-		await waitFor(() => fetchStarted);
+		await fetchStarted.promise;
 		store.dispose();
 		response.resolve(syncResponse({ items: [] }));
 
@@ -197,7 +191,7 @@ describe('hydration resilience', () => {
 		};
 		configureSync({
 			cache: { adapter: cache },
-			transport: successfulTransport(),
+			transport: noopTransport,
 			createId: (prefix) => `${prefix}-pending`,
 			fetch: async (_input, init) => {
 				if (init?.method !== 'POST') {
@@ -220,7 +214,8 @@ describe('hydration resilience', () => {
 			},
 			expiry: Date.now() + 10_000
 		});
-		await waitFor(() => store.pending().length === 1);
+		expect((await store.restore()).isOk()).toBe(true);
+		expect(store.pending()).toHaveLength(1);
 		expect(store.items()).toEqual([{ id: 'optimistic', title: 'Local' }]);
 
 		writeResponse.resolve(syncResponse({ id: 'optimistic', title: 'Local' }));
@@ -228,25 +223,3 @@ describe('hydration resilience', () => {
 		store.dispose();
 	});
 });
-
-function successfulTransport(): RuntimeTransport {
-	return {
-		async subscribe() {
-			return ok(() => {});
-		}
-	};
-}
-
-function syncResponse(value: unknown): Response {
-	return Response.json({ isOk: true, isError: false, value });
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
-}

@@ -3,15 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
 	type CacheAdapter,
 	type CacheItem,
 	type ManagerTypeShape,
 	type MethodType,
-	type RuntimeTransport,
 	type SyncEnvelope
 } from '../../src/client/core.ts';
+import { ManualTransport } from '../fixtures/clientRuntime.ts';
+import { syncResponse } from '../fixtures/responses.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface CacheManager extends ManagerTypeShape {
@@ -24,21 +24,6 @@ interface CacheManager extends ManagerTypeShape {
 			{ readonly items: readonly { readonly id: string; readonly title: string }[] }
 		>;
 	};
-}
-
-class ManualTransport implements RuntimeTransport {
-	private onEnvelope: ((envelope: SyncEnvelope) => void) | undefined;
-
-	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]) {
-		this.onEnvelope = options.onEnvelope;
-		return ok(() => {
-			this.onEnvelope = undefined;
-		});
-	}
-
-	emit(envelope: SyncEnvelope): void {
-		this.onEnvelope?.(envelope);
-	}
 }
 
 beforeEach(() => {
@@ -175,8 +160,4 @@ function cachedTitle(item: CacheItem<unknown> | undefined, id: string): string |
 		}
 	).baseItems;
 	return items?.find((value) => value.id === id)?.title;
-}
-
-function syncResponse(value: unknown): Response {
-	return Response.json({ isOk: true, isError: false, value });
 }

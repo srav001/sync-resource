@@ -5,12 +5,12 @@ import {
 	createStore,
 	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
 	type MethodType,
 	type RuntimeTransport,
 	type SyncEnvelope
 } from '../../src/client/core.ts';
+import { noopCache } from '../fixtures/clientRuntime.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface Note {
@@ -25,14 +25,6 @@ interface RaceManager extends ManagerTypeShape {
 		readonly list: MethodType<{ readonly limit: number }, never, { readonly items: readonly Note[] }>;
 	};
 }
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
 
 afterEach(() => resetSyncConfiguration());
 
@@ -65,7 +57,7 @@ describe('reads racing live envelopes', () => {
 		const staleRead = new Deferred<Response>();
 		let calls = 0;
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => {
 				calls += 1;
@@ -110,7 +102,7 @@ describe('reads racing live envelopes', () => {
 		];
 		const second: readonly Note[] = [{ id: 'n3', title: 'C' }];
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async (input) => {
 				const query =
@@ -149,7 +141,7 @@ describe('reads racing live envelopes', () => {
 		};
 		let calls = 0;
 		configureSync({
-			cache: { adapter: cache },
+			cache: { adapter: noopCache },
 			transport,
 			fetch: async () => {
 				calls += 1;

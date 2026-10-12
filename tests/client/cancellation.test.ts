@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
 	configureSync,
 	createStore,
-	ok,
 	resetSyncConfiguration,
-	type CacheAdapter,
 	type ManagerTypeShape,
-	type MethodType,
-	type RuntimeTransport
+	type MethodType
 } from '../../src/client/core.ts';
+import { waitFor } from '../fixtures/async.ts';
+import { noopCache, noopTransport } from '../fixtures/clientRuntime.ts';
+import { syncResponse } from '../fixtures/responses.ts';
+import { Deferred } from '../fixtures/syncSystem.ts';
 
 interface ListManager extends ManagerTypeShape {
 	readonly key: 'cancellation-list';
@@ -35,20 +36,6 @@ interface GetManager extends ManagerTypeShape {
 		readonly get: MethodType<never, never, { readonly id: string; readonly title: string }>;
 	};
 }
-
-const cache: CacheAdapter = {
-	async get() {
-		return undefined;
-	},
-	async set() {},
-	async del() {}
-};
-
-const transport: RuntimeTransport = {
-	async subscribe() {
-		return ok(() => {});
-	}
-};
 
 afterEach(() => {
 	resetSyncConfiguration();
@@ -97,7 +84,7 @@ describe('client request cancellation', () => {
 	});
 
 	it('characterizes a read response that arrives after store disposal', async () => {
-		const response = deferred<Response>();
+		const response = new Deferred<Response>();
 		let requestSignal: AbortSignal | null | undefined;
 		const store = createGetStore(async (_input, init) => {
 			requestSignal = init?.signal;
@@ -119,7 +106,7 @@ describe('client request cancellation', () => {
 	});
 
 	it('characterizes an optimistic write response that arrives after store disposal', async () => {
-		const response = deferred<Response>();
+		const response = new Deferred<Response>();
 		let requestSignal: AbortSignal | null | undefined;
 		const store = createListStore(async (_input, init) => {
 			requestSignal = init?.signal;
@@ -144,8 +131,8 @@ describe('client request cancellation', () => {
 
 function createListStore(fetchImpl: typeof fetch): ReturnType<typeof createStore<ListManager>> {
 	configureSync({
-		cache: { adapter: cache },
-		transport,
+		cache: { adapter: noopCache },
+		transport: noopTransport,
 		fetch: fetchImpl,
 		createId: (prefix) => `${prefix}-1`
 	});
@@ -159,8 +146,8 @@ function createListStore(fetchImpl: typeof fetch): ReturnType<typeof createStore
 
 function createGetStore(fetchImpl: typeof fetch): ReturnType<typeof createStore<GetManager>> {
 	configureSync({
-		cache: { adapter: cache },
-		transport,
+		cache: { adapter: noopCache },
+		transport: noopTransport,
 		fetch: fetchImpl,
 		createId: (prefix) => `${prefix}-1`
 	});
@@ -185,29 +172,4 @@ function abortAwareFetch(onStart?: () => void): typeof fetch {
 			signal.addEventListener('abort', () => reject(signal.reason), { once: true });
 		});
 	};
-}
-
-function syncResponse(value: unknown): Response {
-	return Response.json({ isOk: true, isError: false, value });
-}
-
-function deferred<TValue>() {
-	let resolvePromise!: (value: TValue | PromiseLike<TValue>) => void;
-	const promise = new Promise<TValue>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return {
-		promise,
-		resolve: resolvePromise
-	};
-}
-
-async function waitFor(condition: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) {
-			return;
-		}
-		await Promise.resolve();
-	}
-	throw new Error('Condition was not reached.');
 }
