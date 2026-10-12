@@ -8,6 +8,10 @@ export function isRecord(value: unknown): value is ValueRecord {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export function readString<TValue>(value: TValue): string | undefined {
+	return isString(value) ? value : undefined;
+}
+
 export function isString<TValue>(value: TValue): value is TValue & string {
 	return typeof value === 'string';
 }

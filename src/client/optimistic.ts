@@ -1,6 +1,7 @@
-import { isRecord, isString, type ValueRecord } from '../shared/guards.ts';
+import { isRecord, isString, readString, type ValueRecord } from '../shared/guards.ts';
+import type { SyncEnvelope } from '../shared/index.ts';
 import { stableStringify, toStableJson } from '../shared/stableJson.ts';
-import type { PageState, ReconcileConfig, SyncEnvelope } from './types.ts';
+import type { PageState, ReconcileConfig } from './types.ts';
 
 const MAX_FAMILIES = 8;
 
@@ -161,16 +162,13 @@ export function applyPageOutput<TOutput, TQuery>(
 		return;
 	}
 
-	const hasDefinedMeta = hasOwn(output, 'meta') && output.meta !== undefined;
 	applyPageItems(
 		state,
 		output.items,
 		query,
 		readString(output.pageCursor),
 		readString(output.syncCursor),
-		hasDefinedMeta ? output.meta : undefined,
-		hasDefinedMeta,
-		'network',
+		output.meta,
 		reconcile,
 		activate
 	);
@@ -234,8 +232,6 @@ export function applyEnvelope<TQuery>(
 				syncChange.pageCursor,
 				syncChange.syncCursor ?? envelope.cursor,
 				undefined,
-				false,
-				'network',
 				reconcile,
 				true
 			);
@@ -512,14 +508,12 @@ function applyPageItems<TItem, TQuery, TMeta>(
 	pageCursor: string | undefined,
 	syncCursor: string | undefined,
 	meta: TMeta,
-	hasMeta: boolean,
-	source: 'cache' | 'network' | 'realtime',
 	reconcile: OptimisticReconcile<TItem, TQuery>,
 	activate: boolean
 ): void {
 	const familyKey = queryFamilyKey(query);
 	const family = getOrCreateFamily(state, familyKey, queryWithoutCursor(query));
-	const cursorIn = readStringFromRecord(query, 'cursor');
+	const cursorIn = isRecord(query) ? readString(query.cursor) : undefined;
 	let ids: string[] = [];
 	let pageValues: TItem[] = [];
 	let seenBefore = false;
@@ -557,7 +551,7 @@ function applyPageItems<TItem, TQuery, TMeta>(
 		stale: false,
 		repairNeeded: false,
 		lastSyncCursor: syncCursor,
-		source
+		source: 'network'
 	};
 	const replaced = family.ids.slice(replaceStart, replaceEnd);
 	replaceRange(family.ids, replaceStart, replaceEnd, ids);
@@ -574,7 +568,7 @@ function applyPageItems<TItem, TQuery, TMeta>(
 	if (seenBefore) {
 		refreshLoadedItems(state, reconcile);
 	}
-	if (hasMeta) {
+	if (meta !== undefined) {
 		family.meta = meta;
 	}
 	family.sorted = (cursorIn ? family.sorted : true) && isSortedFrom(family, replaceStart, reconcile.compare);
@@ -899,10 +893,6 @@ function getOrCreateFamily<TItem, TQuery>(
 	return family;
 }
 
-function hasOwn<TValue>(value: TValue, key: string): boolean {
-	return Object.prototype.hasOwnProperty.call(value, key);
-}
-
 function queryFamilyKey<TQuery>(query: TQuery): string {
 	return stableStringify(queryWithoutCursor(query));
 }
@@ -1027,15 +1017,4 @@ function getDefaultId<TValue>(value: TValue): string | undefined {
 		return undefined;
 	}
 	return isString(value.id) ? value.id : undefined;
-}
-
-function readString<TValue>(value: TValue): string | undefined {
-	return isString(value) ? value : undefined;
-}
-
-function readStringFromRecord<TValue>(value: TValue, key: string): string | undefined {
-	if (!isRecord(value)) {
-		return undefined;
-	}
-	return readString(value[key]);
 }
