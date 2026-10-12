@@ -318,6 +318,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly queuedForcedHydrates = new Map<string, ForcedHydrationQueue>();
 	private readonly successfulHydrates = new Map<string, SyncResult<void, SyncError>>();
 	private transportUnsubscribe: (() => void) | undefined;
+	private realtimeScope: string | undefined;
 	private connectPromise: Promise<SyncResult<void, SyncError>> | undefined;
 	private visibleItemsCache: readonly CollectionItem<TManager>[] | undefined;
 	private readonly listItemsCache = new Map<string, readonly CollectionItem<TManager>[]>();
@@ -899,7 +900,11 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			return err('disposed', 'Store is disposed.');
 		}
 		if (this.transportUnsubscribe) {
-			return ok(undefined);
+			if (this.realtimeScope === this.scopeCacheKey()) {
+				return ok(undefined);
+			}
+			this.transportUnsubscribe();
+			this.transportUnsubscribe = undefined;
 		}
 		if (this.connectPromise) {
 			return this.connectPromise;
@@ -914,11 +919,12 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const params = this.config.getParams();
 		const baseUrl = this.config.getUrl(params).replace(/\/$/, '');
 		const controller = this.abort;
+		const scope = this.scopeCacheKey();
 		const result = await this.runtime.transport.subscribe({
 			url: this.realtimeUrl(`${baseUrl}/events`),
 			connectUrl: this.realtimeUrl(`${baseUrl}/connect`),
 			managerKey: this.config.key,
-			scope: this.scopeCacheKey(),
+			scope,
 			signal: controller.signal,
 			getCursor: () => this.state.cursor,
 			onReconnect: this.handleReconnect,
@@ -932,6 +938,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 		if (result.isOk()) {
 			this.transportUnsubscribe = result.value;
+			this.realtimeScope = scope;
 			return ok(undefined);
 		}
 		this.lastError = result.error;
