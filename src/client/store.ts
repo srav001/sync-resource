@@ -417,14 +417,11 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	async restore(): Promise<SyncResult<void, SyncError>> {
 		try {
 			const cached = await this.loadCachedState();
-			if (!cached) {
-				return ok(undefined);
-			}
-			if (this.disposed || this.pendingCommands.size > 0) {
+			if (!cached || this.disposed || this.pendingCommands.size > 0) {
 				return ok(undefined);
 			}
 
-			this.applyCachedState(cached);
+			restoreOptimisticState(this.state, cached, this.reconcileIdentity());
 			this.emit('data', 'items', 'listMeta', 'pages');
 			return ok(undefined);
 		} catch (cause) {
@@ -651,7 +648,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private bootstrapCacheRead(): void {
-		// Construction must stay network-free; cache bootstrap gives instant UI without triggering server RU.
+		// Construction must stay network-free; the cache read gives instant UI.
 		this.bootstrap = { key: this.cacheKey(), task: this.restore() };
 	}
 
@@ -801,7 +798,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			const result = await this.request<TOutput>(method, 'POST', args, undefined, mutationId, options?.signal);
 			if (result.isErr()) {
 				this.pendingCommands.delete(mutationId);
-				return err(await this.rollback(result.error));
+				return err(this.rollback(result.error));
 			}
 
 			this.pendingCommands.set(mutationId, ackPendingCommand(command));
@@ -981,7 +978,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const plan = this.repairScheduler.plan(activePageMetas(this.state), envelope.reset);
 		if (plan.kind !== 'none') {
 			this.repairRequested = true;
-			this.scheduleRepair();
+			this.repair();
 		}
 	}
 
@@ -1023,34 +1020,26 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		return reconcileFromConfig(this.reconcile, () => this.config.getParams());
 	}
 
-	private captureState(): CachedOptimisticState {
-		return captureOptimisticState(this.state);
-	}
-
-	private async rollback(originalError: SyncError): Promise<SyncError> {
+	private rollback(originalError: SyncError): SyncError {
 		refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
-		const recoveredError = this.withRecovery(originalError, 'memory');
+		const recoveredError = syncError(originalError.code, originalError.message, {
+			details: originalError.details,
+			cause: originalError.cause,
+			recovery: { restored: true, source: 'memory' }
+		});
 		this.lastError = recoveredError;
 		this.emit('data', 'items', 'pages', 'pending', 'error');
 		this.scheduleCachedRuntimeStateSave();
 		return recoveredError;
 	}
 
-	private scheduleRepair(): void {
-		this.repair();
-	}
-
-	private applyCachedState(snapshot: CachedOptimisticState): void {
-		restoreOptimisticState(this.state, snapshot, this.reconcileIdentity());
-	}
-
 	private async loadCachedState(): Promise<CachedOptimisticState | undefined> {
-		const item = await this.cache().get<CachedOptimisticState>(this.cacheKey());
+		const item = await this.globalCache.adapter.get<CachedOptimisticState>(this.cacheKey());
 		if (!item) {
 			return undefined;
 		}
 		if (item.expiry > 0 && item.expiry < this.runtime.now()) {
-			await this.cache().del(this.cacheKey());
+			await this.globalCache.adapter.del(this.cacheKey());
 			return undefined;
 		}
 		return item.value;
@@ -1094,8 +1083,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private async saveCachedState(): Promise<void> {
 		const ttlMs = this.cacheTtlMs();
-		await this.cache().set(this.cacheKey(), {
-			value: this.captureState(),
+		await this.globalCache.adapter.set(this.cacheKey(), {
+			value: captureOptimisticState(this.state),
 			expiry: this.runtime.now() + ttlMs
 		});
 	}
@@ -1112,17 +1101,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		this.cachedScopeParamsText = paramsText;
 		this.cachedScopeCacheKey = `sync-resource:${this.config.key}:${paramsText}`;
 		return this.cachedScopeCacheKey;
-	}
-
-	private withRecovery(syncErrorValue: SyncError, source: 'memory' | 'idb'): SyncError {
-		return syncError(syncErrorValue.code, syncErrorValue.message, {
-			details: syncErrorValue.details,
-			cause: syncErrorValue.cause,
-			recovery: {
-				restored: true,
-				source
-			}
-		});
 	}
 
 	private recordError(errorValue: SyncError): SyncError {
@@ -1315,9 +1293,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private list<TQuery>(query: TQuery): StoreListHandle<TManager> {
 		return {
 			items: () => this.itemsForList(query),
-			meta: () => this.metaForList(query),
-			pages: () => this.pagesForList(query),
-			refresh: () => this.refreshList(query),
+			meta: () => metaForQueryFamily(this.state, query),
+			pages: () => pagesForQueryFamily(this.state, query),
+			refresh: () => this.requestPage(query, query, false),
 			loadMore: () => this.loadMore(query)
 		};
 	}
@@ -1337,22 +1315,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		);
 		this.listItemsCache.set(key, items);
 		return items;
-	}
-
-	private metaForList<TQuery>(query: TQuery): CollectionMeta<TManager> | undefined {
-		return metaForQueryFamily(this.state, query);
-	}
-
-	private pagesForList<TQuery>(query: TQuery): readonly PageState[] {
-		return pagesForQueryFamily(this.state, query);
-	}
-
-	private async refreshList<TQuery>(query: TQuery): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
-		return this.requestPage(query, query, false);
-	}
-
-	private cache() {
-		return this.globalCache.adapter;
 	}
 
 	private cacheTtlMs(): number {
