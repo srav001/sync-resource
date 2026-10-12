@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vite-plus/test';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { resetSyncConfiguration } from '../../src/client/core.ts';
 import { manager, resource, type ManagerOutboxRead, type SyncEnvelope } from '../../src/server/index.ts';
@@ -7,6 +7,7 @@ import { openSharedStream, readSyncEnvelope } from '../fixtures/sharedStream.ts'
 import { createSyncTestSystem } from '../fixtures/syncSystem.ts';
 
 afterEach(() => {
+	vi.useRealTimers();
 	resetSyncConfiguration();
 	resetSharedStreamForTests();
 });
@@ -70,6 +71,41 @@ describe('manager on the shared stream', () => {
 			changes: [{ type: 'reset', manifest: { reason: 'retention_gap', previousCursor: cursor } }]
 		});
 		await resetReader.cancel();
+	});
+
+	it('drops the envelope history of an idle scope except its newest envelope', async () => {
+		vi.useFakeTimers();
+		const note = { parse: (value: unknown) => value as { id: string } };
+		const notes = manager({
+			key: 'notes',
+			resource: resource({ parse: (value: unknown) => value as { workspaceId: string } }, (method) => ({
+				add: method.add({ input: note, output: note, handler: ({ input, ctx }) => ctx.ok(input) })
+			})),
+			authorize: () => true,
+			scope: (params) => params.workspaceId
+		});
+		const params = { workspaceId: 'ws' };
+		const bound = notes.bind(params);
+		const first = await openSharedStream(notes.http, params);
+		const cursors: string[] = [];
+		for (const id of ['n1', 'n2', 'n3']) {
+			await bound.add({ input: { id } });
+			cursors.push((await readSyncEnvelope(first)).cursor);
+		}
+		await first.cancel();
+		await vi.advanceTimersByTimeAsync(5 * 60_000);
+		vi.useRealTimers();
+
+		const current = await openSharedStream(notes.http, params, { afterCursor: cursors[2] });
+		await bound.add({ input: { id: 'n4' } });
+		expect((await readSyncEnvelope(current)).changes).toMatchObject([{ type: 'itemAdded', id: 'n4' }]);
+		await current.cancel();
+
+		const stale = await openSharedStream(notes.http, params, { afterCursor: cursors[0] });
+		expect((await readSyncEnvelope(stale)).changes).toMatchObject([
+			{ type: 'reset', manifest: { reason: 'retention_gap', previousCursor: cursors[0] } }
+		]);
+		await stale.cancel();
 	});
 
 	describe('replay from a custom outbox', () => {

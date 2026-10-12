@@ -471,6 +471,8 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 interface ScopeLog {
 	readonly ring: SyncEnvelope[];
 	next: number;
+	// Idle pruning dropped the scope's oldest envelopes, so its origin cursor can no longer be replayed.
+	readonly trimmed: boolean;
 }
 
 export class MemoryManagerOutbox implements ManagerSyncPersistence {
@@ -490,7 +492,7 @@ export class MemoryManagerOutbox implements ManagerSyncPersistence {
 		}
 		let log = this.scopes.get(envelope.scope);
 		if (!log) {
-			log = { ring: [], next: 0 };
+			log = { ring: [], next: 0, trimmed: false };
 			this.scopes.set(envelope.scope, log);
 		}
 		log.ring[log.next % this.maxEnvelopesPerScope] = envelope;
@@ -503,26 +505,26 @@ export class MemoryManagerOutbox implements ManagerSyncPersistence {
 	}
 
 	readAfter(scope: string, cursor: string, limit: number): ManagerOutboxRead {
-		const { ring, next } = this.scopes.get(scope) ?? { ring: [], next: 0 };
-		const retainedEnvelopeCount = Math.min(next, this.maxEnvelopesPerScope);
-		const start = this.replayStart(ring, next, cursor);
+		const log = this.scopes.get(scope) ?? { ring: [], next: 0, trimmed: false };
+		const retainedEnvelopeCount = Math.min(log.next, this.maxEnvelopesPerScope);
+		const start = this.replayStart(log, cursor);
 		if (start === undefined) {
 			return { envelopes: [], cursorFound: false, retainedEnvelopeCount };
 		}
 		const envelopes: SyncEnvelope[] = [];
-		for (let sequence = start; sequence < next && envelopes.length < limit; sequence += 1) {
-			envelopes.push(ring[sequence % this.maxEnvelopesPerScope] as SyncEnvelope);
+		for (let sequence = start; sequence < log.next && envelopes.length < limit; sequence += 1) {
+			envelopes.push(log.ring[sequence % this.maxEnvelopesPerScope] as SyncEnvelope);
 		}
 		return { envelopes, cursorFound: true, retainedEnvelopeCount };
 	}
 
-	private replayStart(ring: readonly SyncEnvelope[], next: number, cursor: string): number | undefined {
+	private replayStart(log: ScopeLog, cursor: string): number | undefined {
 		// The origin is replayable until trimming may have dropped the scope's first envelope.
 		if (cursor === this.origin) {
-			return next < this.maxEnvelopesPerScope ? 0 : undefined;
+			return log.trimmed || log.next >= this.maxEnvelopesPerScope ? undefined : 0;
 		}
-		for (let sequence = Math.max(0, next - this.maxEnvelopesPerScope); sequence < next; sequence += 1) {
-			if (ring[sequence % this.maxEnvelopesPerScope]?.cursor === cursor) {
+		for (let sequence = Math.max(0, log.next - this.maxEnvelopesPerScope); sequence < log.next; sequence += 1) {
+			if (log.ring[sequence % this.maxEnvelopesPerScope]?.cursor === cursor) {
 				return sequence + 1;
 			}
 		}
@@ -540,8 +542,14 @@ export class MemoryManagerOutbox implements ManagerSyncPersistence {
 		this.mutations.record(record);
 	}
 
+	// An idle scope keeps only its newest envelope, so a client exactly current still replays nothing and any older cursor resets.
 	pruneScope(scope: string): void {
 		this.mutations.pruneScope(scope);
+		const log = this.scopes.get(scope);
+		if (log && log.next > 1) {
+			const newest = log.ring[(log.next - 1) % this.maxEnvelopesPerScope] as SyncEnvelope;
+			this.scopes.set(scope, { ring: [newest], next: 1, trimmed: true });
+		}
 	}
 }
 
@@ -688,10 +696,8 @@ function resolveManagerPersistence(
 	if (persistence) {
 		return persistence;
 	}
-	if (isManagerSyncPersistence(outbox)) {
-		return outbox;
-	}
-	return new OutboxBackedManagerPersistence(outbox ?? new MemoryManagerOutbox());
+	const resolved = outbox ?? new MemoryManagerOutbox();
+	return isManagerSyncPersistence(resolved) ? resolved : new OutboxBackedManagerPersistence(resolved);
 }
 
 function isManagerSyncPersistence(value: ManagerOutbox | undefined): value is ManagerSyncPersistence {
