@@ -1,0 +1,330 @@
+# Migrating From v1 To v2
+
+v2 keeps the v1 resource, manager, and store APIs. The client and server protocol changed in three ways that need
+action: the browser now registers realtime subscriptions through a batch route, `hydrate()` resolves earlier, and
+`resetSharedStreamForTests` is no longer exported. Everything else is additive or automatic.
+
+## Checklist
+
+1. Mount the batch connect route on the server, or set `batchConnect: false` on the client. [Details](#1-mount-the-batch-connect-route-or-opt-out)
+2. Deploy the server before the v2 client. [Details](#1-mount-the-batch-connect-route-or-opt-out)
+3. Check code that relied on `hydrate()` also meaning "realtime is registered". [Details](#2-hydrate-resolves-when-the-read-is-applied)
+4. Remove `resetSharedStreamForTests` imports. [Details](#3-resetsharedstreamfortests-is-no-longer-exported)
+5. Only if you wrote your own outbox, persistence, or realtime bus: review [custom persistence](#4-custom-outbox-persistence-or-realtime-bus).
+6. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
+   `sync-resource/server/effect` ([requirements](#requirements)).
+
+Then adopt what you want from [Optional additions](#optional-additions). Automatic behavior changes need no code and
+are listed in [No code change needed](#no-code-change-needed).
+
+## Required changes
+
+### 1. Mount the batch connect route, or opt out
+
+**What changed.** v1 sent one `POST <manager>/connect` per store. v2 sends every registration queued in the same
+microtask as one `POST /api/sync-resource/connect` (a boot that opens 13 stores sends one request). `batchConnect` defaults
+to `true`.
+
+**Why it matters.** Without the route, each registration fails with `bad_request` (`Sync subscribe failed: 404`), the
+error appears as the store error, and the client retries with backoff up to 30 seconds. Reads, writes, and cache still
+work; realtime does not.
+
+**Before (v1).** Server mounted the shared stream and the per-manager routes only:
+
+```ts
+import { httpSharedSyncStream } from 'sync-resource/server';
+
+export function handleSyncResourceStream(request: Request): Promise<Response> {
+	return httpSharedSyncStream(request);
+}
+```
+
+**After (v2), Promise server.** Mount the batch route once. `handleApplicationRequest` is your app's own
+`(request: Request) => Promise<Response>` handler; the batch route calls it once per item with a `POST` built from the
+item URL, so each item runs through your normal router, authentication, and manager `/connect` route:
+
+```ts
+import { httpSharedSyncConnect, httpSharedSyncStream } from 'sync-resource/server';
+
+export function handleSyncResourceStream(request: Request): Promise<Response> {
+	return httpSharedSyncStream(request);
+}
+
+export function handleSyncResourceConnect(request: Request): Promise<Response> {
+	return httpSharedSyncConnect(request, handleApplicationRequest);
+}
+```
+
+**After (v2), Effect server.** `httpSharedSyncConnectRoute(path)` is a Layer that requires the `HttpRouter`; provide the
+same route middleware to it as to your manager routes:
+
+```ts
+import { Layer } from 'effect';
+import { HttpRouter } from 'effect/http';
+import { httpSharedSyncConnectRoute, httpSharedSyncStreamRoute } from 'sync-resource/server/effect';
+
+const SyncRoutes = Layer.mergeAll(
+	HttpRouter.addAll([httpSharedSyncStreamRoute('/api/sync-resource/stream') /* , ...managerHttpRoutes(...) */]),
+	httpSharedSyncConnectRoute('/api/sync-resource/connect')
+);
+```
+
+**Different path.** Pass it on the client:
+
+```ts
+configureSync({ cache: { adapter }, connectUrl: '/internal/sync/connect' });
+```
+
+**Opt out.** Keep v1 behavior and do not mount the route:
+
+```ts
+configureSync({ cache: { adapter }, batchConnect: false });
+```
+
+Notes:
+
+- Keep the per-manager `/connect` routes mounted; the batch route dispatches to them.
+- The batch route accepts 1 to 64 same-origin paths ending in `/connect`; the client splits larger queues.
+- Deploy order: ship the server with the batch route first. The per-manager routes are unchanged, so v1 clients keep
+  using them. A v2 client against a server without the route loses realtime until the route exists (or `batchConnect: false`).
+- A store URL on another origin than the batch route connects directly.
+
+### 2. `hydrate()` resolves when the read is applied
+
+**What changed.** v1 resolved `hydrate()` after cache restore, the read, and the realtime registration, and returned an
+error if the registration failed. v2 resolves once the read is applied and registers realtime in the background; the
+read's replay cursor covers the gap. A registration failure is reported as the store error and retried; it is no longer
+in `hydrate()`'s result. `isHydrating()` covers cache restore and the read only. A repeated `hydrate()` after success
+does not read again; it only re-registers a failed registration.
+
+**Before (v1).**
+
+```ts
+const result = await notes.hydrate();
+if (result.isErr()) {
+	showError(result.error); // cache, read, or realtime registration failure
+}
+```
+
+**After (v2).**
+
+```ts
+const result = await notes.hydrate();
+if (result.isErr()) {
+	showError(result.error); // cache or read failure only
+}
+
+const stop = notes.on.error((error) => {
+	if (error) {
+		showRealtimeProblem(error); // includes a failed realtime registration, which is retried
+	}
+});
+
+const registered = await notes.connect(); // only when you need "realtime is registered"
+```
+
+### 3. `resetSharedStreamForTests` is no longer exported
+
+`sync-resource/server` no longer exports it. There is no public replacement.
+
+**Before (v1).**
+
+```ts
+import { resetSharedStreamForTests } from 'sync-resource/server';
+
+afterEach(() => resetSharedStreamForTests());
+```
+
+**After (v2).** Isolate tests with their own manager keys and `x-sync-transport-id` values, and cancel the stream readers
+a test opens:
+
+```ts
+const response = await httpSharedSyncStream(
+	new Request('http://sync.test/stream', {
+		method: 'POST',
+		headers: { 'x-sync-transport-id': `test-${crypto.randomUUID()}` }
+	})
+);
+const reader = response.body!.getReader();
+// ... assertions ...
+await reader.cancel();
+```
+
+### 4. Custom outbox, persistence, or realtime bus
+
+Skip this if you use `MemoryManagerOutbox` and `MemoryManagerRealtimeBus`.
+
+**Replay now resets instead of guessing.** v1 reset only when an unknown cursor met a non-empty scope, and silently sent
+the first `replayLimit` envelopes when more were pending. v2 resets for every unknown cursor (including an empty scope)
+and whenever more than `replayLimit` envelopes are pending; the stream reads `replayLimit + 1` envelopes to detect
+that. Your `readAfter` must report `cursorFound` accurately and honor `limit`:
+
+```ts
+const outbox: ManagerOutbox = {
+	append: (envelope) => db.append(envelope),
+	async readAfter(scope, cursor, limit) {
+		const page = await db.after(scope, cursor, limit); // strictly after `cursor`, at most `limit`
+		return { envelopes: page.rows, cursorFound: page.found, retainedEnvelopeCount: page.retained };
+	}
+};
+```
+
+**Optional `execution` argument.** `append`, `readAfter`, `readMutation`, `recordMutation`, `latestCursor`, the
+`authorize` hook (third argument), and `realtimeBus.subscribe` / pub-sub `subscribe` now receive
+`execution: { signal: AbortSignal }`. Existing two-argument implementations keep compiling and running. Observe the signal
+to cancel work:
+
+```ts
+// Before (v1)
+authorize: (context, params) => canRead(context, params);
+// After (v2), optional
+authorize: (context, params, { signal }) => canRead(context, params, signal);
+```
+
+## Requirements
+
+- Node `>=22.18.0` (unchanged).
+- `effect` `>=4.0.3 <5`, optional peer. Install it only to import `sync-resource/server/effect`. The Promise server,
+  shared, and client entry points never load it. Effect v3 is not supported.
+- `react`, `solid-js`, `vue` peers: unchanged and optional.
+- New public subpath: `sync-resource/server/effect`. New exports from `sync-resource/server`: `httpSharedSyncConnect`,
+  and the `OperationExecution` type.
+
+## No code change needed
+
+- A restarted server or trimmed outbox now sends a reset for an unknown cursor; the client repairs automatically.
+- Reads carry a replay cursor when the outbox implements `latestCursor` (`MemoryManagerOutbox` does); the read, not a
+  cursor restored from cache, defines the store cursor.
+- A live envelope that arrives while a read is in flight is re-applied over the read response.
+- A failed realtime registration retries with backoff (1 s doubling to 30 s) until it succeeds or the last subscriber leaves.
+- The tab that owns the stream registers after its first stream attempt, so a registration is not sent twice.
+- A store whose `getParams()` scope changes ends the old registration and registers the new scope on its next
+  `hydrate()` or `connect()`.
+- Live envelopes for a scope are sent after its replayed envelopes, in order.
+- The client discards malformed SSE chunk frames and counts SSE size limits in UTF-8 bytes.
+- Adapters (`sync-resource/client/react`, `solid`, `vue`) are unchanged.
+- TypeScript signatures that only widened (`Validator.parse`, `OperationMeta`, telemetry contexts now extend
+  `OperationExecution`) need no change.
+
+## Optional additions
+
+### `latestCursor` on a custom outbox
+
+Without it, reads of a custom outbox return no cursor (as in v1). With it, a `list` or `get` read carries the scope's
+latest cursor, captured before the handler runs, so replay covers commits that land between the read and the realtime
+registration. Return the newest cursor, or an origin cursor `readAfter` accepts for an empty scope:
+
+```ts
+const outbox: ManagerOutbox = {
+	// append, readAfter as above
+	async latestCursor(scope) {
+		return (await db.newestCursor(scope)) ?? (await db.scopeOrigin(scope));
+	}
+};
+```
+
+Every returned cursor must be one `readAfter` can find. Return `undefined` when you cannot name a position.
+
+### Cache adapter `keys()`
+
+Add `keys()` to your `CacheAdapter` and the runtime removes expired snapshots of scopes that are never opened again: one
+sweep 60 seconds after `configureSync`, at most once a day (it writes a `sync-resource:cache-sweep` entry through the
+adapter). It deletes every expired entry `keys()` returns, so use a store dedicated to Sync Resource.
+
+```ts
+const adapter: CacheAdapter = {
+	get: (key) => idb.get(key),
+	set: (key, item) => idb.set(key, item),
+	del: (key) => idb.delete(key),
+	keys: () => idb.keys() // new, optional
+};
+```
+
+### Effect server boundary
+
+`sync-resource/server/effect` mirrors `resource` and `manager` with Effect handlers, typed failures, services, and
+interruption. The client and HTTP protocol are identical, so you can move one manager at a time.
+
+**Before (Promise).**
+
+```ts
+import { manager, resource } from 'sync-resource/server';
+
+const notesResource = resource(paramsSchema, (method) => ({
+	mutate: method.mutate({
+		query: querySchema,
+		input: noteSchema,
+		output: noteSchema,
+		async handler({ query, input, ctx }) {
+			const note = await notesRepository.find(query.id);
+			if (!note) {
+				return ctx.error(ctx.syncError('not_found', 'Note not found.'));
+			}
+			return ctx.ok({ ...note, ...input });
+		}
+	})
+}));
+
+const notesManager = manager({
+	key: 'notes',
+	resource: notesResource,
+	authorize: (context, params) => canReadWorkspace(context, params),
+	scope: (params) => params.workspaceId
+});
+```
+
+**After (Effect).** Return the output (or `Effect.fail(syncError(...))`) instead of `ctx.ok`/`ctx.error`; `authorize` returns
+an Effect; `manager(...)` is itself an Effect:
+
+```ts
+import { Effect } from 'effect';
+import { manager, resource } from 'sync-resource/server/effect';
+import { syncError } from 'sync-resource/server';
+
+const notesResource = resource(paramsSchema, (method) => ({
+	mutate: method.mutate({
+		query: querySchema,
+		input: noteSchema,
+		output: noteSchema,
+		handler: ({ query, input }) =>
+			Effect.gen(function* () {
+				const note = yield* notesRepository.find(query.id);
+				if (!note) {
+					return yield* Effect.fail(syncError('not_found', 'Note not found.'));
+				}
+				return { ...note, ...input };
+			})
+	})
+}));
+
+const program = Effect.gen(function* () {
+	const notesManager = yield* manager({
+		key: 'notes',
+		resource: notesResource,
+		authorize: (context, params) => canReadWorkspace(context, params), // returns an Effect
+		scope: (params) => params.workspaceId
+	});
+	return notesManager;
+});
+```
+
+Mounting uses `httpSharedSyncStreamRoute`, `httpSharedSyncConnectRoute`, and `managerHttpRoutes` on Effect's
+`HttpRouter`; see [Effect Server API](./usage.md#effect-server-api).
+
+### `addPlacement: 'sorted'`
+
+Opt in to sorted placement of the current browser's acknowledged `add` writes, using the same `matchesQuery` and
+`compare` as realtime adds. It requires `compare`; store construction throws without it.
+
+```ts
+reconcile.defaults({
+	compare: (left, right) => right.createdAt.localeCompare(left.createdAt),
+	addPlacement: 'sorted'
+});
+```
+
+### `holdRegistrations` on a custom transport
+
+Only for apps that pass their own `transport` to `createRuntime`. Implement the optional
+`holdRegistrations(): () => void` and the store calls it while a read is in flight and releases it after, so queued
+registrations go out together. Without it, nothing changes; `batchConnect` and `connectUrl` apply only to the built-in transport.

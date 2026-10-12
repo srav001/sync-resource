@@ -8,6 +8,9 @@ The database remains authoritative. Browser cache accelerates startup, optimisti
 and realtime envelopes deliver committed changes. Cursor replay and repair preserve correctness when delivery is
 interrupted.
 
+Server code is written with plain Promises (`sync-resource/server`) or with Effect v4 (`sync-resource/server/effect`);
+both expose the same protocol, so one client talks to either. See [Effect Server API](#effect-server-api).
+
 Examples in this guide use the framework-neutral JavaScript client. The same configuration and actions work through
 the [Solid](./solid.md), [Vue](./vue.md), and [React](./react.md) adapters; their guides show only the reactive-read and
 lifecycle translation.
@@ -496,18 +499,13 @@ Cursor contract:
 
 - Cursors are opaque replay tokens scoped to one manager scope.
 - `readAfter(scope, cursor, limit)` must return envelopes strictly after that cursor when it is retained.
-- If the cursor is not retained, return `cursorFound: false` and the retained count; the stream always emits a reset for an unknown cursor, including when nothing is retained. The stream reads up to `replayLimit + 1` envelopes and emits a reset instead of a partial replay when more than `replayLimit` are pending.
+- If the cursor is not retained, return `cursorFound: false` and the retained count; the stream always emits a reset for an unknown cursor, including when nothing is retained. The stream reads up to `replayLimit + 1` envelopes (manager option `replayLimit`, default 1000) and emits a reset instead of a partial replay when more than `replayLimit` are pending.
 - `latestCursor(scope)` is optional and returns the cursor of the newest retained envelope of the scope. For a scope with no retained envelope it returns an origin cursor that `readAfter` accepts as the start of the scope's history until trimming may have dropped an envelope (`MemoryManagerOutbox` uses one origin per instance, so an origin from another process is unknown and resets). Return `undefined` only when the outbox cannot name a position. Every returned cursor must be one `readAfter` can find. Effect outboxes and persistence take the same optional `latestCursor(scope)` returning an Effect.
 - Manager-generated cursors include process entropy to avoid cross-process token collisions, but they are not a durable ordered sequence by themselves.
 - Durable persistence should make replay ordering stable across processes. If the backing store owns sequence numbers, the resource/commit path should return that persisted cursor through `syncCursor`.
 - Read/list responses must not invent replay cursors that are not present in durable persistence. When a `list` or `get` read returns no `syncCursor` and the outbox implements `latestCursor`, the manager attaches the scope's latest outbox cursor, captured before the read handler runs, so replay covers commits that land between the read and the stream registration.
 
 Use `sourceCommit` when a resource needs the manager-supplied mutation record and envelope before committing the source DB write:
-
-Plain `sourceCommit.commit` has only `mutationRecord` and `envelope` in its public enumerable record shape. A
-non-enumerable cancellation signal remains available for existing abort-aware commit implementations; the opaque Effect
-execution environment is never exposed. The Effect entrypoint uses the same private channel when lowering an Effect
-commit to this plain contract.
 
 ```ts
 return ctx.ok({
@@ -542,6 +540,11 @@ return ctx.ok({
 
 This lets a resource use DB-native transactions, batch writes, or stored procedures without forcing the core sync API
 to know about that DB.
+
+Plain `sourceCommit.commit` has only `mutationRecord` and `envelope` in its public enumerable record shape. A
+non-enumerable cancellation signal remains available for existing abort-aware commit implementations; the opaque Effect
+execution environment is never exposed. The Effect entrypoint uses the same private channel when lowering an Effect
+commit to this plain contract.
 
 For database adapters:
 
@@ -718,8 +721,8 @@ Use `sync-resource/server/effect` when resource IO and manager hooks are Effects
 retain the same schemas and protocol behavior as `sync-resource/server`, while direct operations use the typed Effect
 failure channel and caller requirements:
 
-Effect is an optional peer dependency: install it only for this explicit entry point. Core, shared, client, and
-Promise-native server imports never load Effect.
+Effect is an optional peer dependency (`effect >=4.0.3 <5`): install it only for this explicit entry point. Core,
+shared, client, and Promise-native server imports never load Effect.
 
 ```ts
 import { Effect } from 'effect';
@@ -727,27 +730,29 @@ import { manager, resource } from 'sync-resource/server/effect';
 
 const notesResource = resource(noteParamsSchema, (method) => ({
 	list: method.list({
-		query: notePageQuerySchema,
 		output: notePageSchema,
-		handler: ({ params, query }) =>
+		handler: ({ params }) =>
 			Effect.gen(function* () {
 				const repository = yield* NotesRepository;
-				return yield* repository.list(params, query);
+				return yield* repository.list(params);
 			})
 	})
 }));
 
-const notesManager =
-	yield *
-	manager({
+const program = Effect.gen(function* () {
+	const notesManager = yield* manager({
 		key: 'notes',
 		resource: notesResource,
-		authorize: (context, params) => workspaceAccess(context, params),
+		authorize: (context, params) => workspaceAccess(context, params), // returns an Effect
 		scope: (params) => params.workspaceId
 	});
 
-const page = yield * notesManager.bind({ workspaceId }).list({ query });
+	return yield* notesManager.bind({ workspaceId }).list();
+});
 ```
+
+`manager(...)` is an Effect that requires the services its hooks use; `resource(...)` is a plain constructor. The
+manager's `.http` handlers and `.type` work exactly as in the Promise API.
 
 Effect resource handlers return a bare output or structured resource output. Expected failures use the Effect failure
 channel rather than `SyncResult`. Their `self`, direct resource, and bound manager methods are Effects. Every method exposes
@@ -864,13 +869,18 @@ Rules:
 
 - Never open one physical stream per store, manager, or project.
 - Duplicate stores for the same manager/scope share one logical subscription.
+- When `getParams()` changes the store's scope, the store ends the old scope's registration and registers the new one on
+  its next `hydrate()` or `connect()`.
 - Reconnect re-registers active logical subscriptions with their latest cursor.
 - The tab that owns the physical stream sends its first `/connect` registrations after the first stream attempt
   resolves (opened or failed), so a registration is never sent twice for one stream. Follower tabs register immediately.
   A `subscribe` call therefore resolves no earlier than the owner's first stream response.
 - A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. The error surfaces as the store error, not in `hydrate()`'s result.
 - Registrations are batched by default; see [Batched registration](#batched-registration).
-- Replay/reset remains per logical scope through durable outbox cursors.
+- Replay/reset remains per logical scope through durable outbox cursors. An unknown cursor, or more pending envelopes than
+  `replayLimit`, produces a reset instead of a partial replay.
+- While a scope replays, live envelopes for it are buffered and sent after the replayed ones, in order. Overlapping
+  replays of one scope keep buffering until the last one ends.
 - A read response never overwrites newer realtime state: envelopes applied while a read was in flight are re-applied over
   its output in arrival order, and the cursor stays at the last of them.
 - `/connect` returns the authoritative encoded scope before replay is delivered.
@@ -1004,6 +1014,18 @@ configureSync({
 });
 ```
 
+Cache adapter shape (the application implements it, typically over IndexedDB):
+
+```ts
+interface CacheAdapter {
+	readonly kind?: 'memory' | 'idb';
+	get<TValue>(key: string): Promise<CacheItem<TValue> | undefined>; // CacheItem is { value, expiry }
+	set<TValue>(key: string, value: CacheItem<TValue>): Promise<void>;
+	del(key: string): Promise<void>;
+	keys?(): Promise<readonly string[]>; // optional: enables the expired-snapshot sweep
+}
+```
+
 Runtime options:
 
 - `streamUrl` defaults to `/api/sync-resource/stream`.
@@ -1015,7 +1037,7 @@ Rules:
 - Do not pass runtime/fetch/transport/cache adapter into individual stores.
 - The app fetch/auth/session-cookie behavior belongs in one `configureSync(...)`.
 - The cache adapter is app-wide.
-- A snapshot is deleted when its store reads it after expiry. An adapter that implements the optional `keys()` also lets the runtime remove expired snapshots of scopes that are never opened again: one sweep, 60 seconds after `configureSync`, at most once a day across tabs and reloads (tracked by the `sync-resource:cache-sweep` entry). Entries with `expiry: 0` never expire.
+- A snapshot is deleted when its store reads it after expiry. An adapter that implements the optional `keys()` also lets the runtime remove expired snapshots of scopes that are never opened again: one sweep, 60 seconds after `configureSync`, at most once a day across tabs and reloads (tracked by a `sync-resource:cache-sweep` entry the sweep writes through the adapter). The sweep deletes every expired entry `keys()` returns, so use an adapter store dedicated to Sync Resource. Entries with `expiry: 0` never expire.
 - Store-level `cache` is only a policy override such as TTL.
 - Store construction must not trigger network requests.
 - Store construction can restore cached data in the background for instant UI.
@@ -1065,7 +1087,7 @@ const notes = createStore<NotesManager>(
 	(reconcile) =>
 		reconcile.defaults({
 			matchesQuery(note, { query }) {
-				return note.status === query.status;
+				return note.status === query?.status;
 			},
 			compare(left, right) {
 				return right.createdAt.localeCompare(left.createdAt);
@@ -1468,7 +1490,7 @@ const notes = createStore<NotesManager>(config, (reconcile) =>
 	reconcile.defaults({
 		itemId: (note) => note.noteKey,
 		targetId: ({ query }) => query.noteKey,
-		matchesQuery: (note, { query }) => note.status === query.status,
+		matchesQuery: (note, { query }) => note.status === query?.status,
 		compare: (left, right) => right.createdAt.localeCompare(left.createdAt)
 	})
 );
@@ -1616,7 +1638,7 @@ const notes = createStore<NotesManager>(
 	(reconcile) =>
 		reconcile.defaults({
 			matchesQuery(note, { query }) {
-				return note.status === query.status;
+				return note.status === query?.status;
 			},
 			compare(left, right) {
 				return right.createdAt.localeCompare(left.createdAt);
@@ -1651,8 +1673,9 @@ Use page repair before full scope reset when safe. Use full reset for cursor/fin
 
 Known reset reasons include:
 
-- `retention_gap`
-- `replay_failed`
+- `retention_gap`: the cursor is unknown to the outbox, or more envelopes are pending than `replayLimit`
+- `replay_failed`: reading the outbox for replay failed
+- `manual`, `auth_changed`, `schema_changed`, `cache_policy_changed`, `repair`: for resources that return `change.reset(manifest)`
 
 ## Recommended Implementation Path
 
@@ -1666,7 +1689,7 @@ When adding a synced domain:
 6. Create a manager with `key`, `resource`, `authorize`, and `scope`.
 7. Export `type XManager = typeof xManager.type`.
 8. Mount manager HTTP methods inside a normal domain route module.
-9. Mount the shared stream handler once for the host application.
+9. Mount the shared stream handler and the batch connect handler once for the host application.
 10. Configure frontend sync once with application fetch and an application-owned IndexedDB cache adapter.
 11. Create frontend stores with only manager type, params, URL, query, cache policy, and optional reconcile.
 12. Branch on `SyncResult` for frontend actions.
@@ -1684,6 +1707,7 @@ When adding a synced domain:
 - Putting DB dependencies into manager config.
 - Adding cache adapters per store instead of configuring cache once.
 - Opening one stream per store/manager/scope.
+- Mounting the stream route but not the batch connect route, while `batchConnect` is still `true`.
 - Treating HTTP ACK as finality.
 - Clearing pending state without authoritative envelope/reset coverage.
 - Persisting optimistic pending overlays or pending metadata in IndexedDB.

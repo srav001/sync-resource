@@ -43,6 +43,7 @@ and repair provide convergence.
 - `src/server/resource.ts` — typed resource definitions, validation, direct execution, batching, and commits
 - `src/server/manager.ts` — authorization, scope, HTTP methods, idempotency, persistence, replay, and finality
 - `src/server/effect.ts` — optional Effect resource/manager boundary, context and cancellation bridging, and HTTP routes
+- `src/server/connectBatch.ts` — batch connect route that dispatches each registration through the application's router
 - `src/server/streamMultiplexer.ts` — one physical SSE stream with logical manager/scope subscriptions
 - `src/server/realtime.ts` — optional cross-process realtime bus
 - `src/server/changes.ts` — change constructors
@@ -50,7 +51,7 @@ and repair provide convergence.
 
 ### Client
 
-- `src/client/runtime.ts` — global configuration, transport ownership, fetch, reconnect, and cache configuration
+- `src/client/runtime.ts` — global configuration, transport ownership, batched registration, fetch, reconnect, and cache configuration and sweep
 - `src/client/store.ts` — hydration, reads, writes, pending commands, events, and lifecycle
 - `src/client/optimistic.ts` — entity/page state, optimistic patches, rebase, and query-family reconciliation
 - `src/client/repair.ts` — repair planning and scheduling
@@ -181,3 +182,6 @@ behavior and API reference with framework-neutral examples. Update it whenever p
 assumptions, or core examples change. Framework guides translate that shared API into reactive reads and lifecycle
 ownership; do not duplicate the core protocol or action documentation in them. Keep `AGENTS.md` focused on contributor
 workflow and navigation.
+
+`docs/migrating-from-v1.md` is the only place for upgrade steps. Update it whenever a change needs action from existing
+users; keep migration content out of `README.md`.
