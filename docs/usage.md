@@ -937,6 +937,7 @@ Rules:
 - Do not pass runtime/fetch/transport/cache adapter into individual stores.
 - The app fetch/auth/session-cookie behavior belongs in one `configureSync(...)`.
 - The cache adapter is app-wide.
+- A snapshot is deleted when its store reads it after expiry. An adapter that implements the optional `keys()` also lets the runtime remove expired snapshots of scopes that are never opened again: one sweep, 60 seconds after `configureSync`, at most once a day across tabs and reloads (tracked by the `sync-resource:cache-sweep` entry). Entries with `expiry: 0` never expire.
 - Store-level `cache` is only a policy override such as TTL.
 - Store construction must not trigger network requests.
 - Store construction can restore cached data in the background for instant UI.

@@ -10,7 +10,14 @@ import {
 	parseSyncEnvelopeJson,
 	type SyncEnvelopeChunk
 } from '../shared/sse.ts';
-import type { RuntimeTransport, SyncCacheConfiguration, SyncEnvelope, SyncError, SyncRuntime } from './types.ts';
+import type {
+	CacheAdapter,
+	RuntimeTransport,
+	SyncCacheConfiguration,
+	SyncEnvelope,
+	SyncError,
+	SyncRuntime
+} from './types.ts';
 
 export interface CreateRuntimeOptions {
 	readonly fetch?: typeof fetch;
@@ -60,6 +67,9 @@ const LOGICAL_CONNECT_TIMEOUT_MS = 30_000;
 const MAX_STREAM_RECONNECT_MS = 60_000;
 const MAX_REGISTRATION_RETRY_MS = 30_000;
 const BROADCAST_CHANNEL = 'sync-resource:v1:transport';
+const CACHE_SWEEP_DELAY_MS = 60_000;
+const CACHE_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const CACHE_SWEEP_KEY = 'sync-resource:cache-sweep';
 const LOCK_NAME = 'sync-resource:transport';
 const MAX_SSE_BUFFER_BYTES = MAX_SSE_FRAME_BYTES;
 const MAX_PENDING_SYNC_CHUNKS = 32;
@@ -685,8 +695,30 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	}
 }
 
+// A snapshot is otherwise deleted only when its own store reads it after expiry, so scopes never opened again stay
+// stored. The marker expires when the next sweep is due, so tabs and reloads sweep at most once per interval.
+async function sweepExpiredCache(cache: CacheAdapter, keys: () => Promise<readonly string[]>, now: number) {
+	const marker = await cache.get(CACHE_SWEEP_KEY);
+	if (marker && marker.expiry > now) {
+		return;
+	}
+	for (const key of await keys()) {
+		const item = await cache.get(key);
+		if (item && item.expiry > 0 && item.expiry < now) {
+			await cache.del(key);
+		}
+	}
+	await cache.set(CACHE_SWEEP_KEY, { value: now, expiry: now + CACHE_SWEEP_INTERVAL_MS });
+}
+
 export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
 	let idIndex = 0;
+	const now = options.now ?? (() => Date.now());
+	const cache = options.cache;
+	const keys = cache.keys?.bind(cache);
+	const sweepTimer = keys
+		? setTimeout(() => sweepExpiredCache(cache, keys, now()).catch(() => undefined), CACHE_SWEEP_DELAY_MS)
+		: undefined;
 	const fetchImpl = options.fetch ?? fetch;
 	const runtimeIdSeed = createRuntimeIdSeed();
 	const createId = options.createId ?? ((prefix: string) => `${prefix}_${runtimeIdSeed}_${++idIndex}`);
@@ -703,12 +735,13 @@ export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
 		);
 	return {
 		fetch: fetchImpl,
-		cache: options.cache,
+		cache,
 		transport,
 		clientId,
-		now: options.now ?? (() => Date.now()),
+		now,
 		createId,
 		dispose() {
+			clearTimeout(sweepTimer);
 			transport.dispose?.();
 		}
 	};

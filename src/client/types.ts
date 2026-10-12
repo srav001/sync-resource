@@ -63,6 +63,7 @@ export interface CacheAdapter {
 	get<TValue>(key: string): Promise<CacheItem<TValue> | undefined>;
 	set<TValue>(key: string, value: CacheItem<TValue>): Promise<void>;
 	del(key: string): Promise<void>;
+	keys?(): Promise<readonly string[]>;
 }
 
 export interface SyncCacheConfiguration {
