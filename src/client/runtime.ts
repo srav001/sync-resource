@@ -1,6 +1,6 @@
 import { isFiniteNumber, isRecord, isString } from '../shared/guards.ts';
-import { isSyncHttpResult, normalizeSyncError } from '../shared/index.ts';
-import { MAX_BATCH_CONNECTS } from '../shared/protocol.ts';
+import { isSyncHttpResult, normalizeSyncError, type SyncHttpOk } from '../shared/index.ts';
+import { MAX_BATCH_CONNECTS, syncErrorCodeFromHttpStatus } from '../shared/protocol.ts';
 import { err, ok } from '../shared/result.ts';
 import type { SyncResult } from '../shared/result.ts';
 import {
@@ -377,25 +377,16 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			if (signal.aborted) {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
-			if (!response.ok) {
-				return err(
-					response.status === 429 ? 'rate_limited' : 'bad_request',
-					`Sync subscribe failed: ${response.status}`
-				);
-			}
-			const payload = await response.json();
+			const result = await readSyncResponse<{ readonly scope?: unknown }>(response);
 			if (signal.aborted) {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
-			if (!isSyncHttpResult<{ readonly scope?: unknown }>(payload)) {
-				return err('validation', 'Sync subscribe response payload was malformed.', { details: payload });
+			if (result.isErr()) {
+				return result;
 			}
-			if (payload.isError) {
-				return err(normalizeSyncError(payload.error));
-			}
-			if (isConnectScope(payload.value) && payload.value.scope !== undefined) {
+			if (isConnectScope(result.value.value) && result.value.value.scope !== undefined) {
 				// The server owns scope encoding because manager.scope(params) can be narrower than frontend params.
-				entry.scope = payload.value.scope;
+				entry.scope = result.value.value.scope;
 				entry.scopeConfirmed = true;
 			}
 			return ok(undefined);
@@ -468,21 +459,20 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 				signal: AbortSignal.timeout(LOGICAL_CONNECT_TIMEOUT_MS)
 			});
 			if (!response.ok) {
+				const body = await response.text();
 				for (const item of items) {
-					item.resolve(new Response(null, { status: response.status }));
+					item.resolve(new Response(body, { status: response.status }));
 				}
 				return;
 			}
 			const payload: unknown = await response.json();
 			items.forEach((item, index) => {
 				const result = isBatchPayload(payload) ? payload.results[index] : undefined;
-				if (!isBatchResult(result)) {
-					item.resolve(Response.json(null));
-				} else if (result.status < 300) {
-					item.resolve(Response.json(result.body ?? null));
-				} else {
-					item.resolve(new Response(null, { status: result.status }));
-				}
+				item.resolve(
+					isBatchResult(result)
+						? Response.json(result.body ?? null, { status: result.status })
+						: Response.json(null)
+				);
 			});
 		} catch (cause) {
 			for (const item of items) {
@@ -812,6 +802,17 @@ async function sweepExpiredCache(cache: CacheAdapter, keys: () => Promise<readon
 		}
 	}
 	await cache.set(CACHE_SWEEP_KEY, { value: now, expiry: now + CACHE_SWEEP_INTERVAL_MS });
+}
+
+// A sync error body carries the server's error code; a response without one, such as a proxy failure, is classified by its status.
+export async function readSyncResponse<TValue>(response: Response): Promise<SyncResult<SyncHttpOk<TValue>, SyncError>> {
+	const payload: unknown = await response.json().catch(() => undefined);
+	if (isSyncHttpResult<TValue>(payload)) {
+		return payload.isError ? err(normalizeSyncError(payload.error)) : ok(payload);
+	}
+	return response.ok
+		? err('validation', 'Sync response payload was malformed.', { details: payload })
+		: err(syncErrorCodeFromHttpStatus(response.status), `Sync request failed: ${response.status}`);
 }
 
 export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {

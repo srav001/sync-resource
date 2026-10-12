@@ -29,7 +29,7 @@ are listed in [No code change needed](#no-code-change-needed).
 **What changed.** v1 sent one `POST <manager>/connect` per store. v2 sends every registration queued in the same
 microtask as one `POST /api/sync-resource/connect` (a boot that opens 13 stores sends one request).
 
-**Why it matters.** Without the route, each registration fails with `bad_request` (`Sync subscribe failed: 404`), the
+**Why it matters.** Without the route, each registration fails with `not_found` (`Sync request failed: 404`), the
 error appears as the store error, and the client retries with backoff up to 30 seconds. Reads, writes, and cache still
 work; realtime does not.
 

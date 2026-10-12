@@ -215,6 +215,37 @@ describe('batched realtime registration', () => {
 		}
 	});
 
+	it('reports the error code the server sent for a failed item', async () => {
+		vi.useFakeTimers();
+		const harness = createHarness(() => ({ status: 403, body: forbidden }));
+		const signal = new AbortController();
+		try {
+			const result = await register(harness.runtime, 'a', signal.signal);
+			expect(result.isErr() && result.error.code).toBe('forbidden');
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+
+	it.each([
+		[401, 'unauthorized'],
+		[429, 'rate_limited'],
+		[503, 'internal']
+	])('classifies a bodyless %i batch response as %s', async (status, code) => {
+		vi.useFakeTimers();
+		const harness = createHarness();
+		harness.setBatchStatus(status);
+		const signal = new AbortController();
+		try {
+			const result = await register(harness.runtime, 'a', signal.signal);
+			expect(result.isErr() && result.error.code).toBe(code);
+		} finally {
+			signal.abort();
+			harness.runtime.dispose();
+		}
+	});
+
 	it('fails and retries every item when the batch response is not ok', async () => {
 		vi.useFakeTimers();
 		const harness = createHarness();

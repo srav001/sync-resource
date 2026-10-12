@@ -1,5 +1,5 @@
 import { isRecord } from '../shared/guards.ts';
-import { isSyncError, isSyncHttpResult, normalizeSyncError, syncError } from '../shared/index.ts';
+import { isSyncError, syncError, type SyncHttpOk } from '../shared/index.ts';
 import { err, ok, type SyncResult } from '../shared/result.ts';
 import { stableStringify } from '../shared/stableJson.ts';
 import {
@@ -30,7 +30,7 @@ import {
 	type PendingCommand
 } from './optimistic.ts';
 import { createRepairScheduler, noRepairNeeded, type RepairScheduler } from './repair.ts';
-import { getSyncCacheOptions, getSyncRuntime } from './runtime.ts';
+import { getSyncCacheOptions, getSyncRuntime, readSyncResponse } from './runtime.ts';
 import type {
 	CollectionMeta,
 	CollectionItem,
@@ -45,7 +45,6 @@ import type {
 	StoreConfig,
 	SyncEnvelope,
 	SyncError,
-	SyncHttpResult,
 	SyncRuntime,
 	SyncSignal
 } from './types.ts';
@@ -862,7 +861,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		query?: TQuery,
 		mutationId?: string,
 		signal?: AbortSignal
-	): Promise<SyncResult<SyncHttpResult<TValue> & { readonly isOk: true }, SyncError>> {
+	): Promise<SyncResult<SyncHttpOk<TValue>, SyncError>> {
 		const params = this.config.getParams();
 		const url = this.methodUrl(this.config.getUrl(params), method, query);
 		const requestAbort = combineAbortSignals(this.abort.signal, signal);
@@ -873,33 +872,23 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		if (mutationId) {
 			headers.set('x-mutation-id', mutationId);
 		}
+		let result: SyncResult<SyncHttpOk<TValue>, SyncError>;
 		try {
-			const response = await this.runtime.fetch(url, {
-				method: httpMethod,
-				body: body === undefined ? undefined : JSON.stringify(body),
-				headers,
-				signal: requestAbort.signal
-			});
-			const payload = await response.json();
-			// A fetch that ignores its abort signal must not apply a late response, such as to a disposed store.
-			if (requestAbort.signal.aborted) {
-				return err('aborted', 'Sync request was aborted.');
-			}
-			if (!isSyncHttpResult<TValue>(payload)) {
-				return err('validation', 'Sync response payload was malformed.', { details: payload });
-			}
-			if (payload.isError) {
-				return err(normalizeSyncError(payload.error));
-			}
-			return ok(payload);
+			result = await readSyncResponse<TValue>(
+				await this.runtime.fetch(url, {
+					method: httpMethod,
+					body: body === undefined ? undefined : JSON.stringify(body),
+					headers,
+					signal: requestAbort.signal
+				})
+			);
 		} catch (cause) {
-			if (requestAbort.signal.aborted) {
-				return err('aborted', 'Sync request was aborted.');
-			}
-			return err('internal', cause instanceof Error ? cause.message : String(cause), { cause });
+			result = err('internal', cause instanceof Error ? cause.message : String(cause), { cause });
 		} finally {
 			requestAbort.dispose();
 		}
+		// A fetch that ignores its abort signal must not apply a late response, such as to a disposed store.
+		return requestAbort.signal.aborted ? err('aborted', 'Sync request was aborted.') : result;
 	}
 
 	private methodUrl<TQuery>(baseUrl: string, method: string, query?: TQuery): string {

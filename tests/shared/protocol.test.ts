@@ -15,6 +15,7 @@ import {
 	syncErrorToHttpStatus,
 	toSyncProtocolError
 } from '../../src/shared/index.ts';
+import { syncErrorCodeFromHttpStatus } from '../../src/shared/protocol.ts';
 
 const manifest = { scope: 'notes:workspace', reason: 'retention_gap' as const, previousCursor: 'c0', nextCursor: 'c1' };
 const envelope = {
@@ -71,6 +72,14 @@ describe('shared protocol guards', () => {
 		for (const code of syncErrorCodes) {
 			expect(syncErrorToHttpStatus({ code })).toBe(expected[code]);
 		}
+	});
+	it('maps an HTTP status back to the general code that uses it, or by status class', () => {
+		expect(syncErrorCodeFromHttpStatus(400)).toBe('bad_request');
+		expect(syncErrorCodeFromHttpStatus(401)).toBe('unauthorized');
+		expect(syncErrorCodeFromHttpStatus(429)).toBe('rate_limited');
+		expect(syncErrorCodeFromHttpStatus(500)).toBe('internal');
+		expect(syncErrorCodeFromHttpStatus(503)).toBe('internal');
+		expect(syncErrorCodeFromHttpStatus(418)).toBe('bad_request');
 	});
 	it('converts SyncError to a wire-safe error', () => {
 		const error = syncError('internal', 'failed', { details: { retry: true }, recovery: { restored: false } });

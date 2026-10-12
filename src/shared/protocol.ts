@@ -217,6 +217,14 @@ export function syncErrorToHttpStatus(error: Pick<SyncProtocolError, 'code'>): n
 	}
 }
 
+// Several codes share a status; the later, more general one wins (bad_request over validation, internal over disposed).
+export function syncErrorCodeFromHttpStatus(status: number): SyncErrorCode {
+	return (
+		[...syncErrorCodes].reverse().find((code) => syncErrorToHttpStatus({ code }) === status) ??
+		(status >= 500 ? 'internal' : 'bad_request')
+	);
+}
+
 export function isSyncErrorCode(value: unknown): value is SyncErrorCode {
 	return isString(value) && syncErrorCodeSet.has(value);
 }

@@ -857,7 +857,7 @@ Rules:
 - The owner tab relays each envelope's JSON text to follower tabs on the `sync-resource:v2:transport` BroadcastChannel.
   A follower parses and validates it like a stream frame. Tabs running a different relay version use a different channel,
   so they share no envelopes until the older tab reloads.
-- A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. The error surfaces as the store error, not in `hydrate()`'s result.
+- A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. The error surfaces as the store error, not in `hydrate()`'s result. Its code is the one in the server's error body; a failure with no sync error body (such as a proxy answering 401 or 503) is classified by its HTTP status.
 - Registrations are batched by default; see [Batched registration](#batched-registration).
 - Replay/reset remains per logical scope through durable outbox cursors. An unknown cursor, or more pending envelopes than
   `replayLimit`, produces a reset instead of a partial replay.
