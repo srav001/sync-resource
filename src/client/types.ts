@@ -50,6 +50,7 @@ export interface RuntimeTransport {
 		getCursor?(this: void): string | undefined;
 		onEnvelope(this: void, envelope: SyncEnvelope): void;
 		onReconnect?(this: void): void;
+		onRegistered?(this: void): void;
 	}): Promise<SyncResult<() => void, SyncError>>;
 	holdRegistrations?(): () => void;
 }

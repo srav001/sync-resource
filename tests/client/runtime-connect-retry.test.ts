@@ -19,6 +19,7 @@ interface NotesManager extends ManagerTypeShape {
 			never,
 			{ readonly items: readonly { readonly id: string }[] }
 		>;
+		readonly add: MethodType<never, { readonly id: string }, { readonly id: string }>;
 	};
 }
 
@@ -130,8 +131,7 @@ describe('failed realtime registration', () => {
 		}
 	});
 
-	it('resolves hydrate on the read, reports the connect error as the store error and registers on the retry', async () => {
-		vi.useFakeTimers();
+	function createRetryStore() {
 		let connects = 0;
 		configureSync({
 			cache: { adapter: noopCache },
@@ -148,6 +148,12 @@ describe('failed realtime registration', () => {
 						? new Response('unavailable', { status: 503 })
 						: Response.json({ isOk: true, isError: false, value: { scope: 'notes:workspace-1' } });
 				}
+				if (path.endsWith('/add')) {
+					return Response.json(
+						{ isOk: false, isError: true, error: { code: 'conflict', message: 'Note exists.' } },
+						{ status: 409 }
+					);
+				}
 				return Response.json({ isOk: true, isError: false, value: { items: [] } });
 			},
 			streamUrl: '/stream'
@@ -158,13 +164,36 @@ describe('failed realtime registration', () => {
 			getUrl: () => 'http://sync.test/notes',
 			query: () => ({ limit: 10 })
 		});
+		return { store, connects: () => connects };
+	}
+
+	it('resolves hydrate on the read, reports the connect error as the store error and clears it on the retry', async () => {
+		vi.useFakeTimers();
+		const { store, connects } = createRetryStore();
 		try {
 			const hydrated = await store.hydrate();
 			expect(hydrated.isOk()).toBe(true);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(store.error()).toMatchObject({ code: 'internal', message: 'Sync request failed: 503' });
 			await vi.advanceTimersByTimeAsync(1300);
-			expect(connects).toBe(2);
+			expect(connects()).toBe(2);
+			expect(store.error()).toBeNull();
+		} finally {
+			store.dispose();
+		}
+	});
+
+	it('keeps a later error when the failed registration succeeds on the retry', async () => {
+		vi.useFakeTimers();
+		const { store, connects } = createRetryStore();
+		try {
+			await store.hydrate();
+			await vi.advanceTimersByTimeAsync(0);
+			await store.add({ input: { id: 'n1' } });
+			expect(store.error()).toMatchObject({ code: 'conflict' });
+			await vi.advanceTimersByTimeAsync(1300);
+			expect(connects()).toBe(2);
+			expect(store.error()).toMatchObject({ code: 'conflict' });
 		} finally {
 			store.dispose();
 		}

@@ -281,6 +281,7 @@ interface RealtimeSubscription {
 	readonly scope: string;
 	readonly controller: AbortController;
 	registration?: Promise<SyncResult<void, SyncError>>;
+	failure?: SyncError;
 	unsubscribe?: () => void;
 }
 
@@ -882,6 +883,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			signal: realtime.controller.signal,
 			getCursor: () => this.state.cursor,
 			onReconnect: this.handleReconnect,
+			onRegistered: this.handleRegistered,
 			onEnvelope: this.handleLiveEnvelope
 		});
 		if (result.isOk()) {
@@ -898,8 +900,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 		if (result.error.code !== 'aborted') {
 			realtime.registration = undefined;
-			this.lastError = result.error;
-			this.emit('error');
+			realtime.failure = this.recordError(result.error);
 		}
 		return result;
 	}
@@ -914,6 +915,13 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly handleReconnect = (): void => {
 		// Reconnect is a correctness event, not just a transport event: every logical subscription must catch up.
 		this.runHydrate(true);
+	};
+
+	// The transport retries a failed registration in the background; its success clears only that failure.
+	private readonly handleRegistered = (): void => {
+		if (this.realtime?.failure && this.lastError === this.realtime.failure) {
+			this.clearError();
+		}
 	};
 
 	private readonly handleLiveEnvelope = (envelope: SyncEnvelope): void => {

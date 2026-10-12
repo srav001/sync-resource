@@ -44,6 +44,7 @@ interface LogicalSubscription {
 	readonly managerKey: string;
 	readonly subscribers: Set<(envelope: SyncEnvelope) => void>;
 	readonly reconnectHydrators: Set<() => void>;
+	readonly registeredListeners: Set<() => void>;
 	scope: string;
 	scopeConfirmed: boolean;
 	registrationRevision: number;
@@ -166,6 +167,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		if (options.onReconnect) {
 			entry.reconnectHydrators.add(options.onReconnect);
 		}
+		if (options.onRegistered) {
+			entry.registeredListeners.add(options.onRegistered);
+		}
 		this.start();
 
 		let settleCallerAbort: (() => void) | undefined;
@@ -173,7 +177,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			settleCallerAbort = () => resolve(err('aborted', 'Realtime subscription was aborted.'));
 		});
 		const abort = () => {
-			this.unsubscribe(entry, options.onEnvelope, options.onReconnect);
+			this.unsubscribe(entry, options);
 			settleCallerAbort?.();
 		};
 		options.signal.addEventListener('abort', abort, { once: true });
@@ -186,21 +190,21 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		const ready = await Promise.race([this.ensureLogicalSubscription(entry), callerAbort]);
 		if (options.signal.aborted) {
 			options.signal.removeEventListener('abort', abort);
-			this.unsubscribe(entry, options.onEnvelope, options.onReconnect);
+			this.unsubscribe(entry, options);
 			return err('aborted', 'Realtime subscription was aborted.');
 		}
 		if (ready.isErr()) {
 			// A failed registration keeps its subscriber so the transport retries it; the store's abort signal removes it.
 			if (ready.error.code === 'aborted') {
 				options.signal.removeEventListener('abort', abort);
-				this.unsubscribe(entry, options.onEnvelope, options.onReconnect);
+				this.unsubscribe(entry, options);
 			}
 			return ready;
 		}
 
 		return ok(() => {
 			options.signal.removeEventListener('abort', abort);
-			this.unsubscribe(entry, options.onEnvelope, options.onReconnect);
+			this.unsubscribe(entry, options);
 		});
 	}
 
@@ -243,6 +247,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			retryAttempt: 0,
 			subscribers: new Set<(envelope: SyncEnvelope) => void>(),
 			reconnectHydrators: new Set<() => void>(),
+			registeredListeners: new Set<() => void>(),
 			getCursor: options.getCursor
 		};
 		this.subscriptions.set(key, entry);
@@ -259,6 +264,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			if (entry.promise === promise && this.subscriptions.get(entry.key) === entry) {
 				if (result.isOk()) {
 					entry.retryAttempt = 0;
+					for (const listener of entry.registeredListeners) {
+						listener();
+					}
 				} else {
 					entry.promise = undefined;
 					if (result.error.code !== 'aborted') {
@@ -453,12 +461,14 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 
 	private unsubscribe(
 		entry: LogicalSubscription,
-		subscriber: (envelope: SyncEnvelope) => void,
-		reconnectHydrator: (() => void) | undefined
+		subscriber: Pick<Parameters<RuntimeTransport['subscribe']>[0], 'onEnvelope' | 'onReconnect' | 'onRegistered'>
 	): void {
-		entry.subscribers.delete(subscriber);
-		if (reconnectHydrator) {
-			entry.reconnectHydrators.delete(reconnectHydrator);
+		entry.subscribers.delete(subscriber.onEnvelope);
+		if (subscriber.onReconnect) {
+			entry.reconnectHydrators.delete(subscriber.onReconnect);
+		}
+		if (subscriber.onRegistered) {
+			entry.registeredListeners.delete(subscriber.onRegistered);
 		}
 		if (entry.subscribers.size > 0 || this.subscriptions.get(entry.key) !== entry) {
 			return;
