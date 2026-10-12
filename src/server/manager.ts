@@ -790,10 +790,16 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	}
 }
 
+// Envelope n of a scope sits in slot n % capacity, so the newest `capacity` envelopes stay without shifting any array.
+interface ScopeLog {
+	readonly ring: SyncEnvelope[];
+	next: number;
+}
+
 export class MemoryManagerOutbox implements ManagerSyncPersistence {
 	// Names the start of a scope's history in this outbox instance, so a read of an empty scope still gets a replay cursor.
 	private readonly origin = `origin:${createCursorSeed()}`;
-	private readonly scopes = new Map<string, SyncEnvelope[]>();
+	private readonly scopes = new Map<string, ScopeLog>();
 	private readonly mutations = new MemoryMutationRecordStore();
 	private readonly maxEnvelopesPerScope: number;
 
@@ -802,46 +808,48 @@ export class MemoryManagerOutbox implements ManagerSyncPersistence {
 	}
 
 	append(envelope: SyncEnvelope): void {
-		let envelopes = this.scopes.get(envelope.scope);
-		if (!envelopes) {
-			envelopes = [];
-			this.scopes.set(envelope.scope, envelopes);
+		if (this.maxEnvelopesPerScope === 0) {
+			return;
 		}
-		envelopes.push(envelope);
-		const overflow = envelopes.length - this.maxEnvelopesPerScope;
-		if (overflow > 0) {
-			envelopes.splice(0, overflow);
+		let log = this.scopes.get(envelope.scope);
+		if (!log) {
+			log = { ring: [], next: 0 };
+			this.scopes.set(envelope.scope, log);
 		}
+		log.ring[log.next % this.maxEnvelopesPerScope] = envelope;
+		log.next += 1;
 	}
 
 	latestCursor(scope: string): string {
-		return this.scopes.get(scope)?.at(-1)?.cursor ?? this.origin;
+		const log = this.scopes.get(scope);
+		return log ? (log.ring[(log.next - 1) % this.maxEnvelopesPerScope]?.cursor ?? this.origin) : this.origin;
 	}
 
 	readAfter(scope: string, cursor: string, limit: number): ManagerOutboxRead {
-		const envelopes = this.scopes.get(scope) ?? [];
-		const start = this.replayStart(envelopes, cursor);
+		const { ring, next } = this.scopes.get(scope) ?? { ring: [], next: 0 };
+		const retainedEnvelopeCount = Math.min(next, this.maxEnvelopesPerScope);
+		const start = this.replayStart(ring, next, cursor);
 		if (start === undefined) {
-			return {
-				envelopes: [],
-				cursorFound: false,
-				retainedEnvelopeCount: envelopes.length
-			};
+			return { envelopes: [], cursorFound: false, retainedEnvelopeCount };
 		}
-		return {
-			envelopes: envelopes.slice(start, start + limit),
-			cursorFound: true,
-			retainedEnvelopeCount: envelopes.length
-		};
+		const envelopes: SyncEnvelope[] = [];
+		for (let sequence = start; sequence < next && envelopes.length < limit; sequence += 1) {
+			envelopes.push(ring[sequence % this.maxEnvelopesPerScope] as SyncEnvelope);
+		}
+		return { envelopes, cursorFound: true, retainedEnvelopeCount };
 	}
 
-	private replayStart(envelopes: readonly SyncEnvelope[], cursor: string): number | undefined {
+	private replayStart(ring: readonly SyncEnvelope[], next: number, cursor: string): number | undefined {
 		// The origin is replayable until trimming may have dropped the scope's first envelope.
 		if (cursor === this.origin) {
-			return envelopes.length < this.maxEnvelopesPerScope ? 0 : undefined;
+			return next < this.maxEnvelopesPerScope ? 0 : undefined;
 		}
-		const index = envelopes.findIndex((envelope) => envelope.cursor === cursor);
-		return index < 0 ? undefined : index + 1;
+		for (let sequence = Math.max(0, next - this.maxEnvelopesPerScope); sequence < next; sequence += 1) {
+			if (ring[sequence % this.maxEnvelopesPerScope]?.cursor === cursor) {
+				return sequence + 1;
+			}
+		}
+		return undefined;
 	}
 
 	readMutation(scope: string, mutationId: string): ManagerMutationRecord | undefined {
