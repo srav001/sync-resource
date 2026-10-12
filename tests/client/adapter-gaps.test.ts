@@ -1,5 +1,5 @@
 import { createRoot } from 'solid-js';
-import { afterEach, describe, expect, it } from 'vite-plus/test';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
 	configureSync,
@@ -47,6 +47,7 @@ const config = {
 };
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	resetSyncConfiguration();
 });
 
@@ -77,7 +78,9 @@ describe('adapter lifecycle gaps', () => {
 
 	it('does not auto-dispose Vue stores created outside an effect scope', () => {
 		configureTestRuntime();
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const store = createVueStore<NotesManager>(config);
+		expect(warn).not.toHaveBeenCalled();
 		expect(store.disposed.value).toBe(false);
 		store.dispose();
 		expect(store.disposed.value).toBe(true);

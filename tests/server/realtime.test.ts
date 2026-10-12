@@ -24,7 +24,7 @@ describe('manager realtime bus', () => {
 		expect(received).toEqual([]);
 	});
 
-	it('propagates realtime transport failures to the caller', async () => {
+	it('propagates realtime transport failures to the caller', () => {
 		const bus = new MemoryManagerRealtimeBus();
 		bus.subscribe('scope', () => {
 			throw syncError('internal', 'subscriber failed');

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, expectTypeOf, it } from 'vite-plus/test';
 
 import * as clientCore from '../src/client/core.ts';
-import type { ManagerTypeShape, MethodType } from '../src/client/core.ts';
+import type { ClientStore, ManagerTypeShape, MethodType } from '../src/client/core.ts';
 // @ts-expect-error Runtime adapter construction types remain internal.
 import type { createStoreRuntime, StoreRuntimeApi } from '../src/client/core.ts';
 import * as plainServer from '../src/server/index.ts';
@@ -21,7 +21,7 @@ interface CompatibleManager extends ManagerTypeShape {
 	readonly methods: { readonly get: MethodType<never, never, string> };
 }
 
-const meta: OperationMeta = {
+const meta = {
 	string: 'value',
 	number: 1,
 	boolean: true,
@@ -31,19 +31,18 @@ const meta: OperationMeta = {
 };
 
 describe('public package boundaries', () => {
-	it('keeps canonical compatibility types while internal helpers stay private', () => {
-		const manager: CompatibleManager = {
-			key: 'compatible',
-			params: { scope: 'one' },
-			methods: { get: undefined as never }
-		};
-		expect(manager.key).toBe('compatible');
-		expect(meta).toMatchObject({ string: 'value', number: 1, boolean: true });
+	it('keeps internal helpers out of the public entrypoints', () => {
 		expect('createStoreRuntime' in clientCore).toBe(false);
 		expect('resetSharedStreamForTests' in plainServer).toBe(false);
-		expectTypeOf<StoreRuntimeApi<CompatibleManager>>().not.toBeNever();
-		expectTypeOf<typeof createStoreRuntime>().not.toBeNever();
-		expectTypeOf<typeof resetSharedStreamForTests>().not.toBeNever();
+		// The imports above are unresolved on purpose, so these types are `any` while the helpers stay private.
+		expectTypeOf<StoreRuntimeApi<CompatibleManager>>().toBeAny();
+		expectTypeOf<typeof createStoreRuntime>().toBeAny();
+		expectTypeOf<typeof resetSharedStreamForTests>().toBeAny();
+	});
+
+	it('accepts hand-written manager type shapes and JSON-like operation meta', () => {
+		expectTypeOf<ReturnType<ClientStore<CompatibleManager>['data']>>().toEqualTypeOf<string | undefined>();
+		expectTypeOf<typeof meta>().toExtend<OperationMeta>();
 	});
 
 	it('keeps Effect isolated to the explicit server/effect source entrypoint', () => {

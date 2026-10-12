@@ -37,14 +37,15 @@ describe('client hydration and cache', () => {
 
 	it('keeps construction network-free and restores an authoritative cache snapshot', async () => {
 		const system = createSyncTestSystem();
-		await system.cache.set('sync-resource:notes:{"workspaceId":"workspace-1"}:view:v2', {
+		const cacheKey = 'sync-resource:notes:{"workspaceId":"workspace-1"}:view:v2';
+		await system.cache.set(cacheKey, {
 			value: { baseItems: [{ id: 'cached', title: 'Cached' }], families: [] },
 			expiry: SYNC_TEST_NOW + 60_000
 		});
 		const store = system.createStore();
 		try {
 			expect(system.fetchRequests).toHaveLength(0);
-			expect(system.cache.reads.length).toBeGreaterThan(0);
+			expect(system.cache.reads).toEqual([cacheKey]);
 			const restored = await store.restore();
 			expect(restored.isOk()).toBe(true);
 			expect(store.items()).toEqual([{ id: 'cached', title: 'Cached' }]);

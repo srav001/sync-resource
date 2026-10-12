@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vite-plus/test';
 
 import { resetSyncConfiguration } from '../../src/client/core.ts';
-import { getSharedStreamConfig, httpSharedSyncStream } from '../../src/server/index.ts';
+import { getSharedStreamConfig, httpSharedSyncStream, registerSharedStreamManager } from '../../src/server/index.ts';
 import { resetSharedStreamForTests } from '../../src/server/streamMultiplexer.ts';
 import { parseSseEvent } from '../../src/shared/sse.ts';
 import { createSyncTestSystem } from '../fixtures/syncSystem.ts';
@@ -69,13 +69,34 @@ describe('shared physical SSE stream', () => {
 		await reader?.cancel();
 	});
 
-	it('exposes the merged default stream limits', () => {
-		createSyncTestSystem();
-		expect(getSharedStreamConfig()).toMatchObject({
+	it('exposes the default stream limits and merges registered manager limits', () => {
+		const defaults = {
 			heartbeatMs: 60_000,
 			idleTtlMs: 5 * 60_000,
 			maxConnectionsPerIp: 2,
 			maxEventBytes: 256 * 1024
+		};
+		expect(getSharedStreamConfig()).toEqual(defaults);
+
+		registerSharedStreamManager({
+			key: 'a',
+			heartbeatMs: 30_000,
+			idleTtlMs: 60_000,
+			maxConnectionsPerIp: 4,
+			maxEventBytes: 1024
+		});
+		registerSharedStreamManager({
+			key: 'b',
+			heartbeatMs: 10_000,
+			idleTtlMs: 10 * 60_000,
+			maxConnectionsPerIp: 1,
+			maxEventBytes: 512 * 1024
+		});
+		expect(getSharedStreamConfig()).toEqual({
+			heartbeatMs: 10_000,
+			idleTtlMs: 10 * 60_000,
+			maxConnectionsPerIp: 4,
+			maxEventBytes: 512 * 1024
 		});
 	});
 });

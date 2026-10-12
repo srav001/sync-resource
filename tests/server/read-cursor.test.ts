@@ -237,7 +237,7 @@ describe('custom outbox read cursor', () => {
 			const response = await notes.http[method]!({ request: new Request(`http://sync.test/${method}`), params });
 			expect(response.status).toBe(200);
 			const body = (await response.json()) as { value: unknown; envelope?: SyncEnvelope };
-			expect(body.value).toBeDefined();
+			expect(body.value).toEqual(method === 'list' ? { items: [{ id: 'n1' }] } : { id: 'ws' });
 			expect(body.envelope).toBeUndefined();
 		}
 	});
