@@ -139,7 +139,7 @@ export type NeedsReconcile<TManager extends ManagerTypeShape> = 'list' extends k
 
 interface StoreConfigBase<TManager extends ManagerTypeShape> {
 	readonly key: TManager['key'];
-	getParams(): ParamsOf<TManager>;
+	readonly params: ParamsOf<TManager>;
 	getUrl(params: ParamsOf<TManager>): string;
 	readonly cache?: StoreCacheOptions;
 }

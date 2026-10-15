@@ -41,7 +41,7 @@ interface ReactiveAdapterHarness {
 
 const storeConfig: StoreConfig<NotesManager> = {
 	key: 'notes',
-	getParams: () => ({ workspaceId: 'workspace-1' }),
+	params: { workspaceId: 'workspace-1' },
 	getUrl: ({ workspaceId }) => `http://sync.test/workspaces/${workspaceId}/notes`,
 	query: () => ({ limit: 20 })
 };

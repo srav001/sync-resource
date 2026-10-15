@@ -38,7 +38,7 @@ afterEach(() => {
 function createCacheStore(): ReturnType<typeof createStore<CacheManager>> {
 	return createStore<CacheManager>({
 		key: 'cache-resilience',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/notes',
 		query: () => undefined
 	});

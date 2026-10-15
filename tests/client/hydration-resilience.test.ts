@@ -40,7 +40,7 @@ afterEach(() => {
 function createHydrationStore(): ReturnType<typeof createStore<HydrationManager>> {
 	return createStore<HydrationManager>({
 		key: 'hydration-resilience',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/notes',
 		query: () => ({ limit: 20 })
 	});

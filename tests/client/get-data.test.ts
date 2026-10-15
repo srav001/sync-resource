@@ -257,7 +257,7 @@ describe('client get and data', () => {
 function createGetStore(): ReturnType<typeof createStore<GetManager>> {
 	return createStore<GetManager>({
 		key: 'get-data',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/profiles'
 	});
 }
@@ -265,7 +265,7 @@ function createGetStore(): ReturnType<typeof createStore<GetManager>> {
 function createQueriedGetStore(): ReturnType<typeof createStore<QueriedGetManager>> {
 	return createStore<QueriedGetManager>({
 		key: 'queried-get-data',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/profiles'
 	});
 }
@@ -273,7 +273,7 @@ function createQueriedGetStore(): ReturnType<typeof createStore<QueriedGetManage
 function createMutableGetStore(): ReturnType<typeof createStore<MutableGetManager>> {
 	return createStore<MutableGetManager>({
 		key: 'mutable-get-data',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/profiles'
 	});
 }

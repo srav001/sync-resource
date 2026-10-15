@@ -206,7 +206,7 @@ function createNotesStore(handler: (input: RequestInfo | URL, init?: RequestInit
 	const store = createStore<NotesManager>(
 		{
 			key: 'family-eviction',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/notes',
 			query: () => ({ bucket: 0 })
 		},

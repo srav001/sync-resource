@@ -160,7 +160,7 @@ describe('failed realtime registration', () => {
 		});
 		const store = createStore<NotesManager>({
 			key: 'notes',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/notes',
 			query: () => ({ limit: 10 })
 		});

@@ -66,7 +66,7 @@ describe('reads racing live envelopes', () => {
 		});
 		const store = createStore<RaceManager>({
 			key: 'read-live-race',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/notes',
 			query: () => ({ limit: 10 })
 		});
@@ -114,7 +114,7 @@ describe('reads racing live envelopes', () => {
 		});
 		const store = createStore<RaceManager>({
 			key: 'read-live-race',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/notes',
 			query: () => ({ limit: 10 })
 		});
@@ -152,7 +152,7 @@ describe('reads racing live envelopes', () => {
 		});
 		const store = createStore<RaceManager>({
 			key: 'read-live-race',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/notes',
 			query: () => ({ limit: 10 })
 		});

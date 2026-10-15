@@ -142,7 +142,7 @@ describe('client events and signals', () => {
 		});
 		const store = createStore<EventListManager>({
 			key: 'event-list',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/notes',
 			query: () => undefined
 		});

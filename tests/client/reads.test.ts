@@ -36,7 +36,7 @@ function createReadStore(fetchImpl: typeof fetch): ReturnType<typeof createStore
 	});
 	return createStore<ReadManager>({
 		key: 'read-tests',
-		getParams: () => ({ workspaceId: 'w1' }),
+		params: { workspaceId: 'w1' },
 		getUrl: () => 'http://sync.test/workspaces/w1/notes',
 		query: () => ({ limit: 20 })
 	});

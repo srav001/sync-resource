@@ -459,7 +459,7 @@ export function createSyncTestSystem(workspaceId = 'workspace-1'): SyncTestSyste
 			return createStore<NotesManager['type']>(
 				{
 					key: 'notes',
-					getParams: () => params,
+					params,
 					getUrl: ({ workspaceId: nextWorkspaceId }) =>
 						`http://sync.test/workspaces/${nextWorkspaceId}/notes`,
 					query: () => ({ limit: 20 })

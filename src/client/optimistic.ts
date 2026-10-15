@@ -392,18 +392,18 @@ function pagesOf(family: PageFamilyState): readonly PageState[] {
 
 export function reconcileFromConfig<TItem, TQuery, TInput, TParams>(
 	config: ReconcileConfig<TItem, TParams, TQuery, TInput> | undefined,
-	getParams: () => TParams
+	params: TParams
 ): OptimisticReconcile<TItem, TQuery, TInput> {
 	const reconcile: OptimisticReconcile<TItem, TQuery, TInput> = {
 		itemId(item) {
-			return config?.itemId?.(item, { params: getParams() }) ?? getDefaultId(item);
+			return config?.itemId?.(item, { params }) ?? getDefaultId(item);
 		},
 		targetId(query, input) {
-			return config?.targetId?.({ params: getParams(), query, input }) ?? getDefaultId(query);
+			return config?.targetId?.({ params, query, input }) ?? getDefaultId(query);
 		}
 	};
 	if (config?.matchesQuery) {
-		reconcile.matchesQuery = (item, query) => config.matchesQuery?.(item, { params: getParams(), query }) ?? false;
+		reconcile.matchesQuery = (item, query) => config.matchesQuery?.(item, { params, query }) ?? false;
 	}
 	if (config?.compare) {
 		reconcile.compare = config.compare;

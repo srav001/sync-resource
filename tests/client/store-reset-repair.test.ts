@@ -38,7 +38,7 @@ afterEach(() => {
 function createRepairStore() {
 	return createStore<RepairManager>({
 		key: 'store-repair',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/notes',
 		query: () => undefined
 	});

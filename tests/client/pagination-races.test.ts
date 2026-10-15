@@ -48,7 +48,7 @@ function createPaginationStore() {
 	return createStore<PaginationManager>(
 		{
 			key: 'pagination-races',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/notes',
 			query: () => ({ status: 'open', limit: 2 })
 		},
@@ -150,7 +150,7 @@ describe('pagination and query-family races', () => {
 		const store = createStore<PaginationManager>(
 			{
 				key: 'pagination-races',
-				getParams: () => ({ workspaceId: 'workspace-1' }),
+				params: { workspaceId: 'workspace-1' },
 				getUrl: () => 'http://sync.test/notes',
 				query: () => ({ status: activeStatus, limit: 2 })
 			},

@@ -18,7 +18,8 @@ removed. Everything else is additive or automatic.
 8. Only if you rely on replay for clients that were offline longer than the idle TTL: [review idle scopes](#7-idle-scopes-keep-only-their-newest-envelope).
 9. Only if you imported the `Result` helpers: [they are removed](#8-result-helpers-are-removed).
 10. Only if you used one of the exports, options or fields in [section 9](#9-removed-exports-options-and-fields): remove it.
-11. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
+11. Replace each client store's `getParams()` with `params`. [Details](#10-client-store-params-are-a-value)
+12. Nothing else is required. Node and framework peers are unchanged; `effect` is an optional peer used only by
     `sync-resource/server/effect` ([requirements](#requirements)).
 
 Then adopt what you want from [Optional additions](#optional-additions). Automatic behavior changes need no code and
@@ -316,6 +317,27 @@ const persistence = { readAfter, readMutation, recordMutation };
 const stale = page.stale;
 ```
 
+### 10. Client store `params` are a value
+
+A store serves one scope for its life. `getParams()` is replaced by `params`, read once when the store is created;
+a different scope is a different store, created once its params are known.
+
+**Before.**
+
+```ts
+createStore({
+	key: 'notes',
+	getParams: () => ({ workspaceId }),
+	getUrl: (params) => `/api/notes/${params.workspaceId}`
+});
+```
+
+**After.**
+
+```ts
+createStore({ key: 'notes', params: { workspaceId }, getUrl: (params) => `/api/notes/${params.workspaceId}` });
+```
+
 ## Requirements
 
 - Node `>=22.18.0` (unchanged).
@@ -333,8 +355,6 @@ const stale = page.stale;
 - A live envelope that arrives while a read is in flight is re-applied over the read response.
 - A failed realtime registration retries with backoff (1 s doubling to 30 s) until it succeeds or the last subscriber leaves.
 - The tab that owns the stream registers after its first stream attempt, so a registration is not sent twice.
-- A store whose `getParams()` scope changes ends the old registration and registers the new scope on its next
-  `hydrate()` or `connect()`.
 - Live envelopes for a scope are sent after its replayed envelopes, in order.
 - The client discards malformed SSE chunk frames and counts SSE size limits in UTF-8 bytes.
 - Effect manager routes answer JSON responses as buffered bodies with the same status and headers; only the shared stream

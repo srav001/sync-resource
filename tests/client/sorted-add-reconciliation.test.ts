@@ -337,7 +337,7 @@ function createSortedStore(
 	return createStore<MessagesManager>(
 		{
 			key: 'sorted-add',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/messages',
 			query: () => ({ status: 'open', limit: 2 })
 		},

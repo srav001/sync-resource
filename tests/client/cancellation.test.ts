@@ -116,7 +116,7 @@ describe('client request cancellation', () => {
 		});
 		const store = createStore<GetManager>({
 			key: 'cancellation-get',
-			getParams: () => ({ workspaceId: 'workspace-1' }),
+			params: { workspaceId: 'workspace-1' },
 			getUrl: () => 'http://sync.test/note'
 		});
 		store.dispose();
@@ -158,7 +158,7 @@ function createListStore(fetchImpl: typeof fetch): ReturnType<typeof createStore
 	});
 	return createStore<ListManager>({
 		key: 'cancellation-list',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/notes',
 		query: () => undefined
 	});
@@ -173,7 +173,7 @@ function createGetStore(fetchImpl: typeof fetch): ReturnType<typeof createStore<
 	});
 	return createStore<GetManager>({
 		key: 'cancellation-get',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/note'
 	});
 }

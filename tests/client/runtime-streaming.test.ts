@@ -174,11 +174,13 @@ describe('browser runtime SSE transport', () => {
 		vi.spyOn(Math, 'random').mockReturnValue(0.5);
 		const streamControllers: ReadableStreamDefaultController<Uint8Array>[] = [];
 		const connectRequests: Request[] = [];
+		const streamTransportIds: (string | null)[] = [];
 		let streamRequests = 0;
 		const fetchImpl: typeof fetch = async (input, init) => {
 			const request = toRequest(input, init);
 			if (request.url.endsWith('/api/sync-resource/stream')) {
 				streamRequests += 1;
+				streamTransportIds.push(request.headers.get('x-sync-transport-id'));
 				return new Response(
 					new ReadableStream<Uint8Array>({
 						start(controller) {
@@ -197,11 +199,12 @@ describe('browser runtime SSE transport', () => {
 		};
 		let cursor = 'cursor-1';
 		let catchUpHydrations = 0;
+		let idIndex = 0;
 		const runtime = createRuntime({
 			batchConnect: false,
 			cache: noopCache,
 			fetch: fetchImpl,
-			createId: (prefix) => `${prefix}-reconnect`
+			createId: (prefix) => `${prefix}-${(idIndex += 1)}`
 		});
 		const abort = new AbortController();
 		try {
@@ -223,6 +226,7 @@ describe('browser runtime SSE transport', () => {
 			await vi.advanceTimersByTimeAsync(1_000);
 			await waitFor(() => streamRequests === 2 && connectRequests.length > initialRegistrations);
 			expect(catchUpHydrations).toBe(1);
+			expect(streamTransportIds[1]).toBe(streamTransportIds[0]);
 			expect(new URL(connectRequests.at(-1)?.url ?? '').searchParams.get('after')).toBe('cursor-2');
 
 			if (subscription.isOk()) {
@@ -355,13 +359,158 @@ describe('browser runtime registration order', () => {
 		}
 	});
 
+	describe('transport id per stream owner', () => {
+		const STORAGE_KEY = 'sync-resource:transport-id';
+
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
+
+		function browserStorage(initialTransportId?: string) {
+			const items: Record<string, string> = initialTransportId ? { [STORAGE_KEY]: initialTransportId } : {};
+			return {
+				items,
+				window: {
+					localStorage: {
+						getItem: (key: string) => items[key] ?? null,
+						setItem: (key: string, value: string) => {
+							items[key] = value;
+						}
+					}
+				}
+			};
+		}
+
+		function recordingFetch(streamIds: string[], connectIds: string[]) {
+			const fetchImpl: typeof fetch = async (input, init) => {
+				const request = toRequest(input, init);
+				const transportId = request.headers.get('x-sync-transport-id') ?? '';
+				if (request.url.endsWith('/api/sync-resource/stream')) {
+					streamIds.push(transportId);
+					return sseResponse();
+				}
+				connectIds.push(transportId);
+				return connectResponse('notes:scope');
+			};
+			return fetchImpl;
+		}
+
+		function idFactory() {
+			let index = 0;
+			return (prefix: string) => `${prefix}-${(index += 1)}`;
+		}
+
+		it('gives browsers that share stored state different stream ids', async () => {
+			const browsers = [browserStorage('stored-shared'), browserStorage('stored-shared')];
+			const streamIds: string[][] = [[], []];
+			const runtimes: ReturnType<typeof createRuntime>[] = [];
+			try {
+				for (const [index, browser] of browsers.entries()) {
+					vi.stubGlobal('window', browser.window);
+					vi.stubGlobal('navigator', { locks: lockManager() });
+					const runtime = createRuntime({
+						batchConnect: false,
+						cache: noopCache,
+						fetch: recordingFetch(streamIds[index] ?? [], []),
+						createId: (prefix) => `${prefix}-browser${index}`
+					});
+					runtimes.push(runtime);
+					expect((await subscribeTo(runtime, 'notes')).isOk()).toBe(true);
+				}
+				expect(streamIds[0]).toEqual(['transport-browser0']);
+				expect(streamIds[1]).toEqual(['transport-browser1']);
+				expect(browsers.map((browser) => browser.items[STORAGE_KEY])).toEqual([
+					'transport-browser0',
+					'transport-browser1'
+				]);
+			} finally {
+				for (const runtime of runtimes) {
+					runtime.dispose();
+				}
+			}
+		});
+
+		it('mints a new id when a tab that lost stream ownership acquires it again', async () => {
+			const browser = browserStorage();
+			vi.stubGlobal('window', browser.window);
+			vi.stubGlobal('navigator', { locks: lockManager() });
+			const streamIds: string[] = [];
+			const runtime = createRuntime({
+				batchConnect: false,
+				cache: noopCache,
+				fetch: recordingFetch(streamIds, []),
+				createId: idFactory()
+			});
+			try {
+				const first = await subscribeTo(runtime, 'notes');
+				if (first.isOk()) {
+					first.value();
+				}
+				await waitFor(() => streamIds.length === 1);
+				expect((await subscribeTo(runtime, 'notes')).isOk()).toBe(true);
+				await waitFor(() => streamIds.length === 2);
+				expect(new Set(streamIds).size).toBe(2);
+				expect(browser.items[STORAGE_KEY]).toBe(streamIds[1]);
+			} finally {
+				runtime.dispose();
+			}
+		});
+
+		it('registers followers with the current stream owner id and re-registers a successor that takes over without hydrating', async () => {
+			const browser = browserStorage();
+			vi.stubGlobal('window', browser.window);
+			vi.stubGlobal('navigator', { locks: lockManager() });
+			vi.stubGlobal('BroadcastChannel', LoopbackBroadcastChannel);
+			const createId = idFactory();
+			const ownerStreams: string[] = [];
+			const successorStreams: string[] = [];
+			const followerConnects: string[] = [];
+			const successorConnects: string[] = [];
+			let successorHydrations = 0;
+			const owner = createRuntime({
+				batchConnect: false,
+				cache: noopCache,
+				fetch: recordingFetch(ownerStreams, []),
+				createId
+			});
+			const successor = createRuntime({
+				batchConnect: false,
+				cache: noopCache,
+				fetch: recordingFetch(successorStreams, successorConnects),
+				createId
+			});
+			const follower = createRuntime({
+				batchConnect: false,
+				cache: noopCache,
+				fetch: recordingFetch([], followerConnects),
+				createId
+			});
+			try {
+				expect((await subscribeTo(owner, 'notes')).isOk()).toBe(true);
+				expect((await subscribeTo(successor, 'notes', () => (successorHydrations += 1))).isOk()).toBe(true);
+				expect((await subscribeTo(follower, 'notes')).isOk()).toBe(true);
+				expect(followerConnects).toEqual([ownerStreams[0]]);
+
+				owner.dispose();
+				await waitFor(() => successorStreams.length === 1 && followerConnects.length === 2);
+				expect(successorStreams[0]).not.toBe(ownerStreams[0]);
+				expect(followerConnects[1]).toBe(successorStreams[0]);
+				expect(successorConnects).toEqual([ownerStreams[0], successorStreams[0]]);
+				expect(successorHydrations).toBe(0);
+			} finally {
+				owner.dispose();
+				successor.dispose();
+				follower.dispose();
+			}
+		});
+	});
+
 	describe('with Web Locks ownership', () => {
 		afterEach(() => {
 			vi.unstubAllGlobals();
 		});
 
 		function stubBrowser(options: { readonly granted: boolean }) {
-			let grantOwnership!: () => void;
 			const request = vi.fn(
 				(_name: string, ...rest: unknown[]) =>
 					new Promise<void>((resolve) => {
@@ -369,14 +518,11 @@ describe('browser runtime registration order', () => {
 						const ifAvailable = typeof rest[0] === 'object';
 						if (ifAvailable) {
 							callback(options.granted ? {} : null).then(resolve);
-							return;
 						}
-						grantOwnership = () => callback({}).then(resolve);
 					})
 			);
 			vi.stubGlobal('window', { localStorage: undefined });
 			vi.stubGlobal('navigator', { locks: { request } });
-			return { grantOwnership: () => grantOwnership() };
 		}
 
 		it('registers after the stream opens when the tab owns the Web Lock', async () => {
@@ -466,50 +612,9 @@ describe('browser runtime registration order', () => {
 			}
 		});
 
-		it('re-registers a follower subscription when the tab takes over stream ownership', async () => {
-			const browser = stubBrowser({ granted: false });
-			let streamRequests = 0;
-			let connects = 0;
-			let hydrations = 0;
-			const fetchImpl: typeof fetch = async (input, init) => {
-				const request = toRequest(input, init);
-				if (request.url.endsWith('/api/sync-resource/stream')) {
-					streamRequests += 1;
-					return sseResponse();
-				}
-				connects += 1;
-				return connectResponse('notes:scope');
-			};
-			const runtime = createRuntime({
-				batchConnect: false,
-				cache: noopCache,
-				fetch: fetchImpl,
-				createId: (prefix) => `${prefix}-handover`
-			});
-			try {
-				const subscription = await subscribeTo(runtime, 'notes', () => (hydrations += 1));
-				expect(subscription.isOk()).toBe(true);
-				expect(connects).toBe(1);
-				browser.grantOwnership();
-				await waitFor(() => streamRequests === 1 && connects === 2);
-				expect(hydrations).toBe(0);
-			} finally {
-				runtime.dispose();
-			}
-		});
-
 		it('relays every envelope the owner tab receives, chunked or not, to a follower tab', async () => {
-			let lockHeld = false;
-			const request = vi.fn((_name: string, ...rest: unknown[]) => {
-				const callback = rest.at(-1) as (lock: object | null) => Promise<void>;
-				if (!lockHeld) {
-					lockHeld = true;
-					return callback({});
-				}
-				return typeof rest[0] === 'object' ? callback(null) : new Promise<void>(() => {});
-			});
 			vi.stubGlobal('window', { localStorage: undefined });
-			vi.stubGlobal('navigator', { locks: { request } });
+			vi.stubGlobal('navigator', { locks: lockManager() });
 			vi.stubGlobal('BroadcastChannel', LoopbackBroadcastChannel);
 			LoopbackBroadcastChannel.posted.length = 0;
 			const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
@@ -578,6 +683,31 @@ describe('browser runtime registration order', () => {
 		});
 	});
 });
+
+// One lock universe per browser: the first requester owns it, later requesters queue until it is released.
+function lockManager() {
+	let held = false;
+	const waiting: (() => void)[] = [];
+	const run = (callback: (lock: object | null) => Promise<void>) => {
+		held = true;
+		return callback({}).finally(() => {
+			held = false;
+			waiting.shift()?.();
+		});
+	};
+	return {
+		request(_name: string, ...rest: unknown[]): Promise<void> {
+			const callback = rest.at(-1) as (lock: object | null) => Promise<void>;
+			if (!held) {
+				return run(callback);
+			}
+			if (typeof rest[0] === 'object') {
+				return callback(null);
+			}
+			return new Promise<void>((resolve) => waiting.push(() => resolve(run(callback))));
+		}
+	};
+}
 
 function toRequest(input: URL | RequestInfo, init?: RequestInit): Request {
 	return new Request(input instanceof Request ? input : new URL(String(input), 'http://sync.test'), init);

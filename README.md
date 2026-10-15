@@ -132,7 +132,7 @@ configureSync({ cache: { adapter: cacheAdapter } });
 
 const notes = createStore<NotesManager>({
 	key: 'notes',
-	getParams: () => ({ workspaceId: 'workspace-123' }),
+	params: { workspaceId: 'workspace-123' },
 	getUrl: ({ workspaceId }) => `/api/workspaces/${workspaceId}/notes/sync`,
 	query: () => undefined
 });

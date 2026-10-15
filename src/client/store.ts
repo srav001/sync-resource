@@ -278,7 +278,6 @@ export function createStore<TManager extends ManagerTypeShape>(
 }
 
 interface RealtimeSubscription {
-	readonly scope: string;
 	readonly controller: AbortController;
 	registration?: Promise<SyncResult<void, SyncError>>;
 	failure?: SyncError;
@@ -289,7 +288,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly config: StoreConfig<TManager>;
 	private readonly runtime: SyncRuntime;
 	private readonly globalCache = getSyncCacheOptions();
-	private readonly reconcile?: ReconcileConfig;
+	private readonly identity: ReturnType<typeof reconcileFromConfig>;
 	private readonly state = createOptimisticState<
 		CollectionItem<TManager>,
 		OutputOf<TManager, 'get'>,
@@ -315,18 +314,21 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private readonly inflightReads = new Map<string, Promise<SyncResult<unknown, SyncError>>>();
 	private readsInFlight = 0;
 	private liveDuringReads: SyncEnvelope[] = [];
-	private readonly inflightHydrates = new Map<string, Promise<SyncResult<void, SyncError>>>();
-	private readonly queuedForcedHydrates = new Map<string, ForcedHydrationQueue>();
-	private readonly successfulHydrates = new Map<string, SyncResult<void, SyncError>>();
+	private inflightHydrate: Promise<SyncResult<void, SyncError>> | undefined;
+	private queuedForcedHydrate: ForcedHydrationQueue | undefined;
+	// The last hydrate succeeded, so a repeat hydrate only resubscribes.
+	private hydrated = false;
+	// The state holds authoritative data (a read or envelope applied), which is newer than any cache entry.
+	private hasData = false;
 	private realtime: RealtimeSubscription | undefined;
 	private visibleItemsCache: readonly CollectionItem<TManager>[] | undefined;
 	private readonly listItemsCache = new Map<string, readonly CollectionItem<TManager>[]>();
 	private cacheSaveTimer: ReturnType<typeof setTimeout> | undefined;
 	private cacheSaveInFlight = false;
 	private cacheSaveRequested = false;
-	private cachedScopeParamsText: string | undefined;
-	private cachedScopeCacheKey: string | undefined;
-	private bootstrap: { readonly key: string; readonly task: Promise<SyncResult<void, SyncError>> } | undefined;
+	private readonly scopeCacheKey: string;
+	private readonly cacheKey: string;
+	private bootstrap: Promise<SyncResult<void, SyncError>> | undefined;
 	private activeHydrationCount = 0;
 	private hydrating = false;
 	private refreshing = false;
@@ -342,11 +344,14 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		}
 		this.config = config;
 		this.runtime = getSyncRuntime();
-		this.reconcile = reconcile;
+		this.identity = reconcileFromConfig(reconcile, config.params);
 		const defaultQuery = config.query;
 		this.hasDefaultListQuery = defaultQuery !== undefined;
 		this.activeQuery = defaultQuery?.();
-		this.bootstrapCacheRead();
+		this.scopeCacheKey = `sync-resource:${config.key}:${stableStringify(config.params)}`;
+		this.cacheKey = `${this.scopeCacheKey}:view:v2`;
+		// Construction must stay network-free; the cache read gives instant UI.
+		this.bootstrap = this.restore();
 	}
 
 	api(): StoreRuntimeApi<TManager> & ClientStore<TManager> {
@@ -414,13 +419,21 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	async restore(): Promise<SyncResult<void, SyncError>> {
+		if (this.hasData) {
+			return ok(undefined);
+		}
 		try {
-			const cached = await this.loadCachedState();
-			if (!cached || this.disposed || this.pendingCommands.size > 0) {
+			const item = await this.globalCache.adapter.get<CachedOptimisticState>(this.cacheKey);
+			// Data applied during the read is newer, and its own save may already have replaced this entry.
+			if (!item || this.disposed || this.pendingCommands.size > 0 || this.hasData) {
+				return ok(undefined);
+			}
+			if (item.expiry > 0 && item.expiry < this.runtime.now()) {
+				await this.globalCache.adapter.del(this.cacheKey);
 				return ok(undefined);
 			}
 
-			restoreOptimisticState(this.state, cached, this.reconcileIdentity());
+			restoreOptimisticState(this.state, item.value, this.identity);
 			this.emit('data', 'items', 'listMeta', 'pages');
 			return ok(undefined);
 		} catch (cause) {
@@ -437,31 +450,26 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			return Promise.resolve(err('disposed', 'Store is disposed.'));
 		}
 
-		const key = this.cacheKey();
 		if (force) {
-			return this.queueForcedHydrate(key);
+			return this.queueForcedHydrate();
 		}
-		const queuedForced = this.queuedForcedHydrates.get(key);
-		if (queuedForced) {
-			return queuedForced.task;
+		if (this.queuedForcedHydrate) {
+			return this.queuedForcedHydrate.task;
 		}
-		const existing = this.inflightHydrates.get(key);
-		if (existing) {
-			return existing;
+		if (this.inflightHydrate) {
+			return this.inflightHydrate;
 		}
-		const successful = this.successfulHydrates.get(key);
-		if (successful) {
+		if (this.hydrated) {
 			// Hydrated data stays current through realtime, so a repeat hydrate only resubscribes a failed registration.
 			void this.connect();
-			return Promise.resolve(successful);
+			return Promise.resolve(ok(undefined));
 		}
 
-		return this.startHydrate(key);
+		return this.startHydrate();
 	}
 
-	private queueForcedHydrate(key: string): Promise<SyncResult<void, SyncError>> {
-		this.successfulHydrates.delete(key);
-		const queued = this.queuedForcedHydrates.get(key);
+	private queueForcedHydrate(): Promise<SyncResult<void, SyncError>> {
+		const queued = this.queuedForcedHydrate;
 		if (queued) {
 			if (queued.state.readStarted) {
 				queued.state.requestedGeneration = queued.state.runningGeneration + 1;
@@ -469,25 +477,24 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			return queued.task;
 		}
 
-		const olderHydrate = this.inflightHydrates.get(key);
+		const olderHydrate = this.inflightHydrate;
 		const state: ForcedHydrationState = {
 			requestedGeneration: 1,
 			runningGeneration: 0,
 			readStarted: false
 		};
 		this.beginHydration();
-		const task = this.runForcedHydrates(key, state, olderHydrate).finally(() => {
-			if (this.queuedForcedHydrates.get(key)?.state === state) {
-				this.queuedForcedHydrates.delete(key);
+		const task = this.runForcedHydrates(state, olderHydrate).finally(() => {
+			if (this.queuedForcedHydrate?.state === state) {
+				this.queuedForcedHydrate = undefined;
 			}
 			this.endHydration();
 		});
-		this.queuedForcedHydrates.set(key, { state, task });
+		this.queuedForcedHydrate = { state, task };
 		return task;
 	}
 
 	private async runForcedHydrates(
-		key: string,
 		state: ForcedHydrationState,
 		olderHydrate?: Promise<SyncResult<void, SyncError>>
 	): Promise<SyncResult<void, SyncError>> {
@@ -501,21 +508,21 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		while (true) {
 			state.runningGeneration += 1;
 			state.readStarted = false;
-			this.successfulHydrates.delete(key);
-			const result = await this.startHydrate(key, () => {
+			const result = await this.startHydrate(() => {
 				state.readStarted = true;
 			});
 			if (this.disposed || state.runningGeneration === state.requestedGeneration) {
-				if (this.queuedForcedHydrates.get(key)?.state === state) {
-					this.queuedForcedHydrates.delete(key);
+				if (this.queuedForcedHydrate?.state === state) {
+					this.queuedForcedHydrate = undefined;
 				}
 				return result;
 			}
 		}
 	}
 
-	private startHydrate(key: string, onAuthoritativeReadStart?: () => void): Promise<SyncResult<void, SyncError>> {
+	private startHydrate(onAuthoritativeReadStart?: () => void): Promise<SyncResult<void, SyncError>> {
 		this.clearError();
+		this.hydrated = false;
 		const task = this.hydrateOnce(onAuthoritativeReadStart)
 			.catch((cause) => err(toStoreSyncError(cause)))
 			.then((result) => {
@@ -528,15 +535,15 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 					}
 					return result;
 				}
-				this.successfulHydrates.set(key, result);
+				this.hydrated = true;
 				return result;
 			})
 			.finally(() => {
-				if (this.inflightHydrates.get(key) === task) {
-					this.inflightHydrates.delete(key);
+				if (this.inflightHydrate === task) {
+					this.inflightHydrate = undefined;
 				}
 			});
-		this.inflightHydrates.set(key, task);
+		this.inflightHydrate = task;
 		return task;
 	}
 
@@ -565,9 +572,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		this.activeHydrationCount = 0;
 		this.hydrating = false;
 		this.refreshing = false;
-		this.inflightHydrates.clear();
-		this.queuedForcedHydrates.clear();
-		this.successfulHydrates.clear();
+		this.inflightHydrate = undefined;
+		this.queuedForcedHydrate = undefined;
+		this.hydrated = false;
 		this.abort.abort();
 		this.endRealtime();
 		this.repairScheduler.dispose();
@@ -578,20 +585,18 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private async get<TQuery>(query?: TQuery): Promise<SyncResult<OutputOf<TManager, 'get'>, SyncError>> {
-		return this.singleflightRead<OutputOf<TManager, 'get'>>(
-			`${this.cacheKey()}:get:${stableStringify(query)}`,
-			async (settleRead) => {
-				const result = await this.request<OutputOf<TManager, 'get'>>('get', 'GET', undefined, query);
-				if (result.isErr()) {
-					return result;
-				}
-				setBaseData(this.state, result.value.value, this.reconcileIdentity(), this.pendingCommands.values());
-				settleRead(result.value.envelope);
-				this.emit('data');
-				this.scheduleCachedRuntimeStateSave();
-				return ok(result.value.value);
+		return this.singleflightRead<OutputOf<TManager, 'get'>>(`get:${stableStringify(query)}`, async (settleRead) => {
+			const result = await this.request<OutputOf<TManager, 'get'>>('get', 'GET', undefined, query);
+			if (result.isErr()) {
+				return result;
 			}
-		);
+			this.hasData = true;
+			setBaseData(this.state, result.value.value, this.identity, this.pendingCommands.values());
+			settleRead(result.value.envelope);
+			this.emit('data');
+			this.scheduleCachedRuntimeStateSave();
+			return ok(result.value.value);
+		});
 	}
 
 	private async refresh<TQuery>(query?: TQuery): Promise<SyncResult<OutputOf<TManager, 'list'>, SyncError>> {
@@ -613,7 +618,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			this.activeQuery = viewQuery;
 		}
 		return this.singleflightRead<OutputOf<TManager, 'list'>>(
-			`${this.scopeCacheKey()}:page:${stableStringify(requestQuery)}`,
+			`page:${stableStringify(requestQuery)}`,
 			async (settleRead) => {
 				const result = await this.request<OutputOf<TManager, 'list'>>('list', 'GET', undefined, requestQuery);
 				if (result.isErr()) {
@@ -622,7 +627,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 				if (activate && stableStringify(this.activeQuery) !== stableStringify(viewQuery)) {
 					return ok(result.value.value);
 				}
-				applyPageOutput(this.state, result.value.value, requestQuery, this.reconcileIdentity(), activate);
+				this.hasData = true;
+				applyPageOutput(this.state, result.value.value, requestQuery, this.identity, activate);
 				settleRead(result.value.envelope);
 				this.emit('items', 'listMeta', 'pages');
 				this.scheduleCachedRuntimeStateSave();
@@ -644,18 +650,13 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		return this.requestPage(viewQuery, requestQuery, activate);
 	}
 
-	private bootstrapCacheRead(): void {
-		// Construction must stay network-free; the cache read gives instant UI.
-		this.bootstrap = { key: this.cacheKey(), task: this.restore() };
-	}
-
 	private async hydrateOnce(onAuthoritativeReadStart?: () => void): Promise<SyncResult<void, SyncError>> {
 		this.beginHydration();
 		try {
-			// The first hydrate reuses the constructor's cache read unless the params changed or it failed.
+			// The first hydrate reuses the constructor's cache read unless it failed or a read already applied.
 			const bootstrap = this.bootstrap;
 			this.bootstrap = undefined;
-			let restoreResult = bootstrap?.key === this.cacheKey() ? await bootstrap.task : undefined;
+			let restoreResult = bootstrap && !this.hasData ? await bootstrap : undefined;
 			if (!restoreResult?.isOk()) {
 				restoreResult = await this.restore();
 			}
@@ -663,13 +664,13 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 				return restoreResult;
 			}
 			if (onAuthoritativeReadStart) {
-				let olderReads = this.inflightScopeReads();
+				let olderReads = [...this.inflightReads.values()];
 				while (olderReads.length > 0) {
 					await Promise.all(olderReads);
 					if (this.disposed) {
 						return err('disposed', 'Store is disposed.');
 					}
-					olderReads = this.inflightScopeReads();
+					olderReads = [...this.inflightReads.values()];
 				}
 				onAuthoritativeReadStart();
 			}
@@ -718,17 +719,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		return task;
 	}
 
-	private inflightScopeReads(): Promise<SyncResult<unknown, SyncError>>[] {
-		const reads: Promise<SyncResult<unknown, SyncError>>[] = [];
-		const scopePrefix = `${this.scopeCacheKey()}:`;
-		for (const [key, read] of this.inflightReads) {
-			if (key.startsWith(scopePrefix)) {
-				reads.push(read);
-			}
-		}
-		return reads;
-	}
-
 	private async repair(): Promise<SyncResult<void, SyncError>> {
 		if (this.disposed) {
 			return err('disposed', 'Store is disposed.');
@@ -772,9 +762,9 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 			this.clearError();
 			const mutationId = this.runtime.createId('mutation');
-			const command = createPendingCommand(method, args, mutationId, this.reconcileIdentity());
+			const command = createPendingCommand(method, args, mutationId, this.identity);
 			this.pendingCommands.set(mutationId, command);
-			refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
+			refreshData(this.state, this.identity, this.pendingCommands.values());
 			this.emit(...this.writeOptimisticEvents(method));
 
 			const result = await this.request<TOutput>(method, 'POST', args, undefined, mutationId, options?.signal);
@@ -789,7 +779,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			let rebuiltVisible = isBatch;
 			if (isBatch) {
 				// Batched writes still finalize through envelopes; rebuild from base plus pending instead of restoring a full snapshot.
-				refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
+				refreshData(this.state, this.identity, this.pendingCommands.values());
 			}
 
 			const envelope = result.value.envelope
@@ -799,7 +789,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 				this.applyStateEnvelope(envelope);
 			} else {
 				this.pendingCommands.delete(mutationId);
-				refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
+				refreshData(this.state, this.identity, this.pendingCommands.values());
 				rebuiltVisible = true;
 			}
 			const events = envelope
@@ -821,8 +811,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		mutationId?: string,
 		signal?: AbortSignal
 	): Promise<SyncResult<SyncHttpOk<TValue>, SyncError>> {
-		const params = this.config.getParams();
-		const url = this.methodUrl(this.config.getUrl(params), method, query);
+		const url = this.methodUrl(this.config.getUrl(this.config.params), method, query);
 		const requestAbort = combineAbortSignals(this.abort.signal, signal);
 		const headers = new Headers({
 			'content-type': 'application/json',
@@ -863,23 +852,17 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		if (this.disposed) {
 			return err('disposed', 'Store is disposed.');
 		}
-		const scope = this.scopeCacheKey();
-		if (this.realtime?.scope !== scope) {
-			this.endRealtime();
-			this.realtime = { scope, controller: new AbortController() };
-		}
-		const realtime = this.realtime;
+		const realtime = (this.realtime ??= { controller: new AbortController() });
 		realtime.registration ??= this.connectRealtime(realtime);
 		return realtime.registration;
 	}
 
 	private async connectRealtime(realtime: RealtimeSubscription): Promise<SyncResult<void, SyncError>> {
-		const params = this.config.getParams();
-		const baseUrl = this.config.getUrl(params).replace(/\/$/, '');
+		const baseUrl = this.config.getUrl(this.config.params).replace(/\/$/, '');
 		const result = await this.runtime.transport.subscribe({
 			connectUrl: urlWithCursor(`${baseUrl}/connect`, this.state.cursor),
 			managerKey: this.config.key,
-			scope: realtime.scope,
+			scope: this.scopeCacheKey,
 			signal: realtime.controller.signal,
 			getCursor: () => this.state.cursor,
 			onReconnect: this.handleReconnect,
@@ -956,10 +939,11 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	}
 
 	private applyEnvelopeState(envelope: SyncEnvelope): void {
+		this.hasData = true;
 		applyOptimisticEnvelope(
 			this.state,
 			this.localPendingEnvelope(envelope),
-			this.reconcileIdentity(),
+			this.identity,
 			this.pendingCommands,
 			this.activeQuery
 		);
@@ -1003,12 +987,8 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		};
 	}
 
-	private reconcileIdentity() {
-		return reconcileFromConfig(this.reconcile, () => this.config.getParams());
-	}
-
 	private rollback(originalError: SyncError): SyncError {
-		refreshData(this.state, this.reconcileIdentity(), this.pendingCommands.values());
+		refreshData(this.state, this.identity, this.pendingCommands.values());
 		const recoveredError = syncError(originalError.code, originalError.message, {
 			details: originalError.details,
 			cause: originalError.cause,
@@ -1018,18 +998,6 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		this.emit('data', 'items', 'pages', 'pending', 'error');
 		this.scheduleCachedRuntimeStateSave();
 		return recoveredError;
-	}
-
-	private async loadCachedState(): Promise<CachedOptimisticState | undefined> {
-		const item = await this.globalCache.adapter.get<CachedOptimisticState>(this.cacheKey());
-		if (!item) {
-			return undefined;
-		}
-		if (item.expiry > 0 && item.expiry < this.runtime.now()) {
-			await this.globalCache.adapter.del(this.cacheKey());
-			return undefined;
-		}
-		return item.value;
 	}
 
 	private scheduleCachedRuntimeStateSave(): void {
@@ -1070,24 +1038,10 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 
 	private async saveCachedState(): Promise<void> {
 		const ttlMs = this.cacheTtlMs();
-		await this.globalCache.adapter.set(this.cacheKey(), {
+		await this.globalCache.adapter.set(this.cacheKey, {
 			value: captureOptimisticState(this.state),
 			expiry: this.runtime.now() + ttlMs
 		});
-	}
-
-	private cacheKey(): string {
-		return `${this.scopeCacheKey()}:view:v2`;
-	}
-
-	private scopeCacheKey(): string {
-		const paramsText = stableStringify(this.config.getParams());
-		if (this.cachedScopeParamsText === paramsText && this.cachedScopeCacheKey) {
-			return this.cachedScopeCacheKey;
-		}
-		this.cachedScopeParamsText = paramsText;
-		this.cachedScopeCacheKey = `sync-resource:${this.config.key}:${paramsText}`;
-		return this.cachedScopeCacheKey;
 	}
 
 	private recordError(errorValue: SyncError): SyncError {
@@ -1270,7 +1224,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		if (!this.visibleItemsCache) {
 			this.visibleItemsCache = activeItems<CollectionItem<TManager>>(
 				this.state,
-				this.reconcileIdentity(),
+				this.identity,
 				this.pendingCommands.values()
 			);
 		}
@@ -1297,7 +1251,7 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 		const items = itemsForQueryFamily<CollectionItem<TManager>, TQuery>(
 			this.state,
 			query,
-			this.reconcileIdentity(),
+			this.identity,
 			this.pendingCommands.values()
 		);
 		this.listItemsCache.set(key, items);

@@ -70,7 +70,7 @@ describe('registration hold', () => {
 		const stores = ['a', 'b', 'c'].map((name) =>
 			createStore<NotesManager>({
 				key: 'notes',
-				getParams: () => ({ name }),
+				params: { name },
 				getUrl: () => `/${name}`,
 				query: () => ({ limit: 10 })
 			})
@@ -148,7 +148,7 @@ describe('store read registration hold', () => {
 		});
 		const store = createStore<NotesManager>({
 			key: 'notes',
-			getParams: () => ({ name: 'a' }),
+			params: { name: 'a' },
 			getUrl: () => 'http://sync.test/a',
 			query: () => ({ limit: 10 })
 		});

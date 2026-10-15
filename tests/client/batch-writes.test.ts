@@ -172,7 +172,7 @@ describe('client batch writes', () => {
 function createBatchStore() {
 	return createStore<BatchManager>({
 		key: 'batch-client',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/notes',
 		query: () => undefined
 	});

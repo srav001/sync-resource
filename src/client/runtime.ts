@@ -117,13 +117,14 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	private readonly streamUrl: string;
 	private readonly connectUrl: string;
 	private readonly batchConnect: boolean;
-	private readonly transportId: string;
+	private transportId: string;
 	private readonly clientId: string;
 	private readonly subscriptions = new Map<string, LogicalSubscription>();
 	private queuedConnects: QueuedConnect[] = [];
 	private registrationHolds = 0;
 	private registrationHoldTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly tabId: string;
+	private readonly createId: (prefix: string) => string;
 	private started = false;
 	private disposed = false;
 	private isOwner = false;
@@ -141,7 +142,6 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		streamUrl: string,
 		connectUrl: string,
 		batchConnect: boolean,
-		transportId: string,
 		clientId: string,
 		createId: (prefix: string) => string
 	) {
@@ -149,9 +149,10 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		this.streamUrl = streamUrl;
 		this.connectUrl = connectUrl;
 		this.batchConnect = batchConnect;
-		this.transportId = transportId;
 		this.clientId = clientId;
+		this.createId = createId;
 		this.tabId = createId('tab');
+		this.transportId = createId('transport');
 	}
 
 	async subscribe(options: Parameters<RuntimeTransport['subscribe']>[0]): Promise<SyncResult<() => void, SyncError>> {
@@ -347,7 +348,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 						method: 'POST',
 						headers: {
 							'content-type': 'application/json',
-							'x-sync-transport-id': this.transportId,
+							'x-sync-transport-id': this.currentTransportId(),
 							'x-client-id': this.clientId
 						},
 						signal
@@ -430,7 +431,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 				method: 'POST',
 				headers: {
 					'content-type': 'application/json',
-					'x-sync-transport-id': this.transportId,
+					'x-sync-transport-id': this.currentTransportId(),
 					'x-client-id': this.clientId
 				},
 				body: JSON.stringify({ connects: items.map((item) => item.url) }),
@@ -525,6 +526,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 					return;
 				}
 				this.isOwner = true;
+				this.takeOwnership();
 				this.connectOwnerStream();
 				await new Promise<void>((resolve) => {
 					this.releaseOwnerLock = resolve;
@@ -578,9 +580,30 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return;
 		}
 		this.isOwner = true;
+		this.takeOwnership();
 		this.writeOwnerHeartbeat();
 		this.startOwnerHeartbeat();
 		this.connectOwnerStream();
+	}
+
+	private currentTransportId(): string {
+		if (this.isOwner || !isBrowserRuntime()) {
+			return this.transportId;
+		}
+		try {
+			return window.localStorage.getItem(TRANSPORT_ID_STORAGE_KEY) || this.transportId;
+		} catch {
+			return this.transportId;
+		}
+	}
+
+	// The server keeps one stream per transport id, so each owner mints its own: browsers that share stored state
+	// never share an id. Storage hands the owner's id to follower tabs, which read it at each registration.
+	private takeOwnership(): void {
+		this.transportId = this.createId('transport');
+		try {
+			window.localStorage.setItem(TRANSPORT_ID_STORAGE_KEY, this.transportId);
+		} catch {}
 	}
 
 	private startOwnerHeartbeat(): void {
@@ -616,7 +639,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 				method: 'POST',
 				headers: {
 					accept: 'text/event-stream',
-					'x-sync-transport-id': this.transportId,
+					'x-sync-transport-id': this.currentTransportId(),
 					'x-client-id': this.clientId
 				},
 				signal: controller.signal
@@ -755,7 +778,6 @@ export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
 	const runtimeIdSeed = createRuntimeIdSeed();
 	const createId = options.createId ?? ((prefix: string) => `${prefix}_${runtimeIdSeed}_${++idIndex}`);
 	const clientId = createId('client');
-	const transportId = getStoredTransportId(createId);
 	const transport: RuntimeTransportWithDispose =
 		options.transport ??
 		new BrowserSessionRuntimeTransport(
@@ -763,7 +785,6 @@ export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
 			options.streamUrl ?? '/api/sync-resource/stream',
 			options.connectUrl ?? '/api/sync-resource/connect',
 			options.batchConnect ?? true,
-			transportId,
 			clientId,
 			createId
 		);
@@ -829,23 +850,6 @@ export function urlWithCursor(urlText: string, cursor: string | undefined): stri
 	const url = new URL(urlText, 'http://sync.local');
 	url.searchParams.set('after', cursor);
 	return isAbsolute ? url.href : url.pathname + url.search;
-}
-
-function getStoredTransportId(createId: (prefix: string) => string): string {
-	if (!isBrowserRuntime()) {
-		return createId('transport');
-	}
-	try {
-		const existing = window.localStorage.getItem(TRANSPORT_ID_STORAGE_KEY);
-		if (existing) {
-			return existing;
-		}
-		const next = createId('transport');
-		window.localStorage.setItem(TRANSPORT_ID_STORAGE_KEY, next);
-		return next;
-	} catch {
-		return createId('transport');
-	}
 }
 
 function isBrowserRuntime(): boolean {

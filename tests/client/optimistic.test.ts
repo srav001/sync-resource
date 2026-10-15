@@ -91,7 +91,7 @@ describe('optimistic writes', () => {
 		});
 		const store = createStore<BareAckManager>({
 			key: 'bare-ack',
-			getParams: () => ({ workspaceId: 'w1' }),
+			params: { workspaceId: 'w1' },
 			getUrl: () => 'http://sync.test/notes',
 			query: () => undefined
 		});

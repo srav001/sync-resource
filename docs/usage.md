@@ -98,7 +98,7 @@ Keep protocol-owned fields out of domain meaning:
 - `after` on stream/connect URLs is the replay cursor.
 - `clientId` and `mutationId` query fields, plus `x-client-id` and `x-mutation-id` headers, are client runtime/finality metadata.
 - `x-sync-meta` carries JSON operation metadata.
-- `x-sync-transport-id` identifies the browser transport for shared stream de-duplication.
+- `x-sync-transport-id` identifies one physical stream for shared stream de-duplication; the server keeps one stream per id and a new stream closes the old one.
 - `id: string` is the default item identity convention. Use explicit reconcile only when a domain uses another stable identity.
 
 Schema outputs drive both runtime values and TypeScript inference. If a Standard Schema transforms input to output, handlers receive the transformed output type and value. Async Standard Schema validation is intentionally not supported by the core parser; keep validation synchronous at the resource boundary.
@@ -852,12 +852,16 @@ Rules:
 
 - Never open one physical stream per store, manager, or project.
 - Duplicate stores for the same manager/scope share one logical subscription.
-- When `getParams()` changes the store's scope, the store ends the old scope's registration and registers the new one on
-  its next `hydrate()` or `connect()`.
+- A store serves one scope for its life (`params` is fixed at creation). A different scope is a different store, created
+  once its params are known.
 - Reconnect re-registers active logical subscriptions with their latest cursor.
 - The tab that owns the physical stream sends its first `/connect` registrations after the first stream attempt
   resolves (opened or failed), so a registration is never sent twice for one stream. Follower tabs register immediately.
   A `subscribe` call therefore resolves no earlier than the owner's first stream response.
+- The tab that becomes stream owner mints a fresh transport id, stores it in `localStorage` (`sync-resource:transport-id`)
+  before it opens its stream, and sends it on its requests, so browsers that share stored state never share an id.
+  Follower tabs read the stored id at each registration, including the re-registration after the owner's reconnect.
+  An owner that reconnects after a dropped stream keeps its id.
 - The owner tab relays each envelope's JSON text to follower tabs on the `sync-resource:v2:transport` BroadcastChannel.
   A follower parses and validates it like a stream frame. Tabs running a different relay version use a different channel,
   so they share no envelopes until the older tab reloads.
@@ -1052,9 +1056,7 @@ import { createStore } from 'sync-resource/client/core';
 const notes = createStore<NotesManager>(
 	{
 		key: 'notes',
-		getParams() {
-			return { workspaceId };
-		},
+		params: { workspaceId },
 		getUrl(params) {
 			return `/api/workspaces/${params.workspaceId}/notes/sync`;
 		},
@@ -1153,9 +1155,7 @@ import type { OrgManager } from './orgManager.js';
 
 const org = createStore<OrgManager>({
 	key: 'org',
-	getParams() {
-		return { orgId };
-	},
+	params: { orgId },
 	getUrl(params) {
 		return `/api/orgs/${params.orgId}/sync`;
 	}
@@ -1194,7 +1194,7 @@ let status = 'active';
 const notes = createStore(
 	{
 		key: 'notes',
-		getParams: () => ({ workspaceId: 'workspace-123' }),
+		params: { workspaceId: 'workspace-123' },
 		getUrl: ({ workspaceId }) => `/api/workspaces/${workspaceId}/notes/sync`,
 		query: () => ({ status, limit: 50 })
 	},
@@ -1380,7 +1380,7 @@ Rules:
 - `hydrate()` restores cache, reads from server, persists fresh authoritative state, and starts the realtime
   registration without waiting for it. A registration failure is reported as the store error and retried by the
   transport; `hydrate()`'s result reports only cache and read failures.
-- Public `hydrate()` is successful-once per store/scope lifetime: concurrent calls share the active attempt, later calls
+- Public `hydrate()` is successful-once per store lifetime: concurrent calls share the active attempt, later calls
   reuse a completed success without a read (they only resubscribe a failed registration), and failed attempts remain
   retryable. `isHydrating()` stays true through cache restore and the authoritative read.
 - Reconnect catch-up forces a new authoritative hydration even after public hydration succeeded. Explicit `refresh()`
@@ -1391,6 +1391,10 @@ Rules:
 - A snapshot holds `baseData`, the loaded `baseItems` once, and per query family (at most 8) its ids, page records (cursors, completeness,
   staleness, size, source), sort flag and meta, plus the active family and cursor. It is stored under `<scope>:view:v2`, so a
   snapshot saved in an older format sits under another key, is never read, and the store refetches.
+- The store records whether its state holds authoritative data (an applied read, live envelope, or write response). A
+  cache restore only applies while it does not, so neither a reconnect hydrate (even after a failed read) nor the
+  constructor's cache read that finishes late puts an older, debounced cache entry over newer state. A store serves one
+  scope for its life; a different scope is a different store.
 - Cache writes use one timer, armed by the first dirty event and set to 250 ms. Later dirty events do not reset it, so bursts and continuous realtime traffic write at most once per 250 ms. Events that arrive during an in-flight write arm the next timer after the current write completes. The store passes plain values to the cache adapter; the adapter/library owns IndexedDB storage details.
 
 A common wrapper component can derive UI state from `data/items`, `isHydrating()`, `isRefreshing()`, `isPending()`, and `error()`. Do not duplicate derived booleans in the store unless there is a real runtime reason.
@@ -1644,7 +1648,7 @@ Frontend list example:
 const notes = createStore<NotesManager>(
 	{
 		key: 'notes',
-		getParams: () => ({ workspaceId }),
+		params: { workspaceId },
 		getUrl: (params) => `/api/workspaces/${params.workspaceId}/notes/sync`,
 		query: () => ({ status: statusFilter(), limit: 50 })
 	},

@@ -25,7 +25,7 @@ interface NotesManager extends ManagerTypeShape {
 
 const config = {
 	key: 'notes-gaps' as const,
-	getParams: () => ({ workspaceId: 'workspace-1' }),
+	params: { workspaceId: 'workspace-1' },
 	getUrl: () => '/notes',
 	query: () => ({ limit: 20 })
 };

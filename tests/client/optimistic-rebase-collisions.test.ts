@@ -34,7 +34,7 @@ afterEach(() => {
 function createOptimisticStore() {
 	return createStore<OptimisticManager>({
 		key: 'optimistic-rebase',
-		getParams: () => ({ workspaceId: 'workspace-1' }),
+		params: { workspaceId: 'workspace-1' },
 		getUrl: () => 'http://sync.test/notes',
 		query: () => undefined
 	});
