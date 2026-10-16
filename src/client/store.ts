@@ -254,7 +254,23 @@ export type StoreActionMethods<TManager extends ManagerTypeShape> = Pick<
 	Extract<StoreActionMethodName, keyof ClientStore<TManager>>
 >;
 
+type StoreBatch = (run: () => void) => void;
+
+function runUnbatched(run: () => void): void {
+	run();
+}
+
 export function createStoreRuntime<TManager extends ManagerTypeShape>(
+	config: StoreConfig<TManager>,
+	...reconcile: NeedsReconcile<TManager> extends true
+		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
+		: [(builder: ReconcileBuilder<TManager>) => ReconcileConfig] | []
+): StoreRuntimeApi<TManager> & ClientStore<TManager> {
+	return createBatchedStoreRuntime(runUnbatched, config, ...reconcile);
+}
+
+export function createBatchedStoreRuntime<TManager extends ManagerTypeShape>(
+	batch: StoreBatch,
 	config: StoreConfig<TManager>,
 	...reconcile: NeedsReconcile<TManager> extends true
 		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
@@ -265,7 +281,7 @@ export function createStoreRuntime<TManager extends ManagerTypeShape>(
 			return configValue ?? {};
 		}
 	});
-	return new ClientStoreCore(config, reconcileConfig).api();
+	return new ClientStoreCore(config, reconcileConfig, batch).api();
 }
 
 export function createStore<TManager extends ManagerTypeShape>(
@@ -337,12 +353,14 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 	private lastError: SyncError | null = null;
 	private activeQuery: unknown;
 	private readonly hasDefaultListQuery: boolean;
+	private readonly batch: StoreBatch;
 
-	constructor(config: StoreConfig<TManager>, reconcile?: ReconcileConfig) {
+	constructor(config: StoreConfig<TManager>, reconcile: ReconcileConfig | undefined, batch: StoreBatch) {
 		if (reconcile?.addPlacement === 'sorted' && !reconcile.compare) {
 			throw new Error("reconcile.addPlacement 'sorted' requires reconcile.compare.");
 		}
 		this.config = config;
+		this.batch = batch;
 		this.runtime = getSyncRuntime();
 		this.identity = reconcileFromConfig(reconcile, config.params);
 		const defaultQuery = config.query;
@@ -1136,15 +1154,17 @@ class ClientStoreCore<TManager extends ManagerTypeShape> {
 			this.visibleItemsCache = undefined;
 			this.listItemsCache.clear();
 		}
-		if (this.subscribers.size > 0) {
-			const snapshot = this.snapshot();
-			for (const subscriber of this.subscribers) {
-				subscriber(snapshot);
+		this.batch(() => {
+			if (this.subscribers.size > 0) {
+				const snapshot = this.snapshot();
+				for (const subscriber of this.subscribers) {
+					subscriber(snapshot);
+				}
 			}
-		}
-		for (const event of events) {
-			this.emitEvent(event);
-		}
+			for (const event of events) {
+				this.emitEvent(event);
+			}
+		});
 	}
 
 	private emitEvent(event: StoreEventKey): void {

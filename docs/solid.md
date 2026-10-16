@@ -33,7 +33,8 @@ argument.
 | `store.isPending()`    | `store.isPending()`    |
 | `store.list(query)`    | `store.list(query)`    |
 
-These reads are Solid accessors. List-handle `items()`, `meta()`, and `pages()` are accessors too.
+These reads are Solid accessors. List-handle `items()`, `meta()`, and `pages()` are accessors too. One store change updates every
+accessor in a single Solid batch, so a computation reading several of them runs once and sees a consistent state.
 
 Actions remain ordinary methods:
 

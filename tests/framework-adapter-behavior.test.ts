@@ -64,6 +64,34 @@ describe('framework adapter behavior', () => {
 		await exerciseReactiveAdapter(system, harness);
 	});
 
+	it('applies each Solid store change to every accessor at once', async () => {
+		const system = createSyncTestSystem();
+		system.database.seed('workspace-1', [{ id: 'note-1', title: 'Initial' }]);
+		const views: string[] = [];
+		let store!: ReturnType<typeof createSolidStore<NotesManager>>;
+		const disposeOwner = createRoot((dispose) => {
+			store = createSolidStore<NotesManager>(storeConfig, createReconcile);
+			createComputed(() => views.push(`${itemText(store.items())}|${store.pending().length}`));
+			return dispose;
+		});
+
+		try {
+			expect((await store.hydrate()).status).toBe('ok');
+			views.length = 0;
+			const commit = system.database.pauseNextCommit();
+			const add = store.add({ input: { id: 'note-2', title: 'Optimistic' } });
+			expect(views).toEqual(['note-1:Initial,note-2:Optimistic|1']);
+			commit.resolve(undefined);
+			expect((await add).status).toBe('ok');
+			await system.transport.waitForEnvelopeCount(1);
+			expect(views.at(-1)).toBe('note-1:Initial,note-2:Optimistic|0');
+			expect(views.every((view) => view.startsWith('note-1:Initial,note-2:Optimistic|'))).toBe(true);
+		} finally {
+			disposeOwner();
+			await system.transport.close();
+		}
+	});
+
 	it('keeps Vue refs and list handles reactive through the full store lifecycle', async () => {
 		const system = createSyncTestSystem();
 		const harness = createVueHarness();

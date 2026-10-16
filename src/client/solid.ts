@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from 'solid-js';
+import { batch, createSignal, onCleanup } from 'solid-js';
 
 import type { ValueRecord } from '../shared/guards.ts';
 import type {
@@ -12,7 +12,7 @@ import type {
 	StoreSnapshot,
 	StoreWriteOptions
 } from './core.ts';
-import { createStoreRuntime } from './store.ts';
+import { createBatchedStoreRuntime } from './store.ts';
 
 export type SolidClientStore<TManager extends ManagerTypeShape> = Omit<ClientStore<TManager>, 'on' | 'subscribe'> & {
 	readonly core: ClientStore<TManager>;
@@ -24,7 +24,7 @@ export function createSolidStore<TManager extends ManagerTypeShape>(
 		? [(builder: ReconcileBuilder<TManager>) => ReconcileConfig]
 		: [(builder: ReconcileBuilder<TManager>) => ReconcileConfig] | []
 ): SolidClientStore<TManager> {
-	const core = createStoreRuntime(config, ...reconcile);
+	const core = createBatchedStoreRuntime(batch, config, ...reconcile);
 	const initialSnapshot = core.snapshot();
 	const [snapshotValue, setSnapshotValue] = createSignal(initialSnapshot, { equals: false });
 	const [data, setData] = createSignal(initialSnapshot.data);
@@ -70,15 +70,17 @@ export function createSolidStore<TManager extends ManagerTypeShape>(
 			unsubscribe();
 		}
 		const nextSnapshot = core.snapshot();
-		setSnapshotValue(() => nextSnapshot);
-		setData(() => nextSnapshot.data);
-		setItems(() => nextSnapshot.items);
-		setListMeta(() => nextSnapshot.listMeta);
-		setPages(() => nextSnapshot.pages);
-		setPending(() => nextSnapshot.pending);
-		setError(() => nextSnapshot.error);
-		setHydrating(nextSnapshot.hydrating);
-		setRefreshing(nextSnapshot.refreshing);
+		batch(() => {
+			setSnapshotValue(() => nextSnapshot);
+			setData(() => nextSnapshot.data);
+			setItems(() => nextSnapshot.items);
+			setListMeta(() => nextSnapshot.listMeta);
+			setPages(() => nextSnapshot.pages);
+			setPending(() => nextSnapshot.pending);
+			setError(() => nextSnapshot.error);
+			setHydrating(nextSnapshot.hydrating);
+			setRefreshing(nextSnapshot.refreshing);
+		});
 	}
 
 	onCleanup(dispose);
