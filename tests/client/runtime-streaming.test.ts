@@ -334,7 +334,11 @@ describe('browser runtime registration order', () => {
 
 	it('keeps refreshing the localStorage owner record while a tab without Web Locks owns the stream', async () => {
 		const setItem = vi.fn();
-		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem } });
+		vi.stubGlobal('window', {
+			addEventListener() {},
+			removeEventListener() {},
+			localStorage: { getItem: () => null, setItem }
+		});
 		vi.stubGlobal('navigator', {});
 		vi.useFakeTimers();
 		const fetchImpl: typeof fetch = async (input, init) =>
@@ -371,6 +375,8 @@ describe('browser runtime registration order', () => {
 			return {
 				items,
 				window: {
+					addEventListener() {},
+					removeEventListener() {},
 					localStorage: {
 						getItem: (key: string) => items[key] ?? null,
 						setItem: (key: string, value: string) => {
@@ -388,6 +394,9 @@ describe('browser runtime registration order', () => {
 				if (request.url.endsWith('/api/sync-resource/stream')) {
 					streamIds.push(transportId);
 					return sseResponse();
+				}
+				if (new URL(request.url).pathname === '/api/sync-resource/release') {
+					return Response.json({ results: [] });
 				}
 				connectIds.push(transportId);
 				return connectResponse('notes:scope');
@@ -521,7 +530,7 @@ describe('browser runtime registration order', () => {
 						}
 					})
 			);
-			vi.stubGlobal('window', { localStorage: undefined });
+			vi.stubGlobal('window', { addEventListener() {}, removeEventListener() {}, localStorage: undefined });
 			vi.stubGlobal('navigator', { locks: { request } });
 		}
 
@@ -562,7 +571,11 @@ describe('browser runtime registration order', () => {
 		it('does not write a localStorage owner record while the tab holds the Web Lock', async () => {
 			stubBrowser({ granted: true });
 			const setItem = vi.fn();
-			vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem } });
+			vi.stubGlobal('window', {
+				addEventListener() {},
+				removeEventListener() {},
+				localStorage: { getItem: () => null, setItem }
+			});
 			vi.useFakeTimers();
 			const fetchImpl: typeof fetch = async (input, init) =>
 				toRequest(input, init).url.endsWith('/api/sync-resource/stream')
@@ -613,7 +626,7 @@ describe('browser runtime registration order', () => {
 		});
 
 		it('relays every envelope the owner tab receives, chunked or not, to a follower tab', async () => {
-			vi.stubGlobal('window', { localStorage: undefined });
+			vi.stubGlobal('window', { addEventListener() {}, removeEventListener() {}, localStorage: undefined });
 			vi.stubGlobal('navigator', { locks: lockManager() });
 			vi.stubGlobal('BroadcastChannel', LoopbackBroadcastChannel);
 			LoopbackBroadcastChannel.posted.length = 0;

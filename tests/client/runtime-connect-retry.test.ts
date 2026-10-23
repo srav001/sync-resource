@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 function pathOf(input: URL | RequestInfo): string {
-	return typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+	return new URL(input instanceof Request ? input.url : String(input), 'http://sync.test').pathname;
 }
 
 function createFailingConnectRuntime(fails: (connect: number) => boolean) {
@@ -49,6 +49,9 @@ function createFailingConnectRuntime(fails: (connect: number) => boolean) {
 					}),
 					{ headers: { 'content-type': 'text/event-stream' } }
 				);
+			}
+			if (pathOf(input) === '/api/sync-resource/release') {
+				return Response.json({ results: [] });
 			}
 			connects += 1;
 			return fails(connects)

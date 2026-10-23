@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vite-plus/test';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
 	configureSync,
@@ -14,6 +14,7 @@ import { noopCache } from '../fixtures/clientRuntime.ts';
 
 afterEach(() => {
 	resetSyncConfiguration();
+	vi.restoreAllMocks();
 });
 
 describe('client runtime configuration', () => {
@@ -118,5 +119,44 @@ describe('client runtime configuration', () => {
 			subscription.value();
 		}
 		runtime.dispose();
+	});
+	it('generates transport and subscription ids with independent cryptographic randomness from clientId', async () => {
+		let calls = 0;
+		const getRandomValues = vi.spyOn(crypto, 'getRandomValues').mockImplementation((array) => {
+			(array as Uint8Array).fill(++calls * 0x11);
+			return array;
+		});
+		const requests: Request[] = [];
+		const runtime = createRuntime({
+			cache: noopCache,
+			batchConnect: false,
+			fetch: async (input, init) => {
+				const request = new Request(
+					input instanceof Request ? input : new URL(input, 'http://sync.test'),
+					init
+				);
+				requests.push(request);
+				return request.url.endsWith('/stream')
+					? new Response(new ReadableStream())
+					: Response.json({ isOk: true, isError: false, value: { scope: 'notes:scope' } });
+			}
+		});
+		try {
+			const result = await runtime.transport.subscribe({
+				connectUrl: '/notes/connect',
+				managerKey: 'notes',
+				scope: 'scope',
+				signal: new AbortController().signal,
+				onEnvelope() {}
+			});
+			expect(result.isOk()).toBe(true);
+			expect(runtime.clientId).toBe(`client_${'11'.repeat(16)}`);
+			expect(requests[0]!.headers.get('x-sync-transport-id')).toBe(`transport_${'33'.repeat(16)}`);
+			expect(new URL(requests[1]!.url).searchParams.get('subscription')).toBe(`subscription_${'44'.repeat(16)}`);
+			expect(getRandomValues).toHaveBeenCalledTimes(4);
+		} finally {
+			runtime.dispose();
+			getRandomValues.mockRestore();
+		}
 	});
 });

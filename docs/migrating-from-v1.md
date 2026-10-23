@@ -86,6 +86,10 @@ Notes:
 
 - Keep the per-manager `/connect` routes mounted; the batch route dispatches to them.
 - The batch route accepts 1 to 64 same-origin paths ending in `/connect`; the client splits larger queues.
+- Mount `httpSharedSyncRelease` (or Effect's `httpSharedSyncReleaseRoute`) beside the stream route, through the same
+  authentication and `x-sync-transport-id` rewriting middleware. The default URL is `/api/sync-resource/release`,
+  configurable as `releaseUrl`, including with `batchConnect: false`. Without it, release requests return `404` and
+  scopes stay routed until transport teardown or TTL; reads, writes, and realtime registration still work.
 - Deploy order: ship the server with the batch route first. The per-manager routes are unchanged, so v1 clients keep
   using them. A v2 client against a server without the route loses realtime until the route exists.
 - A store URL on another origin than the batch route connects directly.

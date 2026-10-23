@@ -36,7 +36,13 @@ The same resource and manager, written both ways. Both expose the same HTTP hand
 
 ```ts
 import { eq } from 'drizzle-orm';
-import { httpSharedSyncConnect, httpSharedSyncStream, manager, resource } from 'sync-resource/server';
+import {
+	httpSharedSyncConnect,
+	httpSharedSyncRelease,
+	httpSharedSyncStream,
+	manager,
+	resource
+} from 'sync-resource/server';
 
 import { db, notes } from './db.js';
 
@@ -58,8 +64,9 @@ export const notesManager = manager({
 });
 export type NotesManager = typeof notesManager.type;
 
-// Mount once per app: the shared stream and the batch connect route.
+// Mount once per app: the shared stream, subscription releases, and batch connects.
 httpSharedSyncStream(request);
+httpSharedSyncRelease(request);
 httpSharedSyncConnect(request, handleApplicationRequest);
 // Mount per manager: one handler per method the resource defines, plus .connect.
 notesManager.http.list({ request, params });
@@ -75,6 +82,7 @@ import { HttpRouter } from 'effect/http';
 import { syncError } from 'sync-resource/server';
 import {
 	httpSharedSyncConnectRoute,
+	httpSharedSyncReleaseRoute,
 	httpSharedSyncStreamRoute,
 	manager,
 	managerHttpRoutes,
@@ -105,6 +113,7 @@ const routes = Effect.gen(function* () {
 	return Layer.mergeAll(
 		HttpRouter.addAll([
 			httpSharedSyncStreamRoute('/api/sync-resource/stream'),
+			httpSharedSyncReleaseRoute('/api/sync-resource/release'),
 			...managerHttpRoutes({
 				manager: notesManager,
 				path: '/api/workspaces/:workspaceId/notes/sync',

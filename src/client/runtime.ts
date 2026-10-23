@@ -24,6 +24,7 @@ export interface CreateRuntimeOptions {
 	readonly cache: SyncRuntime['cache'];
 	readonly streamUrl?: string;
 	readonly connectUrl?: string;
+	readonly releaseUrl?: string;
 	readonly batchConnect?: boolean;
 	now?(this: void): number;
 	createId?(this: void, prefix: string): string;
@@ -39,6 +40,9 @@ interface RuntimeTransportWithDispose extends RuntimeTransport {
 }
 
 interface LogicalSubscription {
+	readonly id: string;
+	requests: number;
+	sent: boolean;
 	readonly key: string;
 	readonly connectUrl: string;
 	readonly managerKey: string;
@@ -57,6 +61,7 @@ interface LogicalSubscription {
 }
 
 interface QueuedConnect {
+	readonly entry: LogicalSubscription;
 	readonly url: string;
 	readonly signal: AbortSignal;
 	resolve(this: void, response: Response): void;
@@ -118,11 +123,19 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	private readonly fetchImpl: typeof fetch;
 	private readonly streamUrl: string;
 	private readonly connectUrl: string;
+	private readonly releaseUrl: string;
 	private readonly batchConnect: boolean;
 	private transportId: string;
 	private readonly clientId: string;
 	private readonly subscriptions = new Map<string, LogicalSubscription>();
+	private readonly retired = new Set<LogicalSubscription>();
 	private queuedConnects: QueuedConnect[] = [];
+	private queuedReleases: string[] = [];
+	private readonly pagehide = (event: PageTransitionEvent) => {
+		if (!event.persisted) {
+			this.releaseOnExit();
+		}
+	};
 	private registrationHolds = 0;
 	private registrationHoldTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly tabId: string;
@@ -143,6 +156,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		fetchImpl: typeof fetch,
 		streamUrl: string,
 		connectUrl: string,
+		releaseUrl: string,
 		batchConnect: boolean,
 		clientId: string,
 		createId: (prefix: string) => string
@@ -150,6 +164,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		this.fetchImpl = fetchImpl;
 		this.streamUrl = streamUrl;
 		this.connectUrl = connectUrl;
+		this.releaseUrl = releaseUrl;
 		this.batchConnect = batchConnect;
 		this.clientId = clientId;
 		this.createId = createId;
@@ -215,15 +230,20 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		if (this.disposed) {
 			return;
 		}
+		this.releaseOnExit();
 		this.disposed = true;
 		this.settleStreamAttempt();
 		clearTimeout(this.registrationHoldTimer);
 		this.stopStream();
 		for (const entry of this.subscriptions.values()) {
+			if (entry.requests > 0) {
+				this.retired.add(entry);
+			}
 			entry.connectAbort?.abort();
 			clearTimeout(entry.retryTimer);
 		}
 		this.subscriptions.clear();
+		this.flushConnects();
 	}
 
 	private getOrCreateSubscription(
@@ -241,6 +261,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return existing;
 		}
 		const entry: LogicalSubscription = {
+			id: this.createId('subscription'),
+			requests: 0,
+			sent: false,
 			key,
 			connectUrl: options.connectUrl,
 			managerKey: options.managerKey,
@@ -344,19 +367,11 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			if (signal.aborted) {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
-			const url = urlWithCursor(entry.connectUrl, entry.getCursor?.());
+			const url = urlWithCursor(entry.connectUrl, entry.getCursor?.(), entry.id);
 			const path = this.batchConnect ? batchPath(url, this.connectUrl) : undefined;
 			const response = path
-				? await this.queueConnect(path, signal)
-				: await this.fetchImpl(url, {
-						method: 'POST',
-						headers: {
-							'content-type': 'application/json',
-							'x-sync-transport-id': this.currentTransportId(),
-							'x-client-id': this.clientId
-						},
-						signal
-					});
+				? await this.queueConnect(entry, path, signal)
+				: await this.sendDirectConnect(entry, url);
 			if (signal.aborted) {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
@@ -408,22 +423,92 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		};
 	}
 
-	private queueConnect(url: string, signal: AbortSignal): Promise<Response> {
+	private async sendDirectConnect(entry: LogicalSubscription, url: string): Promise<Response> {
+		entry.requests += 1;
+		entry.sent = true;
+		try {
+			return await this.fetchImpl(url, {
+				method: 'POST',
+				headers: this.connectHeaders(),
+				signal: AbortSignal.timeout(LOGICAL_CONNECT_TIMEOUT_MS)
+			});
+		} finally {
+			this.settleRequest(entry);
+		}
+	}
+
+	private queueConnect(entry: LogicalSubscription, url: string, signal: AbortSignal): Promise<Response> {
 		return new Promise((resolve, reject) => {
-			this.queuedConnects.push({ url, signal, resolve, reject });
-			if (this.queuedConnects.length > 1) {
-				return;
-			}
-			if (this.registrationHolds === 0) {
-				queueMicrotask(() => this.flushConnects());
-			} else {
-				this.registrationHoldTimer = setTimeout(() => this.flushConnects(), MAX_REGISTRATION_HOLD_MS);
-			}
+			this.queuedConnects.push({ entry, url, signal, resolve, reject });
+			this.scheduleFlush();
 		});
+	}
+
+	private scheduleFlush(): void {
+		if (this.queuedConnects.length + this.queuedReleases.length !== 1) {
+			return;
+		}
+		if (this.registrationHolds === 0 || this.disposed) {
+			queueMicrotask(() => this.flushConnects());
+		} else {
+			this.registrationHoldTimer = setTimeout(() => this.flushConnects(), MAX_REGISTRATION_HOLD_MS);
+		}
+	}
+
+	private settleRequest(entry: LogicalSubscription): void {
+		entry.requests -= 1;
+		this.releaseIfClosed(entry);
+	}
+
+	private releaseIfClosed(entry: LogicalSubscription): void {
+		if (this.subscriptions.get(entry.key) !== entry && entry.requests === 0 && entry.sent) {
+			this.queuedReleases.push(entry.id);
+			entry.sent = false;
+			this.retired.delete(entry);
+			this.scheduleFlush();
+			this.stopOwnerStreamIfIdle();
+		}
+	}
+
+	private connectHeaders(): Record<string, string> {
+		return {
+			'content-type': 'application/json',
+			'x-sync-transport-id': this.currentTransportId(),
+			'x-client-id': this.clientId
+		};
+	}
+
+	private releaseOnExit(): void {
+		const releases = this.queuedReleases;
+		this.queuedReleases = [];
+		for (const entry of [...this.subscriptions.values(), ...this.retired]) {
+			if (entry.sent) {
+				releases.push(entry.id);
+				// In-flight registrations still need a release after their network response arrives.
+				if (entry.requests === 0) {
+					entry.sent = false;
+				}
+			}
+		}
+		this.sendReleases(releases);
+	}
+
+	private sendReleases(releases: readonly string[]): void {
+		for (let start = 0; start < releases.length; start += MAX_BATCH_CONNECTS) {
+			this.fetchImpl(this.releaseUrl, {
+				method: 'POST',
+				headers: this.connectHeaders(),
+				body: JSON.stringify({ releases: releases.slice(start, start + MAX_BATCH_CONNECTS) }),
+				keepalive: true,
+				signal: AbortSignal.timeout(LOGICAL_CONNECT_TIMEOUT_MS)
+			}).catch(() => undefined);
+		}
 	}
 
 	private flushConnects(): void {
 		clearTimeout(this.registrationHoldTimer);
+		const releases = this.queuedReleases;
+		this.queuedReleases = [];
 		const queued = this.queuedConnects;
 		this.queuedConnects = [];
 		const live: QueuedConnect[] = [];
@@ -435,19 +520,21 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			}
 		}
 		for (let start = 0; start < live.length; start += MAX_BATCH_CONNECTS) {
-			this.sendConnects(live.slice(start, start + MAX_BATCH_CONNECTS));
+			this.sendConnects(live.slice(start, start + MAX_BATCH_CONNECTS)).catch(() => undefined);
 		}
+		this.sendReleases(releases);
+		this.stopOwnerStreamIfIdle();
 	}
 
 	private async sendConnects(items: readonly QueuedConnect[]): Promise<void> {
+		for (const { entry } of items) {
+			entry.requests += 1;
+			entry.sent = true;
+		}
 		try {
 			const response = await this.fetchImpl(this.connectUrl, {
 				method: 'POST',
-				headers: {
-					'content-type': 'application/json',
-					'x-sync-transport-id': this.currentTransportId(),
-					'x-client-id': this.clientId
-				},
+				headers: this.connectHeaders(),
 				body: JSON.stringify({ connects: items.map((item) => item.url) }),
 				signal: AbortSignal.timeout(LOGICAL_CONNECT_TIMEOUT_MS)
 			});
@@ -471,6 +558,10 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			for (const item of items) {
 				item.reject(cause);
 			}
+		} finally {
+			for (const { entry } of items) {
+				this.settleRequest(entry);
+			}
 		}
 	}
 
@@ -489,6 +580,10 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			return;
 		}
 		this.subscriptions.delete(entry.key);
+		if (entry.requests > 0) {
+			this.retired.add(entry);
+		}
+		this.releaseIfClosed(entry);
 		clearTimeout(entry.retryTimer);
 		entry.connectAbort?.abort();
 		entry.connectAbort = undefined;
@@ -507,6 +602,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	}
 
 	private stopStream(): void {
+		if (isBrowserRuntime() && (this.disposed || (this.retired.size === 0 && this.queuedReleases.length === 0))) {
+			window.removeEventListener('pagehide', this.pagehide);
+		}
 		this.streamAbort?.abort();
 		this.streamAbort = undefined;
 		clearTimeout(this.reconnectTimer);
@@ -533,6 +631,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			this.connectOwnerStream();
 			return;
 		}
+		window.addEventListener('pagehide', this.pagehide);
 		const locks = navigator.locks;
 		if (locks) {
 			const ownStream = async () => {
@@ -763,7 +862,6 @@ export async function readSyncResponse<TValue>(response: Response): Promise<Sync
 }
 
 export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
-	let idIndex = 0;
 	const now = options.now ?? (() => Date.now());
 	const cache = options.cache;
 	const keys = cache.keys?.bind(cache);
@@ -771,8 +869,7 @@ export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
 		? setTimeout(() => sweepExpiredCache(cache, keys, now()).catch(() => undefined), CACHE_SWEEP_DELAY_MS)
 		: undefined;
 	const fetchImpl = options.fetch ?? fetch;
-	const runtimeIdSeed = createRuntimeIdSeed();
-	const createId = options.createId ?? ((prefix: string) => `${prefix}_${runtimeIdSeed}_${++idIndex}`);
+	const createId = options.createId ?? ((prefix: string) => `${prefix}_${randomId()}`);
 	const clientId = createId('client');
 	const transport: RuntimeTransportWithDispose =
 		options.transport ??
@@ -780,6 +877,7 @@ export function createRuntime(options: CreateRuntimeOptions): SyncRuntime {
 			fetchImpl,
 			options.streamUrl ?? '/api/sync-resource/stream',
 			options.connectUrl ?? '/api/sync-resource/connect',
+			options.releaseUrl ?? '/api/sync-resource/release',
 			options.batchConnect ?? true,
 			clientId,
 			createId
@@ -837,14 +935,19 @@ function batchPath(urlText: string, connectUrl: string): string | undefined {
 	return url.origin === base.origin ? url.pathname + url.search : undefined;
 }
 
-export function urlWithCursor(urlText: string, cursor: string | undefined): string {
-	if (!cursor) {
+export function urlWithCursor(urlText: string, cursor: string | undefined, subscription?: string): string {
+	if (!cursor && !subscription) {
 		return urlText;
 	}
 
 	const isAbsolute = /^https?:\/\//.test(urlText);
 	const url = new URL(urlText, 'http://sync.local');
-	url.searchParams.set('after', cursor);
+	if (cursor) {
+		url.searchParams.set('after', cursor);
+	}
+	if (subscription) {
+		url.searchParams.set('subscription', subscription);
+	}
 	return isAbsolute ? url.href : url.pathname + url.search;
 }
 
@@ -852,13 +955,11 @@ function isBrowserRuntime(): boolean {
 	return globalThis.window !== undefined && globalThis.navigator !== undefined;
 }
 
-function createRuntimeIdSeed(): string {
-	const cryptoValue = globalThis.crypto;
-	if (cryptoValue?.randomUUID) {
-		// Client and mutation ids are app-internal finality keys; a per-runtime seed avoids cross-session counter collisions.
-		return cryptoValue.randomUUID().replaceAll('-', '');
-	}
-	return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+function randomId(): string {
+	// randomUUID exists only in secure contexts; getRandomValues also works on plain-http pages.
+	return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join(
+		''
+	);
 }
 
 function readOwner(): { readonly ownerId: string; readonly expires: number } | undefined {

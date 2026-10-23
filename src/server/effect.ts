@@ -22,7 +22,7 @@ import {
 	type Resource as PlainResource,
 	type ResourceMethodMap
 } from './resource.ts';
-import { httpSharedSyncStream } from './streamMultiplexer.ts';
+import { httpSharedSyncRelease, httpSharedSyncStream } from './streamMultiplexer.ts';
 import type {
 	AuthorizeResult,
 	ManagerHttpHandlers,
@@ -427,6 +427,10 @@ export interface EffectManagerRoutesOptions<TContext, TParams, TError = never, R
 
 export function httpSharedSyncStreamRoute(path: `/${string}`): HttpRouter.Route<never, never> {
 	return HttpRouter.route('POST', path, (request) => webHandler(request, httpSharedSyncStream));
+}
+
+export function httpSharedSyncReleaseRoute(path: `/${string}`): HttpRouter.Route<never, never> {
+	return HttpRouter.route('POST', path, (request) => webHandler(request, httpSharedSyncRelease));
 }
 
 export function httpSharedSyncConnectRoute(path: `/${string}`): Layer.Layer<never, never, HttpRouter.HttpRouter> {

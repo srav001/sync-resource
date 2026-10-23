@@ -54,7 +54,7 @@ function createHarness(
 			);
 		}
 		if (url.pathname === '/api/sync-resource/connect') {
-			const { connects } = (await request.json()) as { connects: string[] };
+			const { connects = [] } = (await request.json()) as { connects?: string[] };
 			requests.push({ url: url.pathname, headers, connects });
 			if (batchStatus !== 200) {
 				return new Response('unavailable', { status: batchStatus });
@@ -138,9 +138,9 @@ describe('batched realtime registration', () => {
 			expect(harness.requests).toHaveLength(1);
 			expect(harness.requests[0]?.url).toBe('/api/sync-resource/connect');
 			expect(harness.requests[0]?.connects).toEqual([
-				'/a/connect?after=cursor-a',
-				'/b/connect?after=cursor-b',
-				'/c/connect?after=cursor-c'
+				'/a/connect?after=cursor-a&subscription=subscription-batch',
+				'/b/connect?after=cursor-b&subscription=subscription-batch',
+				'/c/connect?after=cursor-c&subscription=subscription-batch'
 			]);
 			expect(harness.requests[0]?.headers.get('x-sync-transport-id')).toMatch(/^transport-/);
 			expect(harness.requests[0]?.headers.get('x-client-id')).toBe(harness.runtime.clientId);
@@ -173,9 +173,9 @@ describe('batched realtime registration', () => {
 			);
 			expect(results.every((result) => result.isOk())).toBe(true);
 			expect(harness.requests.map((request) => request.url)).toEqual([
-				'/a/connect?after=cursor-a',
-				'/b/connect?after=cursor-b',
-				'/c/connect?after=cursor-c'
+				'/a/connect?after=cursor-a&subscription=subscription-direct',
+				'/b/connect?after=cursor-b&subscription=subscription-direct',
+				'/c/connect?after=cursor-c&subscription=subscription-direct'
 			]);
 			expect(harness.requests.every((request) => request.connects === undefined)).toBe(true);
 		} finally {
@@ -205,7 +205,9 @@ describe('batched realtime registration', () => {
 
 			await vi.advanceTimersByTimeAsync(1300);
 			expect(harness.requests).toHaveLength(2);
-			expect(harness.requests[1]?.connects).toEqual(['/b/connect?after=cursor-b']);
+			expect(harness.requests[1]?.connects).toEqual([
+				'/b/connect?after=cursor-b&subscription=subscription-batch'
+			]);
 			await vi.advanceTimersByTimeAsync(60_000);
 			expect(harness.requests).toHaveLength(2);
 		} finally {
@@ -261,9 +263,9 @@ describe('batched realtime registration', () => {
 			await vi.advanceTimersByTimeAsync(1300);
 			const retried = harness.requests.slice(1).flatMap((request) => request.connects ?? []);
 			expect(retried.sort()).toEqual([
-				'/a/connect?after=cursor-a',
-				'/b/connect?after=cursor-b',
-				'/c/connect?after=cursor-c'
+				'/a/connect?after=cursor-a&subscription=subscription-batch',
+				'/b/connect?after=cursor-b&subscription=subscription-batch',
+				'/c/connect?after=cursor-c&subscription=subscription-batch'
 			]);
 			await vi.advanceTimersByTimeAsync(60_000);
 			expect(harness.requests.slice(1).flatMap((request) => request.connects ?? [])).toHaveLength(3);
@@ -288,7 +290,10 @@ describe('batched realtime registration', () => {
 			]);
 			expect(results.map((result) => result.isOk())).toEqual([true, false, true]);
 			expect(harness.requests).toHaveLength(1);
-			expect(harness.requests[0]?.connects).toEqual(['/a/connect?after=cursor-a', '/c/connect?after=cursor-c']);
+			expect(harness.requests[0]?.connects).toEqual([
+				'/a/connect?after=cursor-a&subscription=subscription-batch',
+				'/c/connect?after=cursor-c&subscription=subscription-batch'
+			]);
 		} finally {
 			signal.abort();
 			harness.runtime.dispose();
@@ -319,8 +324,8 @@ describe('batched realtime registration', () => {
 			]);
 			expect(results.every((result) => result.isOk())).toBe(true);
 			expect(harness.requests.map((request) => request.connects ?? request.url)).toEqual([
-				'http://other.test/b/connect?after=cursor-b',
-				['/a/connect?after=cursor-a']
+				'http://other.test/b/connect?after=cursor-b&subscription=subscription-batch',
+				['/a/connect?after=cursor-a&subscription=subscription-batch']
 			]);
 		} finally {
 			signal.abort();
@@ -342,7 +347,10 @@ describe('batched realtime registration', () => {
 			);
 			expect(results.every((result) => result.isOk())).toBe(true);
 			expect(harness.requests.map((request) => request.connects)).toEqual([
-				['/a/connect?after=a-1', '/b/connect?after=b-1']
+				[
+					'/a/connect?after=a-1&subscription=subscription-batch',
+					'/b/connect?after=b-1&subscription=subscription-batch'
+				]
 			]);
 
 			cursors.a = 'a-2';
@@ -351,8 +359,14 @@ describe('batched realtime registration', () => {
 			await vi.advanceTimersByTimeAsync(2_000);
 			expect(harness.streamRequests()).toBe(2);
 			expect(harness.requests.map((request) => request.connects)).toEqual([
-				['/a/connect?after=a-1', '/b/connect?after=b-1'],
-				['/a/connect?after=a-2', '/b/connect?after=b-2']
+				[
+					'/a/connect?after=a-1&subscription=subscription-batch',
+					'/b/connect?after=b-1&subscription=subscription-batch'
+				],
+				[
+					'/a/connect?after=a-2&subscription=subscription-batch',
+					'/b/connect?after=b-2&subscription=subscription-batch'
+				]
 			]);
 		} finally {
 			signal.abort();

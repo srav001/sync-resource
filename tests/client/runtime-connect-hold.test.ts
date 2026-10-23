@@ -38,8 +38,8 @@ function createFetch(readResponse: (path: string) => Promise<Response> = async (
 			});
 		}
 		if (path === '/api/sync-resource/connect') {
-			const { connects } = (await request.json()) as { connects: string[] };
-			batches.push(connects);
+			const { connects = [] } = (await request.json()) as { connects?: string[] };
+			batches.push(connects.map((url) => new URL(url, 'http://sync.test').pathname));
 			return Response.json({
 				results: connects.map((url) => ({
 					status: 200,

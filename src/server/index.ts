@@ -73,7 +73,7 @@ export type {
 	ManagerRealtimePubSubTransport,
 	PubSubManagerRealtimeBusOptions
 } from './realtime.ts';
-export { httpSharedSyncStream } from './streamMultiplexer.ts';
+export { httpSharedSyncRelease, httpSharedSyncStream } from './streamMultiplexer.ts';
 export type {
 	AuthorizeHook,
 	AuthorizeResult,

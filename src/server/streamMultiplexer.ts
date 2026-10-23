@@ -1,4 +1,4 @@
-import { isUnrefableTimer } from '../shared/guards.ts';
+import { isRecord, isString, isUnrefableTimer } from '../shared/guards.ts';
 import {
 	normalizeSyncError,
 	syncError,
@@ -7,7 +7,7 @@ import {
 	type SyncEnvelope,
 	type SyncError
 } from '../shared/index.ts';
-import { syncHttpError } from '../shared/protocol.ts';
+import { MAX_BATCH_CONNECTS, syncHttpError } from '../shared/protocol.ts';
 import { err, ok, type SyncResult } from '../shared/result.ts';
 import { encodeSseFrame, encodeSyncEnvelopeSseFrames, MAX_SSE_FRAME_BYTES } from '../shared/sse.ts';
 import type { ManagerSyncPersistence } from './types.ts';
@@ -79,6 +79,10 @@ export interface RegisterSharedStreamManagerOptions {
 	): Promise<void> | void;
 }
 
+interface HeldSubscription extends SubscriptionDetail {
+	readonly holders: Set<string>;
+}
+
 export interface RegisterSharedStreamSubscriptionOptions extends SubscriptionDetail {
 	readonly request: Request;
 }
@@ -87,7 +91,8 @@ const registeredManagers = new Map<string, RegisteredManager>();
 const streamsByTransportId = new Map<string, StreamState>();
 const transportIdsByScope = new Map<string, Set<string>>();
 const scopesByTransportId = new Map<string, Set<string>>();
-const subscriptionDetails = new Map<string, SubscriptionDetail>();
+const subscriptionDetails = new Map<string, HeldSubscription>();
+const holderScopes = new Map<string, Map<string, string>>();
 // One unref'd timer per transport and per idle scope; it is replaced on activity and cleared on teardown.
 const transportTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // Limit duplicate physical streams per browser transport id and IP, not all users behind one IP.
@@ -148,7 +153,17 @@ export async function registerSharedStreamSubscription(
 	transportScopes.add(options.scope);
 	scopesByTransportId.set(transportId, transportScopes);
 
+	const detailKey = subscriptionKey(transportId, options.scope);
+	const holders = subscriptionDetails.get(detailKey)?.holders ?? new Set<string>();
+	const holderId = new URL(options.request.url).searchParams.get('subscription') ?? '';
+	holders.add(holderId);
+	if (holderId) {
+		const scopes = holderScopes.get(transportId) ?? new Map<string, string>();
+		scopes.set(holderId, options.scope);
+		holderScopes.set(transportId, scopes);
+	}
 	const detail = {
+		holders,
 		managerKey: options.managerKey,
 		scope: options.scope,
 		afterCursor: options.afterCursor,
@@ -156,7 +171,7 @@ export async function registerSharedStreamSubscription(
 		persistence: options.persistence,
 		nextCursor: options.nextCursor
 	};
-	subscriptionDetails.set(subscriptionKey(transportId, options.scope), detail);
+	subscriptionDetails.set(detailKey, detail);
 
 	const stream = streamsByTransportId.get(transportId);
 	if (stream) {
@@ -165,6 +180,33 @@ export async function registerSharedStreamSubscription(
 		startReplay(stream, detail, true);
 	}
 
+	return ok();
+}
+
+export function releaseSharedStreamSubscriptions(
+	request: Request,
+	holderIds: readonly string[]
+): SyncResult<void, SyncError> {
+	const transportId = getTransportId(request);
+	if (!transportId) {
+		return err('bad_request', 'Missing required header: x-sync-transport-id.');
+	}
+	const scopes = holderScopes.get(transportId);
+	for (const holderId of holderIds) {
+		const scope = scopes?.get(holderId);
+		if (scope === undefined) {
+			continue;
+		}
+		scopes?.delete(holderId);
+		const detail = subscriptionDetails.get(subscriptionKey(transportId, scope));
+		detail?.holders.delete(holderId);
+		if (detail?.holders.size === 0) {
+			removeSubscription(transportId, scope);
+		}
+	}
+	if (scopes?.size === 0) {
+		holderScopes.delete(transportId);
+	}
 	return ok();
 }
 
@@ -192,6 +234,26 @@ export function publishSharedStreamEnvelope(envelope: SyncEnvelope): void {
 			sendFrames(stream, frames);
 		}
 	}
+}
+
+export async function httpSharedSyncRelease(request: Request): Promise<Response> {
+	const body: unknown = await request.json().catch(() => undefined);
+	const releases = isRecord(body) ? body.releases : undefined;
+	if (
+		!Array.isArray(releases) ||
+		releases.length === 0 ||
+		releases.length > MAX_BATCH_CONNECTS ||
+		!releases.every((id) => isString(id) && id.length > 0)
+	) {
+		return errorResponse(
+			syncError(
+				'bad_request',
+				`Body must be { releases: [...] } with 1 to ${MAX_BATCH_CONNECTS} non-empty holder ids.`
+			)
+		);
+	}
+	const result = releaseSharedStreamSubscriptions(request, releases);
+	return result.isErr() ? errorResponse(result.error) : jsonResponse({ isOk: true, isError: false, value: null });
 }
 
 export async function httpSharedSyncStream(request: Request): Promise<Response> {
@@ -366,6 +428,7 @@ export function resetSharedStreamForTests(): void {
 	transportIdsByScope.clear();
 	scopesByTransportId.clear();
 	subscriptionDetails.clear();
+	holderScopes.clear();
 	transportTimers.clear();
 	connectionsPerTransport.clear();
 	idleTimers.clear();
@@ -388,7 +451,7 @@ function sendFrames(stream: StreamState, frames: readonly Uint8Array[] | undefin
 	}
 }
 
-function startReplay(stream: StreamState, detail: SubscriptionDetail, deferred: boolean): void {
+function startReplay(stream: StreamState, detail: HeldSubscription, deferred: boolean): void {
 	const { afterCursor } = detail;
 	if (!afterCursor || stream.signal.aborted) {
 		return;
@@ -405,12 +468,18 @@ function startReplay(stream: StreamState, detail: SubscriptionDetail, deferred: 
 	}
 }
 
-async function replaySubscription(stream: StreamState, detail: SubscriptionDetail, afterCursor: string): Promise<void> {
+async function replaySubscription(stream: StreamState, detail: HeldSubscription, afterCursor: string): Promise<void> {
 	let replaySucceeded = false;
 	try {
+		if (detail.holders.size === 0) {
+			return;
+		}
 		const replay = await detail.persistence.readAfter(detail.scope, afterCursor, detail.replayLimit + 1, {
 			signal: stream.signal
 		});
+		if (detail.holders.size === 0) {
+			return;
+		}
 		if (!replay.cursorFound || replay.envelopes.length > detail.replayLimit) {
 			stream.sendEnvelope(buildResetEnvelope(detail.managerKey, detail.scope, afterCursor, detail.nextCursor()));
 		} else {
@@ -420,24 +489,29 @@ async function replaySubscription(stream: StreamState, detail: SubscriptionDetai
 		}
 		replaySucceeded = true;
 	} finally {
-		const remaining = (stream.replayingScopes.get(detail.scope) ?? 1) - 1;
-		if (remaining > 0) {
-			stream.replayingScopes.set(detail.scope, remaining);
-		} else {
-			stream.replayingScopes.delete(detail.scope);
-			if (replaySucceeded) {
-				flushBufferedScope(stream, detail.scope);
+		if (detail.holders.size > 0) {
+			const remaining = (stream.replayingScopes.get(detail.scope) ?? 1) - 1;
+			if (remaining > 0) {
+				stream.replayingScopes.set(detail.scope, remaining);
+			} else {
+				stream.replayingScopes.delete(detail.scope);
+				if (replaySucceeded) {
+					flushBufferedScope(stream, detail.scope);
+				}
 			}
 		}
 	}
 }
 
-async function handleReplayFailure(stream: StreamState, detail: SubscriptionDetail, cause: unknown): Promise<void> {
-	if (stream.signal.aborted) {
+async function handleReplayFailure(stream: StreamState, detail: HeldSubscription, cause: unknown): Promise<void> {
+	if (stream.signal.aborted || detail.holders.size === 0) {
 		return;
 	}
 	const errorValue = normalizeSyncError(cause);
 	await reportSharedStreamError(detail, errorValue);
+	if (detail.holders.size === 0) {
+		return;
+	}
 	stream.bufferedByScope.delete(detail.scope);
 	if (detail.afterCursor) {
 		stream.sendEnvelope(
@@ -535,7 +609,7 @@ function getClientIp(request: Request): string {
 }
 
 function subscriptionKey(transportId: string, scope: string): string {
-	return `${transportId}:${scope}`;
+	return JSON.stringify([transportId, scope]);
 }
 
 function getTransportTtlMs(): number {
@@ -588,25 +662,39 @@ function evictTransport(transportId: string): void {
 }
 
 function removeTransportSubscriptions(transportId: string): void {
+	for (const scope of scopesByTransportId.get(transportId) ?? []) {
+		removeSubscription(transportId, scope);
+	}
+	holderScopes.delete(transportId);
+}
+
+function removeSubscription(transportId: string, scope: string): void {
+	const detailKey = subscriptionKey(transportId, scope);
+	const detail = subscriptionDetails.get(detailKey);
+	subscriptionDetails.delete(detailKey);
+	if (detail) {
+		for (const holderId of detail.holders) {
+			holderScopes.get(transportId)?.delete(holderId);
+		}
+		detail.holders.clear();
+	}
+	const stream = streamsByTransportId.get(transportId);
+	stream?.bufferedByScope.delete(scope);
+	stream?.replayingScopes.delete(scope);
 	const scopes = scopesByTransportId.get(transportId);
-	if (!scopes) {
+	scopes?.delete(scope);
+	if (scopes?.size === 0) {
+		scopesByTransportId.delete(transportId);
+		holderScopes.delete(transportId);
+	}
+	const transportIds = transportIdsByScope.get(scope);
+	transportIds?.delete(transportId);
+	if (transportIds && transportIds.size > 0) {
 		return;
 	}
-	scopesByTransportId.delete(transportId);
-	for (const scope of scopes) {
-		const detailKey = subscriptionKey(transportId, scope);
-		const detail = subscriptionDetails.get(detailKey);
-		subscriptionDetails.delete(detailKey);
-		const transportIds = transportIdsByScope.get(scope);
-		transportIds?.delete(transportId);
-		if (transportIds && transportIds.size > 0) {
-			continue;
-		}
-		transportIdsByScope.delete(scope);
-		// Scope cleanup is delayed through a heap timer so busy apps do not pay per-scope polling cost.
-		if (detail) {
-			markIdle(detail.managerKey, scope);
-		}
+	transportIdsByScope.delete(scope);
+	if (detail) {
+		markIdle(detail.managerKey, scope);
 	}
 }
 

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import {
 	httpSharedSyncConnectRoute,
+	httpSharedSyncReleaseRoute,
 	httpSharedSyncStreamRoute,
 	manager,
 	managerHttpRoutes,
@@ -308,6 +309,29 @@ describe('Effect server entrypoint', () => {
 		});
 		expect((await streamWeb.handler(new Request('https://sync.test/sync', { method: 'POST' }))).status).toBe(400);
 		await streamWeb.dispose();
+	});
+
+	it('mounts the release route and preserves its transport header and validation errors', async () => {
+		const web = HttpRouter.toWebHandler(HttpRouter.addAll([httpSharedSyncReleaseRoute('/sync/release')]), {
+			disableLogger: true
+		});
+		try {
+			const send = (body: unknown, transportId?: string) =>
+				web.handler(
+					new Request('https://sync.test/sync/release', {
+						method: 'POST',
+						headers: transportId ? { 'x-sync-transport-id': transportId } : {},
+						body: JSON.stringify(body)
+					})
+				);
+			expect((await send({ releases: ['unknown'] }, 'transport-effect')).status).toBe(200);
+			expect((await send({ releases: ['unknown'] })).status).toBe(400);
+			const invalid = await send({ releases: [''] }, 'transport-effect');
+			expect(invalid.status).toBe(400);
+			expect(await invalid.json()).toMatchObject({ isError: true, error: { code: 'bad_request' } });
+		} finally {
+			await web.dispose();
+		}
 	});
 
 	it('keeps the status and headers of buffered JSON responses', async () => {
