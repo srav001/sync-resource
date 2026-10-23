@@ -873,7 +873,11 @@ Rules:
   replays of one scope keep buffering until the last one ends.
 - A read response never overwrites newer realtime state: envelopes applied while a read was in flight are re-applied over
   its output in arrival order, and the cursor stays at the last of them.
-- `/connect` returns the authoritative encoded scope before replay is delivered.
+- `/connect` returns the authoritative encoded scope. The client delivers envelopes only to subscriptions whose scope
+  the server has confirmed; envelope traffic never establishes scope. Each unconfirmed subscription buffers up to 256
+  envelopes for its manager, dropping the oldest beyond that limit. Confirmation delivers only matching buffered
+  envelopes, in arrival order. Failed, aborted, or restarted registrations discard their buffers; the next `/connect`
+  uses the store's cursor for replay. Confirmed scopes remain confirmed across stream reconnects.
 - Each pending `/connect` wait is independently abortable; cancelling one waiter does not cancel establishment while
   another consumer still owns it.
 - Manager `stream.onScopeIdle` is only for releasing manager-owned ephemeral per-scope memory. Idle cleanup is routed

@@ -47,6 +47,7 @@ interface LogicalSubscription {
 	readonly registeredListeners: Set<() => void>;
 	scope: string;
 	scopeConfirmed: boolean;
+	pending: SyncEnvelope[];
 	registrationRevision: number;
 	retryAttempt: number;
 	retryTimer?: ReturnType<typeof setTimeout>;
@@ -83,6 +84,7 @@ const CACHE_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const CACHE_SWEEP_KEY = 'sync-resource:cache-sweep';
 const LOCK_NAME = 'sync-resource:transport';
 const MAX_PENDING_SYNC_CHUNKS = 32;
+const MAX_PENDING_SCOPE_ENVELOPES = 256;
 const sseTextEncoder = new TextEncoder();
 function backoffDelay(attempt: number, maxMs: number): number {
 	const baseDelay = Math.min(1000 * Math.pow(2, attempt), maxMs);
@@ -90,8 +92,8 @@ function backoffDelay(attempt: number, maxMs: number): number {
 	return Math.max(0, Math.min(maxMs, Math.round(jitteredDelay)));
 }
 
-function isConnectScope<TValue>(value: TValue): value is TValue & { readonly scope?: string } {
-	return isRecord(value) && (value.scope === undefined || isString(value.scope));
+function isConnectScope<TValue>(value: TValue): value is TValue & { readonly scope: string } {
+	return isRecord(value) && isString(value.scope);
 }
 
 function isBatchPayload<TValue>(value: TValue): value is TValue & { readonly results: readonly unknown[] } {
@@ -238,12 +240,13 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			existing.getCursor = options.getCursor;
 			return existing;
 		}
-		const entry = {
+		const entry: LogicalSubscription = {
 			key,
 			connectUrl: options.connectUrl,
 			managerKey: options.managerKey,
 			scope: options.scope,
 			scopeConfirmed: false,
+			pending: [],
 			registrationRevision: 0,
 			retryAttempt: 0,
 			subscribers: new Set<(envelope: SyncEnvelope) => void>(),
@@ -286,6 +289,7 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 
 	private async runLogicalSubscription(entry: LogicalSubscription): Promise<SyncResult<void, SyncError>> {
 		while (!this.disposed && this.subscriptions.get(entry.key) === entry && entry.subscribers.size > 0) {
+			entry.pending = [];
 			const revision = entry.registrationRevision;
 			const controller = new AbortController();
 			entry.connectAbort = controller;
@@ -363,10 +367,20 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			if (result.isErr()) {
 				return result;
 			}
-			if (isConnectScope(result.value.value) && result.value.value.scope !== undefined) {
-				// The server owns scope encoding because manager.scope(params) can be narrower than frontend params.
-				entry.scope = result.value.value.scope;
-				entry.scopeConfirmed = true;
+			if (!isConnectScope(result.value.value)) {
+				return err('internal', 'Sync connect response must include a scope.');
+			}
+			// Only the server can confirm scope: manager.scope(params) can differ from frontend params.
+			entry.scope = result.value.value.scope;
+			entry.scopeConfirmed = true;
+			const pending = entry.pending;
+			entry.pending = [];
+			for (const envelope of pending) {
+				if (envelope.scope === entry.scope) {
+					for (const subscriber of entry.subscribers) {
+						subscriber(envelope);
+					}
+				}
 			}
 			return ok(undefined);
 		} catch (cause) {
@@ -703,38 +717,20 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 	}
 
 	private dispatchEnvelope(envelope: SyncEnvelope): void {
-		let delivered = false;
 		for (const entry of this.subscriptions.values()) {
-			if (entry.managerKey !== envelope.managerKey || entry.scope !== envelope.scope) {
+			if (entry.managerKey !== envelope.managerKey) {
 				continue;
 			}
-			for (const subscriber of entry.subscribers) {
-				subscriber(envelope);
+			if (!entry.scopeConfirmed) {
+				entry.pending.push(envelope);
+				if (entry.pending.length > MAX_PENDING_SCOPE_ENVELOPES) {
+					entry.pending.shift();
+				}
+			} else if (entry.scope === envelope.scope) {
+				for (const subscriber of entry.subscribers) {
+					subscriber(envelope);
+				}
 			}
-			delivered = true;
-		}
-		if (delivered) {
-			return;
-		}
-		const unconfirmedCandidates: LogicalSubscription[] = [];
-		for (const entry of this.subscriptions.values()) {
-			if (entry.managerKey !== envelope.managerKey || entry.scopeConfirmed) {
-				continue;
-			}
-			unconfirmedCandidates.push(entry);
-		}
-		if (unconfirmedCandidates.length !== 1) {
-			return;
-		}
-		const entry = unconfirmedCandidates[0];
-		if (!entry) {
-			return;
-		}
-		// Server scope is authoritative; only auto-adopt it when there is one possible pending subscription.
-		entry.scope = envelope.scope;
-		entry.scopeConfirmed = true;
-		for (const subscriber of entry.subscribers) {
-			subscriber(envelope);
 		}
 	}
 }
