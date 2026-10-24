@@ -1,6 +1,6 @@
 import { Context, Effect, Fiber, Layer } from 'effect';
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http';
-import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vite-plus/test';
 
 import {
 	httpSharedSyncConnectRoute,
@@ -293,9 +293,10 @@ describe('Effect server entrypoint', () => {
 			path: '/notes' as const,
 			params: () => Effect.succeed({ workspaceId: 'w1' })
 		};
-		expect(managerHttpRoutes(options)).toHaveLength(2);
+		const routes = managerHttpRoutes(options);
+		expectTypeOf(routes).toEqualTypeOf<readonly HttpRouter.Route<never, never>[]>();
+		expect(routes).toHaveLength(2);
 
-		const routes = managerHttpRoutes<undefined, Params, never, never, never>(options);
 		const managerWeb = HttpRouter.toWebHandler(HttpRouter.addAll(routes), {
 			disableLogger: true
 		});
@@ -352,7 +353,7 @@ describe('Effect server entrypoint', () => {
 		const routesFor = (workspaceId: string) =>
 			HttpRouter.toWebHandler(
 				HttpRouter.addAll(
-					managerHttpRoutes<undefined, Params, never, never, never>({
+					managerHttpRoutes({
 						manager: notesManager,
 						path: '/notes',
 						params: () => Effect.succeed({ workspaceId })
@@ -395,7 +396,7 @@ describe('Effect server entrypoint', () => {
 					scope: (p) => p.workspaceId
 				})
 			);
-			return managerHttpRoutes<undefined, Params, never, never, never>({
+			return managerHttpRoutes({
 				manager: notesManager,
 				path: `/${key}`,
 				params: (request) => {
@@ -458,7 +459,7 @@ describe('Effect server entrypoint', () => {
 				scope: (p) => p.workspaceId
 			})
 		);
-		const routes = managerHttpRoutes<undefined, Params, never, { readonly id: string }, never>({
+		const routes = managerHttpRoutes({
 			manager: notesManager,
 			path: '/tenant',
 			params: () => Effect.map(Tenant, ({ id }) => ({ workspaceId: id }))

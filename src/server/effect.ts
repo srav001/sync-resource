@@ -336,7 +336,7 @@ export interface EffectManager<TKey extends string, TResource, TContext = undefi
 		ResourceParams<TResource>,
 		TResource extends { readonly type: { readonly methods: infer M } } ? M : never
 	>;
-	readonly _effectRequirements?: ResourceRequirements<ResourceDefinitions<TResource>>;
+	readonly _effectRequirements?: () => ResourceRequirements<ResourceDefinitions<TResource>>;
 	bind(params: ResourceParams<TResource>, context?: TContext): EffectBoundManager<TKey, TResource>;
 }
 
@@ -416,7 +416,7 @@ export function manager<TKey extends string, TResource extends EffectResourceLik
 
 export interface EffectManagerHttp<TContext, TParams, R = never> {
 	readonly http: ManagerHttpHandlers<TContext, TParams>;
-	readonly _effectRequirements?: R;
+	readonly _effectRequirements?: () => R;
 }
 export interface EffectManagerRoutesOptions<TContext, TParams, TError = never, R = never, ManagerR = never> {
 	readonly manager: EffectManagerHttp<TContext, TParams, ManagerR>;
