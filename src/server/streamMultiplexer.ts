@@ -14,6 +14,7 @@ import type { ManagerSyncPersistence } from './types.ts';
 
 // The durable outbox remains the correctness source; this module only multiplexes live delivery and replay.
 const MAX_BACKPRESSURE_QUEUE = 4096;
+const DEFAULT_IDLE_TTL_MS = 60_000;
 const JSON_HEADERS = {
 	'content-type': 'application/json; charset=utf-8',
 	'cache-control': 'no-store'
@@ -21,12 +22,12 @@ const JSON_HEADERS = {
 
 interface SharedStreamConfig {
 	readonly heartbeatMs: number;
-	readonly idleTtlMs: number;
 	readonly maxConnectionsPerIp: number;
 	readonly maxEventBytes: number;
 }
 
 interface RegisteredManager {
+	readonly idleTtlMs: number;
 	readonly key: string;
 	onScopeIdle?(this: void, scope: string): void;
 	handleError?(
@@ -103,7 +104,6 @@ let cachedManagerKeys: readonly string[] | undefined;
 
 let config: SharedStreamConfig = {
 	heartbeatMs: 60_000,
-	idleTtlMs: 5 * 60_000,
 	maxConnectionsPerIp: 2,
 	maxEventBytes: 256 * 1024
 };
@@ -116,15 +116,13 @@ export function registerSharedStreamManager(options: RegisterSharedStreamManager
 	registeredManagers.set(options.key, {
 		key: options.key,
 		onScopeIdle: options.onScopeIdle,
+		idleTtlMs: options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS,
 		handleError: options.handleError
 	});
 	cachedManagerKeys = undefined;
 
 	if (options.heartbeatMs !== undefined) {
 		config = { ...config, heartbeatMs: Math.min(config.heartbeatMs, options.heartbeatMs) };
-	}
-	if (options.idleTtlMs !== undefined) {
-		config = { ...config, idleTtlMs: Math.max(config.idleTtlMs, options.idleTtlMs) };
 	}
 	if (options.maxConnectionsPerIp !== undefined) {
 		config = { ...config, maxConnectionsPerIp: Math.max(config.maxConnectionsPerIp, options.maxConnectionsPerIp) };
@@ -134,9 +132,9 @@ export function registerSharedStreamManager(options: RegisterSharedStreamManager
 	}
 }
 
-export async function registerSharedStreamSubscription(
+export function registerSharedStreamSubscription(
 	options: RegisterSharedStreamSubscriptionOptions
-): Promise<SyncResult<void, SyncError>> {
+): SyncResult<void, SyncError> {
 	const transportId = getTransportId(options.request);
 	if (!transportId) {
 		return err('bad_request', 'Missing required header: x-sync-transport-id.');
@@ -435,7 +433,6 @@ export function resetSharedStreamForTests(): void {
 	cachedManagerKeys = undefined;
 	config = {
 		heartbeatMs: 60_000,
-		idleTtlMs: 5 * 60_000,
 		maxConnectionsPerIp: 2,
 		maxEventBytes: 256 * 1024
 	};
@@ -508,7 +505,7 @@ async function handleReplayFailure(stream: StreamState, detail: HeldSubscription
 		return;
 	}
 	const errorValue = normalizeSyncError(cause);
-	await reportSharedStreamError(detail, errorValue);
+	await reportSharedStreamError(detail.managerKey, detail.scope, 'stream.replay', errorValue);
 	if (detail.holders.size === 0) {
 		return;
 	}
@@ -700,11 +697,15 @@ function removeSubscription(transportId: string, scope: string): void {
 
 function markIdle(managerKey: string, scope: string): void {
 	clearIdle(scope);
-	if (config.idleTtlMs <= 0) {
+	const manager = registeredManagers.get(managerKey);
+	if (!manager?.onScopeIdle) {
+		return;
+	}
+	if (manager.idleTtlMs <= 0) {
 		notifyScopeIdle(managerKey, scope);
 		return;
 	}
-	idleTimers.set(scope, unrefTimer(setTimeout(() => notifyScopeIdle(managerKey, scope), config.idleTtlMs)));
+	idleTimers.set(scope, unrefTimer(setTimeout(() => notifyScopeIdle(managerKey, scope), manager.idleTtlMs)));
 }
 
 function clearIdle(scope: string): void {
@@ -714,15 +715,26 @@ function clearIdle(scope: string): void {
 
 function notifyScopeIdle(managerKey: string, scope: string): void {
 	idleTimers.delete(scope);
-	registeredManagers.get(managerKey)?.onScopeIdle?.(scope);
+	try {
+		registeredManagers.get(managerKey)?.onScopeIdle?.(scope);
+	} catch (cause) {
+		reportSharedStreamError(managerKey, scope, 'stream.onScopeIdle', normalizeSyncError(cause)).catch(
+			() => undefined
+		);
+	}
 }
 
-async function reportSharedStreamError(detail: SubscriptionDetail, errorValue: SyncError): Promise<void> {
+async function reportSharedStreamError(
+	managerKey: string,
+	scope: string,
+	method: string,
+	errorValue: SyncError
+): Promise<void> {
 	try {
-		await registeredManagers.get(detail.managerKey)?.handleError?.(errorValue, {
-			manager: detail.managerKey,
-			method: 'stream.replay',
-			scope: detail.scope
+		await registeredManagers.get(managerKey)?.handleError?.(errorValue, {
+			manager: managerKey,
+			method,
+			scope
 		});
 	} catch {}
 }

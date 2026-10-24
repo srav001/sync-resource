@@ -34,7 +34,7 @@ describe('shared stream replay ordering', () => {
 		registerSharedStreamManager({ key: 'notes' });
 		const reads: string[] = [];
 		const reader = await openStream('t1');
-		await registerStreamSubscription(
+		registerStreamSubscription(
 			't1',
 			outboxReading((_scope, cursor) => {
 				reads.push(cursor);
@@ -56,7 +56,7 @@ describe('shared stream replay ordering', () => {
 		const readStarted = new Deferred();
 		const replay = new Deferred<ManagerOutboxRead>();
 		const reader = await openStream('t2');
-		await registerStreamSubscription(
+		registerStreamSubscription(
 			't2',
 			outboxReading(() => {
 				readStarted.resolve();
@@ -81,10 +81,10 @@ describe('shared stream replay ordering', () => {
 			started[index]!.resolve();
 			return gates[index]!.promise;
 		});
-		await registerStreamSubscription('t3', persistence, 'c0');
+		registerStreamSubscription('t3', persistence, 'c0');
 		const reader = await openStream('t3');
 		await started[0]!.promise;
-		await registerStreamSubscription('t3', persistence, 'c0');
+		registerStreamSubscription('t3', persistence, 'c0');
 		await started[1]!.promise;
 
 		gates[0]!.resolve(caughtUp(1));
@@ -100,7 +100,7 @@ describe('shared stream sent-cursor window', () => {
 	it('holds no cursor for live envelopes however many are sent', async () => {
 		registerSharedStreamManager({ key: 'notes' });
 		const reader = await openStream('t4');
-		await registerStreamSubscription('t4', outboxReading());
+		registerStreamSubscription('t4', outboxReading());
 		for (let index = 0; index < 50; index += 1) {
 			publishSharedStreamEnvelope(streamEnvelope(`c${index}`));
 		}
@@ -112,7 +112,7 @@ describe('shared stream sent-cursor window', () => {
 		vi.useFakeTimers();
 		registerSharedStreamManager({ key: 'notes' });
 		const reader = await openStream('t5');
-		await registerStreamSubscription(
+		registerStreamSubscription(
 			't5',
 			outboxReading(() => caughtUp(2, 'c1', 'c2')),
 			'c0'

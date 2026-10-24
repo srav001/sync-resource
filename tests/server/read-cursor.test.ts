@@ -55,7 +55,7 @@ const list = async (outbox: MemoryManagerOutbox, duringRead?: () => void) => {
 
 async function replayed(outbox: MemoryManagerOutbox, afterCursor: string | undefined, until: string) {
 	registerSharedStreamManager({ key: 'notes' });
-	await registerSharedStreamSubscription({
+	registerSharedStreamSubscription({
 		request: new Request('http://x/connect', { method: 'POST', headers: { 'x-sync-transport-id': 't' } }),
 		managerKey: 'notes',
 		scope: SCOPE,

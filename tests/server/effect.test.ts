@@ -653,7 +653,7 @@ describe('Effect server entrypoint', () => {
 		await reader.cancel();
 		expect(events).toContain('subscribe');
 		expect(realtimeFinalized).toBe(false);
-		await vi.advanceTimersByTimeAsync(5 * 60_000);
+		await vi.advanceTimersByTimeAsync(60_000);
 		await realtimeClosed.promise;
 	});
 
@@ -798,8 +798,38 @@ describe('Effect server entrypoint', () => {
 		const reader = response.body!.getReader();
 		await reader.read();
 		await reader.cancel();
-		await vi.advanceTimersByTimeAsync(5 * 60_000);
+		await vi.advanceTimersByTimeAsync(1);
 		expect(events).toContain('readAfter');
 		expect(events).toContain('idle:effect-outbox:w1');
+	});
+	it('reports an Effect idle hook failure exactly once with zero TTL', async () => {
+		const failure = syncError('internal', 'Effect idle hook failed');
+		const report = vi.fn(() => Effect.void);
+		const notesManager = await Effect.runPromise(
+			manager({
+				key: 'effect-idle-failure',
+				resource: resource(paramsSchema, (method) => ({
+					get: method.get({
+						output: noteSchema,
+						handler: ({ params }) => Effect.succeed({ id: params.workspaceId, title: 'one' })
+					})
+				})),
+				authorize: () => Effect.succeed(true),
+				scope: (params) => params.workspaceId,
+				stream: { idleTtlMs: 0, onScopeIdle: () => Effect.fail(failure) },
+				handleError: report
+			})
+		);
+		const reader = await openSharedStream(notesManager.http, { workspaceId: 'w1' });
+		await reader.cancel();
+		await nextMacrotask();
+		expect(report).toHaveBeenCalledExactlyOnceWith(
+			failure,
+			expect.objectContaining({
+				manager: 'effect-idle-failure',
+				method: 'stream.onScopeIdle',
+				scope: 'effect-idle-failure:w1'
+			})
+		);
 	});
 });

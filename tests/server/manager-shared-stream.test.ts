@@ -61,7 +61,7 @@ describe('manager on the shared stream', () => {
 			cursors.push((await readSyncEnvelope(first)).cursor);
 		}
 		await first.cancel();
-		await vi.advanceTimersByTimeAsync(5 * 60_000);
+		await vi.advanceTimersByTimeAsync(60_000);
 		vi.useRealTimers();
 
 		const current = await openSharedStream(notes.http, params, { afterCursor: cursors[2] });

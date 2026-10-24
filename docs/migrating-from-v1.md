@@ -250,7 +250,7 @@ const items = body.value.items;
 
 ### 7. Idle scopes keep only their newest envelope
 
-**What changed.** When a scope has had no connected stream for `stream.idleTtlMs` (5 minutes by default),
+**What changed.** When a scope has had no connected stream for `stream.idleTtlMs` (60 seconds by default),
 `MemoryManagerOutbox` now keeps only that scope's newest envelope, on top of the mutation records it already dropped. A
 manager without an `outbox` option uses a `MemoryManagerOutbox`, so it behaves the same. A client reconnecting with
 exactly that cursor resumes without a reset; every older cursor, and the scope's origin cursor, reset and repair.

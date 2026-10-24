@@ -369,13 +369,9 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			}
 			const url = urlWithCursor(entry.connectUrl, entry.getCursor?.(), entry.id);
 			const path = this.batchConnect ? batchPath(url, this.connectUrl) : undefined;
-			const response = path
-				? await this.queueConnect(entry, path, signal)
+			const result = path
+				? await readSyncResponse<{ readonly scope?: unknown }>(await this.queueConnect(entry, path, signal))
 				: await this.sendDirectConnect(entry, url);
-			if (signal.aborted) {
-				return err('aborted', 'Realtime subscription was aborted.');
-			}
-			const result = await readSyncResponse<{ readonly scope?: unknown }>(response);
 			if (signal.aborted) {
 				return err('aborted', 'Realtime subscription was aborted.');
 			}
@@ -423,15 +419,32 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 		};
 	}
 
-	private async sendDirectConnect(entry: LogicalSubscription, url: string): Promise<Response> {
+	private async request<T>(
+		url: string,
+		init: Omit<RequestInit, 'signal' | 'headers'>,
+		read: (response: Response) => Promise<T>
+	): Promise<T> {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), LOGICAL_CONNECT_TIMEOUT_MS);
+		try {
+			return await read(
+				await this.fetchImpl(url, { ...init, headers: this.connectHeaders(), signal: controller.signal })
+			);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	private async sendDirectConnect(
+		entry: LogicalSubscription,
+		url: string
+	): Promise<SyncResult<SyncHttpOk<{ readonly scope?: unknown }>, SyncError>> {
 		entry.requests += 1;
 		entry.sent = true;
 		try {
-			return await this.fetchImpl(url, {
-				method: 'POST',
-				headers: this.connectHeaders(),
-				signal: AbortSignal.timeout(LOGICAL_CONNECT_TIMEOUT_MS)
-			});
+			return await this.request(url, { method: 'POST' }, (response) =>
+				readSyncResponse<{ readonly scope?: unknown }>(response)
+			);
 		} finally {
 			this.settleRequest(entry);
 		}
@@ -495,13 +508,17 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 
 	private sendReleases(releases: readonly string[]): void {
 		for (let start = 0; start < releases.length; start += MAX_BATCH_CONNECTS) {
-			this.fetchImpl(this.releaseUrl, {
-				method: 'POST',
-				headers: this.connectHeaders(),
-				body: JSON.stringify({ releases: releases.slice(start, start + MAX_BATCH_CONNECTS) }),
-				keepalive: true,
-				signal: AbortSignal.timeout(LOGICAL_CONNECT_TIMEOUT_MS)
-			}).catch(() => undefined);
+			this.request(
+				this.releaseUrl,
+				{
+					method: 'POST',
+					body: JSON.stringify({ releases: releases.slice(start, start + MAX_BATCH_CONNECTS) }),
+					keepalive: true
+				},
+				async (response) => {
+					await response.body?.cancel();
+				}
+			).catch(() => undefined);
 		}
 	}
 
@@ -532,28 +549,31 @@ class BrowserSessionRuntimeTransport implements RuntimeTransportWithDispose {
 			entry.sent = true;
 		}
 		try {
-			const response = await this.fetchImpl(this.connectUrl, {
-				method: 'POST',
-				headers: this.connectHeaders(),
-				body: JSON.stringify({ connects: items.map((item) => item.url) }),
-				signal: AbortSignal.timeout(LOGICAL_CONNECT_TIMEOUT_MS)
-			});
-			if (!response.ok) {
-				const body = await response.text();
-				for (const item of items) {
-					item.resolve(new Response(body, { status: response.status }));
+			await this.request(
+				this.connectUrl,
+				{
+					method: 'POST',
+					body: JSON.stringify({ connects: items.map((item) => item.url) })
+				},
+				async (response) => {
+					if (!response.ok) {
+						const body = await response.text();
+						for (const item of items) {
+							item.resolve(new Response(body, { status: response.status }));
+						}
+						return;
+					}
+					const payload: unknown = await response.json();
+					items.forEach((item, index) => {
+						const result = isBatchPayload(payload) ? payload.results[index] : undefined;
+						item.resolve(
+							isBatchResult(result)
+								? Response.json(result.body ?? null, { status: result.status })
+								: Response.json(null)
+						);
+					});
 				}
-				return;
-			}
-			const payload: unknown = await response.json();
-			items.forEach((item, index) => {
-				const result = isBatchPayload(payload) ? payload.results[index] : undefined;
-				item.resolve(
-					isBatchResult(result)
-						? Response.json(result.body ?? null, { status: result.status })
-						: Response.json(null)
-				);
-			});
+			);
 		} catch (cause) {
 			for (const item of items) {
 				item.reject(cause);

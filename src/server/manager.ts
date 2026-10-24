@@ -203,14 +203,18 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 	const busSubscriptions = new Map<string, BusSubscriptionEntry>();
 	const sharedBusLeases = new Map<string, () => void>();
 
+	const hasIdleWork =
+		options.realtimeBus !== undefined || hasPruneScope(persistence) || options.stream?.onScopeIdle !== undefined;
 	registerSharedStreamManager({
 		key: options.key,
 		...options.stream,
-		onScopeIdle(scope) {
-			releaseSharedBusSubscription(scope);
-			prunePersistenceScope(persistence, scope);
-			options.stream?.onScopeIdle?.(scope);
-		},
+		onScopeIdle: hasIdleWork
+			? (scope) => {
+					releaseSharedBusSubscription(scope);
+					prunePersistenceScope(persistence, scope);
+					options.stream?.onScopeIdle?.(scope);
+				}
+			: undefined,
 		handleError(errorValue, context) {
 			return reportManagerError(managerOptions, { ...context, ...unboundedExecution }, errorValue);
 		}
@@ -298,7 +302,7 @@ export function manager<TKey extends string, TResource extends ResourceLike, TCo
 				releaseBus?.();
 				return errorResponse(syncError('aborted', 'Sync operation was aborted.'));
 			}
-			const subscriptionResult = await registerSharedStreamSubscription({
+			const subscriptionResult = registerSharedStreamSubscription({
 				request: args.request,
 				managerKey: managerOptions.key,
 				scope,
@@ -1488,8 +1492,14 @@ function waitForInFlight<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
 	return Promise.race([promise, aborted]).finally(() => signal.removeEventListener('abort', onAbort));
 }
 
+function hasPruneScope(
+	persistence: ManagerSyncPersistence
+): persistence is ManagerSyncPersistence & { pruneScope(scope: string): void } {
+	return 'pruneScope' in persistence && isCallable(persistence.pruneScope);
+}
+
 function prunePersistenceScope(persistence: ManagerSyncPersistence, scope: string): void {
-	if ('pruneScope' in persistence && isCallable(persistence.pruneScope)) {
+	if (hasPruneScope(persistence)) {
 		persistence.pruneScope(scope);
 	}
 }

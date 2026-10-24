@@ -20,7 +20,7 @@ describe('shared stream replay and framing', () => {
 			key: 'notes',
 			maxEventBytes: MAX_CHUNKED_SYNC_BYTES
 		});
-		await registerStreamSubscription('transport-chunks', outboxReading());
+		registerStreamSubscription('transport-chunks', outboxReading());
 		const response = await httpSharedSyncStream(streamRequest('transport-chunks'));
 		const reader = response.body!.getReader();
 		await reader.read();
@@ -66,7 +66,7 @@ describe('shared stream replay and framing', () => {
 				errors.push(`${context.method}:${error.message}`);
 			}
 		});
-		await registerStreamSubscription(
+		registerStreamSubscription(
 			'transport-failure',
 			outboxReading(async () => {
 				throw new Error('outbox unavailable');

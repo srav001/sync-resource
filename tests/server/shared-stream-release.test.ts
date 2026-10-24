@@ -40,7 +40,7 @@ function release(...ids: string[]) {
 
 // A frame from the sentinel scope proves no released-scope frame preceded it, without waiting on a timer.
 async function probe(reader: ReadableStreamDefaultReader<Uint8Array>) {
-	await registerSharedStreamSubscription({
+	registerSharedStreamSubscription({
 		request: connectRequest(transport),
 		managerKey: 'notes',
 		scope: 'notes:sentinel',
@@ -64,16 +64,16 @@ describe('shared stream holder release', () => {
 		const idle = vi.fn();
 		registerSharedStreamManager({ key: 'notes', onScopeIdle: idle });
 		const reader = await openStream(transport);
-		await register('tab-a');
-		await register('tab-b');
+		register('tab-a');
+		register('tab-b');
 		expect(release('tab-a').isOk()).toBe(true);
 		publishSharedStreamEnvelope(streamEnvelope('still-held', scope));
 		expect((await readSyncEnvelope(reader)).cursor).toBe('still-held');
-		await vi.advanceTimersByTimeAsync(300_000);
+		await vi.advanceTimersByTimeAsync(60_000);
 		expect(idle).not.toHaveBeenCalled();
 		release('tab-b');
 		expect(await probe(reader)).toBe('sentinel');
-		await vi.advanceTimersByTimeAsync(299_999);
+		await vi.advanceTimersByTimeAsync(59_999);
 		expect(idle).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(1);
 		expect(idle).toHaveBeenCalledExactlyOnceWith(scope);
@@ -82,8 +82,8 @@ describe('shared stream holder release', () => {
 
 	it('ignores unknown holders and holders belonging to another transport', async () => {
 		const reader = await openStream(transport);
-		await register('owned');
-		await register('other-holder', 'other-transport');
+		register('owned');
+		register('other-holder', 'other-transport');
 		release('unknown', 'other-holder');
 		releaseSharedStreamSubscriptions(connectRequest('other-transport'), ['owned']);
 		publishSharedStreamEnvelope(streamEnvelope('still-held', scope));
@@ -95,8 +95,8 @@ describe('shared stream holder release', () => {
 
 	it('re-registers the same holder without requiring multiple releases', async () => {
 		const reader = await openStream(transport);
-		await register('same');
-		await register('same');
+		register('same');
+		register('same');
 		release('same');
 		expect(await probe(reader)).toBe('sentinel');
 		await reader.cancel();
@@ -107,16 +107,16 @@ describe('shared stream holder release', () => {
 		const idle = vi.fn();
 		registerSharedStreamManager({ key: 'notes', onScopeIdle: idle });
 		const reader = await openStream(transport);
-		await register('');
-		await register('named');
+		register('');
+		register('named');
 		release('', 'named');
 		publishSharedStreamEnvelope(streamEnvelope('anonymous', scope));
 		expect((await readSyncEnvelope(reader)).cursor).toBe('anonymous');
-		await register('second');
+		register('second');
 		await reader.cancel();
 		const replacement = await openStream(transport);
 		expect(await probe(replacement)).toBe('sentinel');
-		await vi.advanceTimersByTimeAsync(300_000);
+		await vi.advanceTimersByTimeAsync(60_000);
 		expect(idle).toHaveBeenCalledExactlyOnceWith(scope);
 		await replacement.cancel();
 	});
@@ -127,7 +127,7 @@ describe('shared stream holder release', () => {
 		const errors = vi.fn();
 		registerSharedStreamManager({ key: 'notes', handleError: errors });
 		const reader = await openStream(transport);
-		await register(
+		register(
 			'replaying',
 			transport,
 			'before',
@@ -157,15 +157,15 @@ describe('shared stream holder release', () => {
 		registerSharedStreamManager({ key: 'notes', onScopeIdle: idle });
 		const first = await openStream(transport);
 		const second = await openStream('other-transport');
-		await register('first');
-		await register('second', 'other-transport');
+		register('first');
+		register('second', 'other-transport');
 		release('first');
-		await vi.advanceTimersByTimeAsync(300_000);
+		await vi.advanceTimersByTimeAsync(60_000);
 		expect(idle).not.toHaveBeenCalled();
 		publishSharedStreamEnvelope(streamEnvelope('other-still-held', scope));
 		expect((await readSyncEnvelope(second)).cursor).toBe('other-still-held');
 		releaseSharedStreamSubscriptions(connectRequest('other-transport'), ['second']);
-		await vi.advanceTimersByTimeAsync(300_000);
+		await vi.advanceTimersByTimeAsync(60_000);
 		expect(idle).toHaveBeenCalledExactlyOnceWith(scope);
 		await first.cancel();
 		await second.cancel();
@@ -174,8 +174,8 @@ describe('shared stream holder release', () => {
 	it('keeps the latest replay cursor when a holder re-registers before its stream opens', async () => {
 		const readAfter = vi.fn(() => ({ cursorFound: true, envelopes: [], retainedEnvelopeCount: 0 }));
 		const persistence = outboxReading(readAfter);
-		await register('same', transport, 'old-cursor', persistence);
-		await register('same', transport, 'latest-cursor', persistence);
+		register('same', transport, 'old-cursor', persistence);
+		register('same', transport, 'latest-cursor', persistence);
 		const reader = await openStream(transport);
 		expect(readAfter).toHaveBeenCalledTimes(1);
 		expect(readAfter.mock.calls[0]).toEqual([scope, 'latest-cursor', 101, { signal: expect.any(AbortSignal) }]);
@@ -187,7 +187,7 @@ describe('shared stream holder release', () => {
 	it('does not let a released replay block or flush into a reopened scope', async () => {
 		vi.useFakeTimers();
 		const replay = new Deferred<ManagerOutboxRead>();
-		await register(
+		register(
 			'old',
 			transport,
 			'before',
@@ -195,7 +195,7 @@ describe('shared stream holder release', () => {
 		);
 		const reader = await openStream(transport);
 		release('old');
-		await register('new');
+		register('new');
 		publishSharedStreamEnvelope(streamEnvelope('new-live', scope));
 		expect(await probe(reader)).toBe('new-live');
 		expect((await readSyncEnvelope(reader)).cursor).toBe('released-probe');
@@ -222,7 +222,7 @@ describe('shared stream holder release', () => {
 				return finishHook.promise;
 			}
 		});
-		await register(
+		register(
 			'failing',
 			transport,
 			'before',
@@ -239,7 +239,7 @@ describe('shared stream holder release', () => {
 
 	it('evicts a registration whose transport never opens a stream after the transport TTL', async () => {
 		vi.useFakeTimers();
-		await register('orphan');
+		register('orphan');
 		await vi.advanceTimersByTimeAsync(180_000);
 		const reader = await openStream(transport);
 		expect(await probe(reader)).toBe('sentinel');
@@ -249,10 +249,10 @@ describe('shared stream holder release', () => {
 	it('indexes transport and holder ids separately even when their colon-joined keys collide', async () => {
 		const first = await openStream('t:extra');
 		const second = await openStream('t');
-		await register('h', 't:extra');
-		await register('extra:h', 't');
+		register('h', 't:extra');
+		register('extra:h', 't');
 		releaseSharedStreamSubscriptions(connectRequest('t:extra'), ['h']);
-		await registerSharedStreamSubscription({
+		registerSharedStreamSubscription({
 			request: connectRequest('t:extra'),
 			managerKey: 'notes',
 			scope: 'notes:sentinel',
@@ -265,7 +265,7 @@ describe('shared stream holder release', () => {
 		expect((await readSyncEnvelope(first)).cursor).toBe('sentinel');
 		expect((await readSyncEnvelope(second)).cursor).toBe('held-by-second');
 		releaseSharedStreamSubscriptions(connectRequest('t'), ['extra:h']);
-		await registerSharedStreamSubscription({
+		registerSharedStreamSubscription({
 			request: connectRequest('t'),
 			managerKey: 'notes',
 			scope: 'notes:sentinel',

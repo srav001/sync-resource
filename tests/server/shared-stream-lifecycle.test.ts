@@ -16,7 +16,7 @@ import {
 } from '../fixtures/sharedStream.ts';
 import { Deferred } from '../fixtures/syncSystem.ts';
 
-const FIVE_MINUTES_MS = 5 * 60_000;
+const DEFAULT_IDLE_TTL_MS = 60_000;
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -45,7 +45,7 @@ describe('shared stream lifecycle', () => {
 		await thirdReader.cancel();
 	});
 
-	it('delays scope cleanup until the idle TTL after transport cleanup', async () => {
+	it('uses a 60-second default idle TTL after transport cleanup', async () => {
 		vi.useFakeTimers();
 		const idleScopes: string[] = [];
 		registerSharedStreamManager({
@@ -54,13 +54,13 @@ describe('shared stream lifecycle', () => {
 				idleScopes.push(scope);
 			}
 		});
-		await registerSubscription('transport-idle', 'notes:workspace-1');
+		registerSubscription('transport-idle', 'notes:workspace-1');
 		const response = await httpSharedSyncStream(streamRequest('transport-idle'));
 		const reader = response.body!.getReader();
 		await reader.read();
 		await reader.cancel();
 
-		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS - 1);
+		await vi.advanceTimersByTimeAsync(DEFAULT_IDLE_TTL_MS - 1);
 		expect(idleScopes).toEqual([]);
 		await vi.advanceTimersByTimeAsync(1);
 		expect(idleScopes).toEqual(['notes:workspace-1']);
@@ -75,14 +75,14 @@ describe('shared stream lifecycle', () => {
 				idleScopes.push(scope);
 			}
 		});
-		await registerSubscription('transport-first', 'notes:workspace-1');
+		registerSubscription('transport-first', 'notes:workspace-1');
 		const firstResponse = await httpSharedSyncStream(streamRequest('transport-first'));
 		const firstReader = firstResponse.body!.getReader();
 		await firstReader.read();
 		await firstReader.cancel();
 
-		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS - 1);
-		await registerSubscription('transport-second', 'notes:workspace-1');
+		await vi.advanceTimersByTimeAsync(DEFAULT_IDLE_TTL_MS - 1);
+		registerSubscription('transport-second', 'notes:workspace-1');
 		await vi.advanceTimersByTimeAsync(1);
 		expect(idleScopes).toEqual([]);
 
@@ -90,7 +90,7 @@ describe('shared stream lifecycle', () => {
 		const secondReader = secondResponse.body!.getReader();
 		await secondReader.read();
 		await secondReader.cancel();
-		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		await vi.advanceTimersByTimeAsync(DEFAULT_IDLE_TTL_MS);
 		expect(idleScopes).toEqual(['notes:workspace-1']);
 	});
 
@@ -100,13 +100,13 @@ describe('shared stream lifecycle', () => {
 		const tasksIdle: string[] = [];
 		registerSharedStreamManager({ key: 'notes', onScopeIdle: (scope) => notesIdle.push(scope) });
 		registerSharedStreamManager({ key: 'tasks', onScopeIdle: (scope) => tasksIdle.push(scope) });
-		await registerSubscription('transport-owned', 'notes:workspace-1');
+		registerSubscription('transport-owned', 'notes:workspace-1');
 		const response = await httpSharedSyncStream(streamRequest('transport-owned'));
 		const reader = response.body!.getReader();
 		await reader.read();
 		await reader.cancel();
 
-		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		await vi.advanceTimersByTimeAsync(DEFAULT_IDLE_TTL_MS);
 		expect(notesIdle).toEqual(['notes:workspace-1']);
 		expect(tasksIdle).toEqual([]);
 	});
@@ -125,7 +125,7 @@ describe('shared stream lifecycle', () => {
 			transportId: string,
 			reader: ReadableStreamDefaultReader<Uint8Array>
 		): Promise<boolean> {
-			await registerSubscription(transportId, 'notes:sentinel');
+			registerSubscription(transportId, 'notes:sentinel');
 			publishSharedStreamEnvelope(streamEnvelope('probe', scope));
 			publishSharedStreamEnvelope(streamEnvelope('sentinel', 'notes:sentinel'));
 			return (await readSyncEnvelope(reader)).cursor === 'probe';
@@ -133,7 +133,7 @@ describe('shared stream lifecycle', () => {
 
 		it('attaches a registration made before the stream opens', async () => {
 			registerSharedStreamManager({ key: 'notes' });
-			await registerSubscription('transport-pre-stream', scope);
+			registerSubscription('transport-pre-stream', scope);
 			const reader = await openStream('transport-pre-stream');
 			expect(await receivesLiveEnvelope('transport-pre-stream', reader)).toBe(true);
 			await reader.cancel();
@@ -142,7 +142,7 @@ describe('shared stream lifecycle', () => {
 		it('drops a registration made before the stream opens when it replaces an older stream', async () => {
 			registerSharedStreamManager({ key: 'notes' });
 			const older = await openStream('transport-replace-drop');
-			await registerSubscription('transport-replace-drop', scope);
+			registerSubscription('transport-replace-drop', scope);
 			const replacement = await openStream('transport-replace-drop');
 			expect(await receivesLiveEnvelope('transport-replace-drop', replacement)).toBe(false);
 			await older.cancel();
@@ -153,7 +153,7 @@ describe('shared stream lifecycle', () => {
 			registerSharedStreamManager({ key: 'notes' });
 			const older = await openStream('transport-replace-keep');
 			const replacement = await openStream('transport-replace-keep');
-			await registerSubscription('transport-replace-keep', scope);
+			registerSubscription('transport-replace-keep', scope);
 			await older.cancel();
 			expect(await receivesLiveEnvelope('transport-replace-keep', replacement)).toBe(true);
 			await replacement.cancel();
@@ -170,7 +170,7 @@ describe('shared stream lifecycle', () => {
 				errors.push(error.message);
 			}
 		});
-		const registered = await registerStreamSubscription(
+		const registered = registerStreamSubscription(
 			'transport-replay-cancel',
 			outboxReading(
 				(_scope, _cursor, _limit, execution) =>
@@ -201,8 +201,8 @@ describe('shared stream lifecycle', () => {
 	});
 });
 
-async function registerSubscription(transportId: string, scope: string): Promise<void> {
-	const result = await registerStreamSubscription(transportId, outboxReading(), undefined, scope);
+function registerSubscription(transportId: string, scope: string): void {
+	const result = registerStreamSubscription(transportId, outboxReading(), undefined, scope);
 	expect(result.isOk()).toBe(true);
 }
 

@@ -42,8 +42,8 @@ describe('httpSharedSyncRelease', () => {
 				replayLimit: 100,
 				nextCursor: () => 'reset'
 			});
-		await register('notes:released', 'holder');
-		await register('notes:sentinel', 'sentinel');
+		register('notes:released', 'holder');
+		register('notes:sentinel', 'sentinel');
 		const response = await httpSharedSyncRelease(request({ releases: ['holder'] }));
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ isOk: true, isError: false, value: null });

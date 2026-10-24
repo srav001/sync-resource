@@ -81,7 +81,6 @@ describe('shared physical SSE stream', () => {
 	it('exposes the default stream limits and merges registered manager limits', () => {
 		const defaults = {
 			heartbeatMs: 60_000,
-			idleTtlMs: 5 * 60_000,
 			maxConnectionsPerIp: 2,
 			maxEventBytes: 256 * 1024
 		};
@@ -103,7 +102,6 @@ describe('shared physical SSE stream', () => {
 		});
 		expect(getSharedStreamConfig()).toEqual({
 			heartbeatMs: 10_000,
-			idleTtlMs: 10 * 60_000,
 			maxConnectionsPerIp: 4,
 			maxEventBytes: 512 * 1024
 		});

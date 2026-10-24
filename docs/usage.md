@@ -406,6 +406,16 @@ Manager rules:
 - Manager type exports are type-only frontend API surfaces.
 - Manager direct calls use `bind(params, context?)`.
 
+Manager `stream` options:
+
+| Option                | Behavior                                                                                     |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `heartbeatMs`         | Shared heartbeat interval; the smallest registered value wins (default 60 s).                |
+| `maxConnectionsPerIp` | Shared per-transport/IP connection limit; the largest registered value wins (default 2).     |
+| `maxEventBytes`       | Shared event size limit; the largest registered value wins (default 256 KiB).                |
+| `idleTtlMs`           | Per-manager idle cleanup delay (default 60 s); zero or negative values clean up immediately. |
+| `onScopeIdle(scope)`  | Releases application-owned ephemeral scope state after the idle delay.                       |
+
 Scope examples:
 
 ```ts
@@ -887,6 +897,8 @@ Rules:
   A follower parses and validates it like a stream frame. Tabs running a different relay version use a different channel,
   so they share no envelopes until the older tab reloads.
 - A failed `/connect` keeps the logical subscription and retries registration with backoff (1s doubling to 30s) until it succeeds, the stream reconnects, or the last subscriber leaves. The error surfaces as the store error, not in `hydrate()`'s result, and clears when a retry registers (a custom transport calls the optional `onRegistered` subscribe callback for that). Its code is the one in the server's error body; a failure with no sync error body (such as a proxy answering 401 or 503) is classified by its HTTP status.
+- Connect and release requests have a 30-second timeout covering headers and response body handling. The timeout timer
+  is cleared when the request completes or fails; release responses have their unread bodies cancelled.
 - Registrations are batched by default; see [Batched registration](#batched-registration).
 - Replay/reset remains per logical scope through durable outbox cursors. An unknown cursor, or more pending envelopes than
   `replayLimit`, produces a reset instead of a partial replay.
@@ -901,8 +913,9 @@ Rules:
   uses the store's cursor for replay. Confirmed scopes remain confirmed across stream reconnects.
 - Each pending `/connect` wait is independently abortable; cancelling one waiter does not cancel establishment while
   another consumer still owns it.
-- After the last transport releases a scope or disconnects, its idle TTL starts. Manager `stream.onScopeIdle` only
-  releases manager-owned ephemeral per-scope memory. Idle cleanup is routed only to the manager that owns that encoded
+- After the last transport releases a scope or disconnects, its manager's `stream.idleTtlMs` starts (default 60 s).
+  No idle timer is armed when the manager has no realtime bus, persistence `pruneScope`, or `stream.onScopeIdle` hook.
+  Manager `stream.onScopeIdle` only releases manager-owned ephemeral per-scope memory. Idle cleanup is routed only to the manager that owns that encoded
   scope. When a scope goes idle, the manager also drops its mutation records
   from memory persistence and releases the scope's realtime bus subscription; `MemoryManagerOutbox` keeps only the
   scope's newest envelope. A client exactly at that cursor replays nothing, while any older cursor and the scope origin
